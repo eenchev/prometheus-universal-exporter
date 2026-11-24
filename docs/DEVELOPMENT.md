@@ -1569,83 +1569,90 @@ beside the types that the schemas are generated from (`valueProblems`,
   a JSON Schema validator does. Do not let it accept null as any type again:
   that is how the schemas and the exporter came to differ on it unnoticed.
 
-A key takes the kinds of value its schema says, and the exporter reads
-which from the schema: the same walk refuses a scalar YAML reads as a
-boolean or a number at a key whose schema type is `string` alone
-(`schemaKinds`), and a word of YAML 1.1's for a boolean, `yes` or `off`, at
-a key that takes a boolean, both of which the decoder takes. `schemaFor`
-gives a key of text the types `string`, `number` and `boolean`, since free
-text written `1` or `true` is the text it spells, and makes a key with
-allowed values or a pattern `string` alone; so giving a key an `enum` or a
-`pattern` makes the exporter refuse `key: 1` there, with nothing more to
-do — saying to quote the text, or, of a key with an `enum`, which values it
-takes — and `TestTheKeysHeldToTextAloneAreTheSchemas` (`internal/config`),
-which names those keys, fails until the key is added to it. A key that is
-a name or a word without a pattern says `"type": "string"` in its rule, as a
-rule's `name` does. `test/repository/schemakinds_test.go` reads every place
-of the committed schemas where a single value is written and puts a
-boolean, a number, such a word and a quoted number at it through both, and
-the tables above put each of their keys through both written `true` and
-`1`: a row whose key takes more than text, and whose text the exporter
-refuses for what a schema cannot tell, says with what (`booleanAlone`,
-`numberAlone`). The validator is handed a document as an editor hands it
-one (`documentValue`): a key of a mapping by its text, and a date written
-without quotes as the text it is to YAML 1.2.
+A key accepts the kinds of value that its schema allows, and the exporter
+reads which kinds from the schema. The same walk refuses a scalar that YAML
+reads as a boolean or a number at a key whose schema type is only `string`
+(`schemaKinds`), and a YAML 1.1 boolean word, such as `yes` or `off`, at a
+key that takes a boolean; the decoder accepts both.
 
-A name a collector writes — a rule's, a label's — is a classic name or any
-name by the collector's `name_escaping`, which a key's own pattern cannot
-read: the patterns stand in `collectorSchemaRule`, under a condition on the
-collector, and the loader's side is `transform.TakesLabelName` and
-`checkMetricName`. `test/repository/schemaloader_names_test.go` holds the
-two to one verdict under each value of the key and each kind of transform.
+- `schemaFor` gives a text key the types `string`, `number` and `boolean`,
+  because free text written `1` or `true` is the text it spells, and makes a
+  key with allowed values or a pattern `string` only.
+- Giving a key an `enum` or a `pattern` therefore makes the exporter refuse
+  `key: 1` there, with nothing more to do: the error says to quote the text
+  or, for a key with an `enum`, which values it accepts.
+  `TestTheKeysHeldToTextAloneAreTheSchemas` (`internal/config`), which names
+  those keys, fails until the key is added to it.
+- A key that is a name or a word without a pattern says `"type": "string"`
+  in its rule, as a rule's `name` does.
+- `test/repository/schemakinds_test.go` reads every place of the committed
+  schemas where a single value is written and passes a boolean, a number,
+  such a word and a quoted number there through both. The tables above pass
+  each of their keys through both, written as `true` and as `1`. A row whose
+  key takes more than text, and whose text the exporter refuses for reasons
+  that a schema cannot express, says which (`booleanAlone`, `numberAlone`).
+- The validator receives a document as an editor would pass it
+  (`documentValue`): a mapping key by its text, and a date written without
+  quotes as the text that it is in YAML 1.2.
 
-A block that `enabled` switches on is kept unchecked while it is off, by the
+A name that a collector writes (a rule's or a label's) is a classic name, or
+any name, depending on the collector's `name_escaping`, which a key's own
+pattern cannot read. The patterns are in `collectorSchemaRule`, under a
+condition on the collector, and the loader's side is
+`transform.TakesLabelName` and `checkMetricName`.
+`test/repository/schemaloader_names_test.go` checks that the two agree under
+each value of the key and each kind of transform.
+
+A block that `enabled` switches on is left unchecked while it is off, by the
 schemas as by the exporter. A rule about the value of one of its keys
-therefore goes in the block's `then`, which holds with `enabled: true`
-(`otlpSchemaRule`), and not on the key; a keyword the key's type gives it,
-such as a whole number's `minimum`, is taken off the key by `nil` in its
-rule. `test/repository/schemaloader_otlpoff_test.go` puts every key of the
-`otlp` block through both, switched off and on, and fails for a key its
+therefore goes in the block's `then`, which applies with `enabled: true`
+(`otlpSchemaRule`), not on the key. A keyword that the key's type gives it,
+such as a whole number's `minimum`, is removed from the key by `nil` in its
+rule. `test/repository/schemaloader_otlpoff_test.go` passes every key of the
+`otlp` block through both, switched off and on, and fails for a key that its
 table lacks.
 
-A key written as nothing but blanks is not the key written `""`: it is text,
-which the key takes or refuses. What the schema and the exporter say of a
-key both ways is the table of `test/repository/schemablanks_http_test.go`,
-for the keys of a rule, of its labels and of a collector that say what is
-read; a new key of that kind gets a row there, and where blanks could only be
-a mistake that the exporter would go on to read something with, as a
-label's `expression` of blanks was, both refuse them.
+A key written as only blanks is not the key written `""`: it is text, which
+the key accepts or refuses. The table of
+`test/repository/schemablanks_http_test.go` records what the schema and the
+exporter say about both forms, for the keys of a rule, of its labels and of
+a collector that say what is read. A new key of that kind gets a row there.
+Where blanks can only be a mistake that the exporter would go on to read
+something with, as a label's `expression` of blanks was, both refuse them.
 
 ## Measuring speed
 
-`internal/exporter/probe_bench_test.go` benchmarks a whole probe — the request
-to a target on the same machine, the decode, the transform, validation and
-the answer — for each transform over the same items, 100 and 5,000 of them:
+`internal/exporter/probe_bench_test.go` benchmarks a whole probe (the
+request to a target on the same machine, the decode, the transform,
+validation and the answer) for each transform over the same items, 100 and
+5,000 of them:
 
 ```sh
 go test -run '^$' -bench 'Probe' -benchtime 2s ./internal/exporter/
 ```
 
-`jq_cached` is answered from the cache, so it measures writing an answer
-alone, and `/gzip` writing it compressed. `jq_detected` and `jq_sniffed` are
-`jq_items` with `decoder.type` left to the response: named by its
-`Content-Type`, and found from the content of a body served as `text/plain`.
-`python` runs a script that emits one series for each item, and `prescript` a
-pre-script that passes the items on to `jq` rules, so the two measure handing
-a document to a Python worker and reading its answer back. Measure a change
-to the pipeline with these before and after, on a machine doing nothing else:
-`ns/op` moves with whatever else runs, while `B/op` and `allocs/op` do not,
-and say most about a change that saves allocation. A profile says where the
-time goes:
+- `jq_cached` is answered from the cache, so it measures only writing an
+  answer, and `/gzip` writing it compressed.
+- `jq_detected` and `jq_sniffed` are `jq_items` with `decoder.type` left to
+  the response: named by its `Content-Type`, and detected from the content
+  of a body served as `text/plain`.
+- `python` runs a script that emits one series per item, and `prescript` a
+  pre-script that passes the items on to `jq` rules, so the two measure
+  handing a document to a Python worker and reading its answer back.
+
+Measure a change to the pipeline with these before and after, on a machine
+doing nothing else. `ns/op` varies with whatever else runs, while `B/op` and
+`allocs/op` do not, and they say the most about a change that saves
+allocation. A profile shows where the time goes:
 
 ```sh
 go test -run '^$' -bench 'Probe/prom/n=5000$' -benchtime 2s -cpuprofile cpu.out ./internal/exporter/
 go tool pprof -top cpu.out
 ```
 
-Two results of these benchmarks, as measured on two shared cores (the times
-are the range of three runs, old and new in turn; bytes and allocations
-hardly move from run to run):
+Two results of these benchmarks, measured on two shared cores (the times are
+the range of three runs, old and new in turn; bytes and allocations hardly
+vary from run to run):
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1656,26 +1663,30 @@ hardly move from run to run):
 | `prescript/n=100` | 4.2–5.0 ms, 403 kB, 4,089 allocations | 3.0–4.7 ms, 267 kB, 1,996 allocations |
 | `prescript/n=5000` | 118–128 ms, 22.6 MB, 200,470 allocations | 70–79 ms, 14.2 MB, 95,515 allocations |
 
-`jq_sniffed` was a body read twice: the detection parsed it with
-`encoding/json` to see that it is JSON, threw the result away, and the json
-decoder read it again. The detection now reads it with the json decoder and
-the decode returns what that made, so `jq_sniffed` costs what `jq_items` and
-`jq_detected` cost (36–41 ms at 5,000 items).
+`jq_sniffed` read the body twice: the detection parsed it with
+`encoding/json` to see that it is JSON and discarded the result, and the
+json decoder read it again. The detection now reads it with the json decoder
+and the decode returns that result, so `jq_sniffed` costs the same as
+`jq_items` and `jq_detected` (36–41 ms at 5,000 items).
 
-The csv decoder has benchmarks of its own, which report beside what a decode
-allocates what the decoded rows still hold a collection later (`held-B/op`):
+The csv decoder has its own benchmarks, which report, in addition to what a
+decode allocates, what the decoded rows still hold after a collection
+(`held-B/op`):
 
 ```sh
 go test -run '^$' -bench 'CSVDecode' -benchtime 3x ./internal/decode/
 ```
 
-`wide_header_short_rows/k=2000` is a header of 2,000 columns over 2,000
-lines of `1`, 15 kB; `one_column/10MiB` a header and lines of `1`; and
-`ten_columns/1MiB` a monitoring export of a host name, a time and eight
-numbers a line. Each row was a map with an entry for every column the
-header names, an empty one for each a short row lacks; the rows are now the
-reader's own cells, with the header's names kept once (`CSVRows` in
-`internal/decode/csvrows.go`). Measured old and new in turn on two shared
+- `wide_header_short_rows/k=2000` is a header of 2,000 columns over 2,000
+  lines of `1`, 15 kB;
+- `one_column/10MiB` is a header and lines of `1`;
+- `ten_columns/1MiB` is a monitoring export with a host name, a time and
+  eight numbers per line.
+
+Each row used to be a map with an entry for every column that the header
+names, with an empty one for each column that a short row lacks. The rows
+are now the reader's own cells, with the header's names kept once (`CSVRows`
+in `internal/decode/csvrows.go`). Measured old and new in turn on two shared
 cores:
 
 | Benchmark | Before | After |
@@ -1686,50 +1697,57 @@ cores:
 | `Probe/csv/n=100` | 0.53–0.55 ms, 144 kB, 1,273 allocations | 0.46–0.49 ms, 99 kB, 666 allocations |
 | `Probe/csv/n=5000` | 11.4–13.3 ms, 6.6 MB, 50,405 allocations | 9.5–10.5 ms, 4.3 MB, 20,389 allocations |
 
-What a line of one column still costs, some 48 bytes for a line of two, is
-the reader's: a slice of fields and a string for each record, and its place
-in the list `encoding/csv`'s `ReadAll` grows, which is most of the bytes
-allocated (`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody` holds the rows
-under 32 times the body; they are about 20 times it).
+What a line of one column still costs, about 48 bytes for a line of two
+bytes, belongs to the reader: a slice of fields and a string for each record,
+and its place in the list that `encoding/csv`'s `ReadAll` grows, which is
+most of the bytes allocated
+(`TestCSVRowsOfOneColumnHoldASmallMultipleOfTheBody` holds the rows under
+32 times the body; they are about 20 times it).
 
-`python` was four times `jq_items`, and nearly all of the difference was the
-hand-over, not the script. At 5,000 items the exporter spent 20 to 24 ms
-writing the request with `json.Marshal` (a copy of the document to mark its
-NaNs, then reflection and a sort of every object's keys), and 26 to 28 ms
-reading the answer with `encoding/json` into a map for each metric and then
-into series. The worker spent 58 ms of processor time: 15 ms reading the
-request with `json.loads`, 12 ms in the script, nearly all of it in its
-5,000 calls of `metric(...)`, 22 ms walking the answer to replace NaN and the
-infinities, and 8 ms writing it with `json.dumps`. Now the exporter writes
-the same request line itself in about 5 ms and reads the answer into series
-in about 5 ms; the worker writes an answer of plain values without the walk,
-after looking through it in 4 ms, and `metric(...)` takes a label that is a
-string as it is, 8.5 ms for the 5,000 calls: 37 ms of processor time in the
-worker. What is left there is `json.loads` of the request, 15 ms, and
-`json.dumps` of the answer, 8 ms. The look through the answer also counts
-its values, a check for each list and dict that adds half a millisecond at
-5,000 metrics, and has it weighed where the count grows fourfold, as far as
-a sixty-fourth of the count goes: that is what keeps an answer that holds
-one list many times over, or in itself, from being gone through as it is
-written (`weigh` in `pythonworker.go`, and `pythonshared_test.go`).
+**The Python hand-over.** `python` took four times as long as `jq_items`,
+and nearly all of the difference was the hand-over, not the script.
 
-The look adds up how long the answer's strings are as well, one addition for
-each, and refuses an answer they alone make longer than
-`limits.max_output_bytes`. It does not add up the keys of every dict, though
-a long key held by every row is written as often as a long value. The
-cheapest way there is, `sum(map(len, d))` for each dict, took the look
-through 5,000 metrics from 5.8 ms to 9.1, through 5,000 rows of seven keys
-from 4.0 ms to 5.9, and the copy of 5,000 metrics that hold a NaN from 18.7
-ms to 22.6: half again of the look, a sixth of the whole answer, for keys
-that are a few characters each in nearly every answer there is. So the look
-adds up the keys of a few dicts — of each level of four values or more the
-fourth value and every sixty-first after it, of the dicts a copy is made of
-the fourth and every sixty-first after it — takes each for the values around
-it, as often as the level has values for each one looked at, and adds up all
-the keys only where those then say the answer is longer than the limit
-(`keyed`). Measured against the worker before it looked at keys, as the
-least of fifteen runs under a limit of 1 MiB (Python 3.12; 3.10 is within a
-few points of it), the look through an answer costs:
+- At 5,000 items the exporter spent 20 to 24 ms writing the request with
+  `json.Marshal` (a copy of the document to mark its NaNs, then reflection
+  and a sort of every object's keys), and 26 to 28 ms reading the answer
+  with `encoding/json` into a map for each metric and then into series.
+- The worker spent 58 ms of processor time: 15 ms reading the request with
+  `json.loads`, 12 ms in the script (nearly all of it in its 5,000 calls of
+  `metric(...)`), 22 ms walking the answer to replace NaN and the
+  infinities, and 8 ms writing it with `json.dumps`.
+- Now the exporter writes the same request line itself in about 5 ms and
+  reads the answer into series in about 5 ms. The worker writes an answer of
+  plain values without the walk, after scanning it in 4 ms, and
+  `metric(...)` takes a string label as it is, 8.5 ms for the 5,000 calls:
+  37 ms of processor time in the worker. What remains there is `json.loads`
+  of the request, 15 ms, and `json.dumps` of the answer, 8 ms.
+- The scan through the answer also counts its values, a check for each list
+  and dict that adds half a millisecond at 5,000 metrics, and weighs the
+  answer where the count grows fourfold, down to a sixty-fourth of the
+  count. That is what prevents an answer that holds one list many times
+  over, or contains itself, from being traversed as it is written (`weigh`
+  in `pythonworker.go`, and `pythonshared_test.go`).
+
+**Key lengths.** The scan also adds up the lengths of the answer's strings,
+one addition each, and refuses an answer that they alone make longer than
+`limits.max_output_bytes`. It does not add up the keys of every dict,
+although a long key held by every row is written as often as a long value.
+
+- The cheapest way, `sum(map(len, d))` for each dict, took the scan of 5,000
+  metrics from 5.8 ms to 9.1, of 5,000 rows of seven keys from 4.0 ms to
+  5.9, and the copy of 5,000 metrics that hold a NaN from 18.7 ms to 22.6.
+  That is half again of the scan, and a sixth of the whole answer, for keys
+  of a few characters each in nearly every answer.
+- The scan therefore adds up the keys of a few dicts: of each level of four
+  values or more, the fourth value and every sixty-first after it, and of
+  the dicts that a copy is made of, the fourth and every sixty-first after
+  it. It takes each for the values around it, as often as the level has
+  values for each one examined, and adds up all the keys only where those
+  then say the answer is longer than the limit (`keyed`).
+
+Measured against the worker before it examined keys, as the minimum of
+fifteen runs under a limit of 1 MiB (Python 3.12; 3.10 is within a few
+points), the scan through an answer costs:
 
 | answer | before | now | |
 |---|---|---|---|
@@ -1747,89 +1765,102 @@ few points of it), the look through an answer costs:
 | 5,000 metrics, a label of 20 kB on the first | 6.5 ms | 11.5 ms | +78 % |
 | the last rows, one a NaN (copied) | 17.0 ms | 19.8 ms | +16 % |
 
-and all of writing the answer 1 to 5 % more for the ordinary ones, 4 % for
-the one dict of many keys, and 21 to 31 % for the last three. An answer of
-a few values pays for its levels, a microsecond in all: each is kept, and one
-of four values or more has its fourth looked at. The last three rows are the
-worst there is for an answer within the limit: one key that is unlike the
-rest stands where the look passes, the dicts looked at say sixty-one times
-too much, and the keys of every dict are added up to find the answer within
-the limit after all. That costs what adding them up for every answer would
-(`sum(map(len, d))` in the look, measured beside it: +54 % for the rows, +65
-% for the metrics), and a tenth of the look more where the dicts are a few
-among many values, since they are picked out of the levels afterwards. It is
-done from the levels the look kept, the dicts of each picked out in one pass
-and the keys of each joined by the interpreter, 1,024 values at a time:
-`sum(map(len, map("".join, dicts)))`. A key is not asked for its length,
-which would run the `__len__` of a class of the script's own, and the dicts
-looked at before are left out. The first form of this took each dict looked
-at for sixty-one wherever it stood, and added up the keys in a second walk
-through the answer, four calls for a dict: the one dict of 50,000 keys then
-cost 18.6 ms where it cost 6.1, the rows 12.5 ms and the metrics 19.7,
-three times the look, whenever such a dict stood fourth and never when it
-stood third. What the look keeps for this is the lists it made anyway,
-eight bytes for each value of the answer until it ends (472 kB where it
-held 429 for 5,000 metrics), and for a copy a list of its dicts; the keys
-of a dict looked at are joined into one string, as long as they are, which
-is let go of at once.
+Writing the whole answer costs 1 to 5 % more for the ordinary answers, 4 %
+for the one dict of many keys, and 21 to 31 % for the last three.
 
-A row keyed by a hundred thousand characters 5,000 times, 500 MB written,
-is refused in 10 to 40 ms and 15 MiB, where the worker took 3.5 s and 1.4 GB
-to write it for the exporter to refuse. A clock does not hold two percent
-on a shared machine, so
-`TestTheLookAtKeysCostsAnAnswerWithinTheLimitNoMoreThanATwentieth` holds
-the cost by a count: the calls the worker makes for an answer, of its own
-functions and of the interpreter's (`sys.setprofile`), as it was and as it
-is, in the worker itself, for the ordinary answers and for the three kinds
-above; how many dicts it looks at; and that the keys of all dicts are added
-up once for the answers with one long key and not at all for the others,
-the one dict of many keys among them. A count of calls does not see what
-the interpreter does inside one, so it holds that no walk is made a call
-at a time, not how long a join takes: the table above is to be measured
-again when `keyed` or `key_size` changes. Counting bytecodes with
-`sys.settrace` would say more, but from Python 3.12 that count stops short
-the first time a function is traced. What the look leaves is in
-`docs/PYTHON.md`: an answer whose long keys are where the look does not
-pass, or in too few of the dicts it does.
+- An answer of a few values pays for its levels, a microsecond in all: each
+  level is kept, and one of four values or more has its fourth value
+  examined.
+- The last three rows are the worst case for an answer within the limit: one
+  key unlike the rest stands where the scan passes, the dicts examined
+  overestimate by sixty-one times, and the keys of every dict are added up to
+  find that the answer is within the limit after all. That costs what adding
+  them up for every answer would (`sum(map(len, d))` in the scan, measured
+  beside it: +54 % for the rows, +65 % for the metrics), plus a tenth of the
+  scan where the dicts are a few among many values, because they are picked
+  out of the levels afterwards.
+- It is done from the levels that the scan kept: the dicts of each are
+  picked out in one pass and the keys of each joined by the interpreter,
+  1,024 values at a time: `sum(map(len, map("".join, dicts)))`. A key is not
+  asked for its length, which would run the `__len__` of a class of the
+  script's own, and the dicts examined before are left out.
+- The first form of this took each dict examined as sixty-one wherever it
+  stood, and added up the keys in a second walk through the answer, four
+  calls per dict. The one dict of 50,000 keys then cost 18.6 ms where it
+  cost 6.1, the rows 12.5 ms and the metrics 19.7, three times the scan,
+  whenever such a dict stood fourth and never when it stood third.
+- What the scan keeps for this is the lists that it made anyway, eight bytes
+  for each value of the answer until it ends (472 kB where it held 429 for
+  5,000 metrics), and for a copy a list of its dicts. The keys of an
+  examined dict are joined into one string as long as they are, which is
+  released immediately.
 
-The shortest of the lines a worker writes set the least a
-`limits.max_output_bytes` may be: `MinPythonOutputBytes` in
-`pythonworker.go` is the longest of the line a worker is ready with, the
-line it takes a request with, and the answers of a transform's script that
-emits nothing and of a pre-script that leaves `None`, 38 bytes. The loader
-refuses a smaller limit and the schemas a smaller number
-(`leastOutputRule`); the worker and the pool hold no floor, and run under
-any limit a test gives them. `pythonleastoutput_test.go` runs a worker and
-compares its lines with those constants, so an answer that gains or loses a
-key fails there: change the lines, and the 38 that `docs/PYTHON.md`,
-`docs/CONFIGURATION.md` and the specification say.
+A row keyed by a hundred thousand characters 5,000 times, 500 MB written, is
+refused in 10 to 40 ms and 15 MiB, where the worker used to take 3.5 s and
+1.4 GB to write it for the exporter to refuse.
 
-The lines the exporter and a worker exchange are the lines they were, byte
-for byte, so `limits.max_output_bytes` bounds what it bounded and a script
-is given what it was given. Two shortcuts were measured and not taken,
-because a script would see them. Handing a worker the bytes of a JSON
-response in place of the decoded document would save writing `data`, but
-the worker would then read another document: its keys in the target's order
-rather than sorted, `1.0` as a float rather than the int the exporter's
-`1` becomes, `1e400` as `inf` rather than the text the json decoder keeps.
-And a request in a binary form Python loads faster than JSON (`pickle`
-reads this one in 7 ms, `marshal` in 6) would change the protocol the
-specification fixes, one JSON document per line.
+A clock is not accurate to two percent on a shared machine, so
+`TestTheLookAtKeysCostsAnAnswerWithinTheLimitNoMoreThanATwentieth` checks
+the cost by counting:
+
+- the calls that the worker makes for an answer, of its own functions and of
+  the interpreter's (`sys.setprofile`), before and after the change, in the
+  worker itself, for the ordinary answers and for the three kinds above;
+- how many dicts it examines;
+- that the keys of all dicts are added up once for the answers with one long
+  key, and not at all for the others, including the one dict of many keys.
+
+A count of calls does not see what the interpreter does inside one call, so
+it checks that no walk is made one call at a time, not how long a join
+takes: measure the table above again when `keyed` or `key_size` changes.
+Counting bytecodes with `sys.settrace` would say more, but from Python 3.12
+that count stops short the first time a function is traced. What the scan
+misses is described in `docs/PYTHON.md`: an answer whose long keys are where
+the scan does not pass, or in too few of the dicts that it does examine.
+
+The shortest lines that a worker writes set the minimum
+`limits.max_output_bytes`. `MinPythonOutputBytes` in `pythonworker.go` is
+the longest of: the line with which a worker reports it is ready, the line
+with which it accepts a request, and the answers of a transform script that
+emits nothing and of a pre-script that leaves `None`. That is 38 bytes.
+
+- The loader refuses a smaller limit, and the schemas a smaller number
+  (`leastOutputRule`). The worker and the pool have no floor, and run under
+  any limit that a test gives them.
+- `pythonleastoutput_test.go` runs a worker and compares its lines with
+  those constants, so an answer that gains or loses a key fails there.
+  Change the lines, and the 38 that `docs/PYTHON.md`,
+  `docs/CONFIGURATION.md` and the specification state.
+
+The lines that the exporter and a worker exchange are unchanged, byte for
+byte, so `limits.max_output_bytes` bounds what it bounded before and a
+script is given what it was given before. Two shortcuts were measured and
+not taken, because a script would see them:
+
+- Handing a worker the bytes of a JSON response instead of the decoded
+  document would save writing `data`, but the worker would then read a
+  different document: its keys in the target's order instead of sorted,
+  `1.0` as a float instead of the int that the exporter's `1` becomes, and
+  `1e400` as `inf` instead of the text that the json decoder keeps.
+- A request in a binary form that Python loads faster than JSON (`pickle`
+  reads this one in 7 ms, `marshal` in 6) would change the protocol that
+  the specification fixes: one JSON document per line.
 
 `BenchmarkYAMLMerge` in `internal/decode` decodes a YAML body with a merge
-(`<<: *base`) of a mapping of 20,000 and of 200,000 keys, beside the same
-body without the merge and with the merged pairs written out; `body-bytes`
-is what to divide `B/op` and `allocs/op` by:
+(`<<: *base`) of a mapping of 20,000 and of 200,000 keys, next to the same
+body without the merge and with the merged pairs written out. Divide
+`B/op` and `allocs/op` by `body-bytes`:
 
 ```sh
 go test -run '^$' -bench 'YAMLMerge' -benchtime 3x ./internal/decode/
 ```
 
-The walk that decodes a document with a large mapping handed the library
-each merged key and each merged value alone, two calls of it for a pair.
-It now hands them a run of 128 pairs at a time, the keys and then the values
-of the keys the merge gives. Decoding the parsed document, parsing left out
-(the least of several runs, old and new in turn; 20,000 keys):
+The walk that decodes a document with a large mapping used to hand the
+library each merged key and each merged value separately, two calls per
+pair. It now hands over a run of 128 pairs at a time: the keys, and then the
+values of the keys that the merge provides. Decoding the parsed document,
+without parsing (the minimum of several runs, old and new in turn; 20,000
+keys):
 
 | Document | Before | After |
 | --- | --- | --- |
@@ -1838,14 +1869,14 @@ of the keys the merge gives. Decoding the parsed document, parsing left out
 | merged four times | 146 ms, 150.5 bytes, 2.68 allocations | 77 ms, 74.6 bytes, 1.24 allocations |
 | a list of two, half their keys shared | 102 ms, 48.4 bytes, 0.78 allocations | 67 ms, 31.6 bytes, 0.46 allocations |
 
-A merged pair costs 230 bytes in four allocations where it cost 540 in ten,
+A merged pair costs 230 bytes in four allocations, where it cost 540 in ten,
 and a pair of the mapping itself costs 320 in four. `yamlkeysmerge_test.go`
-holds it: a merge may allocate no more than the mapping it merges, the
-library is called twice for every 128 keys of a merge, and the walk as it
-was (`yamlkeysmergeoracle_test.go`) decodes every document of the tests into
-the same value or error.
+checks this: a merge may allocate no more than the mapping it merges, the
+library is called twice for every 128 keys of a merge, and the previous walk
+(`yamlkeysmergeoracle_test.go`) decodes every document of the tests into the
+same value or error.
 
-Following a reload has a benchmark of its own,
+Following a reload has its own benchmark,
 `internal/exporter/reloadfollow_bench_test.go`:
 
 ```sh
@@ -1855,14 +1886,18 @@ go test -run '^$' -bench 'FollowReload' -benchtime 20x ./internal/exporter/
 It reloads between two configurations of 50, 500 and 2,000 collectors: the
 same collectors read again (`unchanged`), every one changed (`changed`), and
 half of them removed and as many added (`half`), each also with a static
-target of every collector in a file reloaded with them (`/static`). The
-time of the operation is the whole following, with what a reload prepares of
-it before it puts its configuration in force (below). Beside it the
-benchmark reports `following-ns/op`, what is left of it once the
-configuration is in force, and `locked-ns/op`, how long the statistics lock
-was held: every probe takes that lock to find its collector's statistics,
-and the read of the self-metrics takes it. As measured on two shared cores,
-with and without static targets, which make no difference that shows:
+target for every collector in a file reloaded with them (`/static`).
+
+- The time of the operation is the whole following, including what a reload
+  prepares of it before it puts its configuration in force (below).
+- `following-ns/op` is what remains of it once the configuration is in
+  force.
+- `locked-ns/op` is how long the statistics lock was held. Every probe takes
+  that lock to find its collector's statistics, and so does the read of the
+  self-metrics.
+
+As measured on two shared cores, with and without static targets, which make
+no visible difference:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1873,47 +1908,56 @@ with and without static targets, which make no difference that shows:
 | `unchanged/n=2000` | 0.7–1.3 s, all of it under the lock; 706.5 MB, 2,124,026 allocations | 345–562 ms, 32–45 µs of it under the lock; 388.7 MB, 1,168,226 allocations |
 | `half/n=2000` | 0.5–1.0 s, all of it under the lock; 530.2 MB, 1,593,070 allocations | 344–720 ms, 0.35–0.57 ms of it under the lock; 371.3 MB, 1,115,171 allocations |
 
-Nearly all of the time was one thing: a collector's fingerprint is
-its definition written as YAML and hashed, about 0.2 ms and 177 kB for a
-collector of one rule, and a reload worked it out for every collector of the
-new configuration and again for every collector of the one it had followed,
-with the lock held, to tell the collectors it changed. Comparing the static
-targets took 0.6 ms for 500 of them, and the maps and the drops the rest.
-Now the fingerprints of a configuration are kept with it once it is
-followed, so a reload works out those of the new configuration alone; what
-the following is to drop and replace is worked out before the lock is taken,
-into a plan; and the lock is taken to do that, once the plan is seen to be
-still of the configuration in force and from the one followed
-(`planFollowing` and `followLocked` in `reconcile.go`).
-`reloadplan_http_test.go` holds this by counts and by the order of events,
+**Fingerprints.** Nearly all of the time went to one thing. A collector's
+fingerprint is its definition written as YAML and hashed, about 0.2 ms and
+177 kB for a collector of one rule, and a reload computed it for every
+collector of the new configuration and again for every collector of the one
+it had followed, with the lock held, to find the collectors that changed.
+Comparing the static targets took 0.6 ms for 500 of them, and the maps and
+the drops took the rest.
+
+- The fingerprints of a configuration are now kept with it once it is
+  followed, so a reload computes only those of the new configuration.
+- What the following is to drop and replace is computed into a plan before
+  the lock is taken.
+- The lock is then taken to carry out the plan, once the plan is confirmed
+  to still belong to the configuration in force and to start from the one
+  followed (`planFollowing` and `followLocked` in `reconcile.go`).
+
+`reloadplan_http_test.go` checks this by counts and by the order of events,
 not by time: no definition is encoded while the lock is held, a reload
 encodes each collector of the new configuration once, a probe is answered
 while a reload is held between its plan and the lock, and over generated
-sequences of reloads with probes and scrapes held across them a server
-leaves what one that follows as it did before leaves, the former following
-kept beside the test.
+sequences of reloads, with probes and scrapes held across them, a server
+ends up in the same state as one that follows in the previous way, which is
+kept next to the test.
 
-A probe that comes when a reloaded configuration is in force and the reload
-has not yet followed it needs it followed before it reads its collector
-there, and works out the same plan. While the fingerprints were made by the
-plan, such a probe waited for those the reload had not made yet, at worst
-all of them, at every reload. So a reload makes them before it puts its
-configuration in force: the configuration manager lets the server prepare
-what a reload has read and checked (`config.Manager.OnPrepare`,
-`prepareReload` in `reconcile.go`), on the goroutine that reloads, while
-`Get` and `InForce` still answer with the configuration before it and the
-probes go on with that one. The configuration then goes in force with every
-fingerprint made, those of the collectors of the configuration followed that
-it compares them with among them, and whoever follows it first, the reload
-or a probe, has only the maps of the plan left to make. The reload as a
-whole takes what it took; its configuration is in force later by as long as
-the fingerprints take, about 0.1 s for 500 collectors; and a probe never
-waits for a reload's fingerprints. `BenchmarkFollowReloadProbeWait`, in the
-same file and found by the same `-bench`, reads a file of 50, 500 and 2,000
-collectors again as `SIGHUP` reads it, holds the reload where its
-configuration is in force and not yet followed, and asks for the state there
-as a probe does; `probe-wait-ns/op` is how long that took, and the time of
-the operation the whole reload. As measured on two shared cores:
+**Preparing fingerprints.** A probe that arrives when a reloaded
+configuration is in force but the reload has not yet followed it needs it
+followed before it reads its collector there, and computes the same plan.
+While the plan computed the fingerprints, such a probe waited for those that
+the reload had not computed yet, at worst all of them, at every reload.
+
+A reload therefore computes them before it puts its configuration in force.
+The configuration manager lets the server prepare what a reload has read and
+checked (`config.Manager.OnPrepare`, `prepareReload` in `reconcile.go`), on
+the reloading goroutine, while `Get` and `InForce` still return the previous
+configuration and the probes continue with it. The configuration then goes
+in force with every fingerprint computed, including those of the collectors
+of the followed configuration that it is compared with. Whoever follows it
+first, the reload or a probe, has only the maps of the plan left to build.
+
+- The reload as a whole takes as long as before. Its configuration is in
+  force later by as long as the fingerprints take, about 0.1 s for 500
+  collectors.
+- A probe never waits for a reload's fingerprints.
+
+`BenchmarkFollowReloadProbeWait`, in the same file and selected by the same
+`-bench`, reads a file of 50, 500 and 2,000 collectors again as `SIGHUP`
+reads it, holds the reload where its configuration is in force and not yet
+followed, and requests the state there as a probe does. `probe-wait-ns/op`
+is how long that took, and the time of the operation is the whole reload. As
+measured on two shared cores:
 
 | Collectors | A probe waited | It waits | Left of the following once in force (`following-ns/op`) |
 | --- | --- | --- | --- |
@@ -1921,51 +1965,62 @@ the operation the whole reload. As measured on two shared cores:
 | 500 | 121–181 ms | 0.11–0.30 ms | 0.13–0.37 ms |
 | 2,000 | 0.38–0.61 s | 0.5–0.7 ms | 0.5–2.3 ms |
 
-The time, the memory and the allocations of a whole reload are what they
-were, and so is the time under the lock. Only the fingerprints are prepared:
-they are of a configuration alone, which never changes once loaded, so they
-are right whatever is followed when they are used. The plan is not prepared,
-since it is from the configuration followed, which a test, or anything that
-puts a configuration in force without a reload, can make another between
-the two. The prepared fingerprints are kept beside those the probes last
-used (`fingerprintMemo`), so a probe that still holds the former
-configuration does not have the new one's made again, and the memo holds
-those of two configurations at most, the one in force and one before it
-while probes still read it. `reloadprepare_http_test.go` holds all of it by
-counting where a definition is encoded: none once a reloaded configuration
-is in force, by the reload's own following or by a probe held between the
-two, each collector of the configuration once for a reload, none for a
-static target file reloaded alone, and after 1,000 reloads no configuration
-is held but the last few. `onprepare_http_test.go` in `internal/config`
-holds the order: prepared, in force, told.
+The time, the memory and the allocations of a whole reload are unchanged, and
+so is the time under the lock.
 
-The static targets make no difference that shows above because their
-schedule is not in what is measured there: it is the scrape loop's own
-(`targetSchedule` in `statictargetschedule.go`), and looks at a reloaded
-configuration on that loop's goroutine, within a second of the reload. A
-target starts again when its collector's definition changed, which the
-schedule tells by the collector's fingerprint, kept with the target's place
-in the schedule. It made that fingerprint itself: every collector with a
-static target was encoded a second time for every reload, and so was the
-collector of every target a static target file reloaded alone started. That
-kept no probe waiting, but for 2,000 collectors with a target each it was a
-third of a second of one core and 355 MB allocated after every reload. Now
-the schedule reads the fingerprints the reload made, which the configuration
-followed keeps (`followedConfig.fingerprintOf` in `reconcile.go`). The loop
-is given the configuration, the static target file and their following as
-one (`followedInForce`), none of which changes once followed, and the
-fingerprints are read only when the configuration the schedule plans with is
-the very one that following is of; for any other, and for a caller that
-follows none, as the tests of the schedule alone are, the definition is
-encoded as it was. The schedule takes no lock for it; where the exporter
-started with the configuration, whose fingerprints no reload prepared, it
-makes the ones nothing asked for yet, once, and the probes and the next
-reload find them made. `BenchmarkFollowReloadSchedule`, in the same file and
-found by the same `-bench`, reloads as `BenchmarkFollowReload` does, every
-collector with a static target, and times the look the schedule then takes,
-alone; `encodes/op` is how many definitions the reload and the look encoded
-together, and `schedule-encodes/op` how many of them the look did. As
-measured on two shared cores, old and new in turn, three times:
+- Only the fingerprints are prepared. They belong to a configuration alone,
+  which never changes once loaded, so they are correct whatever is followed
+  when they are used.
+- The plan is not prepared, because it depends on the followed
+  configuration, which a test, or anything that puts a configuration in force
+  without a reload, can change between the two steps.
+- The prepared fingerprints are kept next to those that the probes last used
+  (`fingerprintMemo`), so a probe that still holds the previous configuration
+  does not have the new one's computed again. The memo holds those of at most
+  two configurations: the one in force, and the previous one while probes
+  still read it.
+- `reloadprepare_http_test.go` checks all of this by counting where a
+  definition is encoded: none once a reloaded configuration is in force, by
+  the reload's own following or by a probe held between the two; each
+  collector of the configuration once per reload; none for a static target
+  file reloaded alone; and after 1,000 reloads no configuration is held
+  except the last few. `onprepare_http_test.go` in `internal/config` checks
+  the order: prepared, in force, notified.
+
+**The static target schedule.** The static targets make no visible
+difference above because their schedule is not part of what is measured
+there. It belongs to the scrape loop (`targetSchedule` in
+`statictargetschedule.go`), and examines a reloaded configuration on that
+loop's goroutine, within a second of the reload. A target restarts when its
+collector's definition changed, which the schedule detects by the
+collector's fingerprint, kept with the target's place in the schedule.
+
+- The schedule used to compute that fingerprint itself: every collector with
+  a static target was encoded a second time for every reload, and so was the
+  collector of every target that a static target file reloaded alone
+  started. That kept no probe waiting, but for 2,000 collectors with a target
+  each it was a third of a second of one core and 355 MB allocated after
+  every reload.
+- The schedule now reads the fingerprints that the reload computed, which
+  the followed configuration keeps (`followedConfig.fingerprintOf` in
+  `reconcile.go`). The loop receives the configuration, the static target
+  file and their following together (`followedInForce`), none of which
+  changes once followed.
+- The fingerprints are read only when the configuration that the schedule
+  plans with is exactly the one that the following belongs to. For any other,
+  and for a caller that follows none, as in the tests of the schedule alone,
+  the definition is encoded as before.
+- The schedule takes no lock for this. Where the exporter started with the
+  configuration, whose fingerprints no reload prepared, it computes the ones
+  that nothing has requested yet, once, and the probes and the next reload
+  find them computed.
+
+`BenchmarkFollowReloadSchedule`, in the same file and selected by the same
+`-bench`, reloads as `BenchmarkFollowReload` does, with a static target for
+every collector, and times only the schedule's subsequent examination.
+`encodes/op` is how many definitions the reload and the examination encoded
+together, and `schedule-encodes/op` how many of them the examination encoded.
+As measured on two shared cores, old and new in turn, three times:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -1976,36 +2031,42 @@ measured on two shared cores, old and new in turn, three times:
 | `unchanged/n=2000` | 320–333 ms; 355.2 MB, 1,069,038 allocations; 4,000 encoded, 2,000 by the look | 8.2–8.6 ms; 2.1 MB, 7,038 allocations; 2,000 encoded, none by the look |
 | `changed/n=2000` | 315–347 ms; 354.7 MB, 1,068,038 allocations; 4,000 encoded, 2,000 by the look | 6.1–7.3 ms; 1.6 MB, 6,038 allocations; 2,000 encoded, none by the look |
 
-What was then left of the look for 2,000 collectors was mostly finding each
-target's collector by its name: the schedule went through the collectors of
-the configuration once for every collector with a static target, so 2,000
-times through 2,000, and 10,000 times through 10,000. A probe did the same
-once for its collector and once more for that collector's fingerprint, when
-the collector caches, and so did the scrape of a static target: of 10,000
-collectors, a probe of the last one answered from the cache took 0.1 to
-0.2 ms where one of the first took 0.02. Now the place of each collector is
-kept by its name with the configuration's fingerprints
-(`fingerprintGeneration.place` in `fingerprint.go`), which live as long as
-the configuration does and are shared by the same callers. The collectors
-are gone through once for a configuration, by the reload that prepares it,
-before it is in force, or, for the configuration the exporter started with,
-by whoever first asks for a name; that is 0.1 ms and 109 kB for 2,000
-collectors, where the reload takes a third of a second. The map is made
-under a `sync.Once` and never changed after, so the scrape loop, the probes
-and a reload read it without a lock. `followedConfig.collectorOf` and
-`fingerprintOf` read it only for the configuration their following is of,
-and `fingerprintMemo.fingerprint` only while the fingerprints remembered are
-that configuration's: for any other configuration, as for a scrape that
-waited for a slot across a reload, and for a caller that follows none, the
-collectors are gone through as they were. `schedule-scans/op` is how many
-times the look went through them: none now, and once for every collector
-with a static target before. The benchmark also has 10,000 collectors with a
-target each, for which `-bench 'FollowReloadSchedule/.*/n=10000$' -benchtime
-5x` is enough, a reload of that many taking seconds that are not timed and
-are waited for all the same, and 500 collectors with 20 targets each
-(`/targets=20`). As measured on two shared cores, old and new in turn; the
-bytes and the allocations of the look are what they were, a scan having
-allocated nothing:
+**Finding a collector by name.** What then remained of the examination for
+2,000 collectors was mostly finding each target's collector by its name: the
+schedule went through the configuration's collectors once for every
+collector with a static target, so 2,000 times through 2,000, and 10,000
+times through 10,000. A probe did the same once for its collector and once
+more for that collector's fingerprint, when the collector caches, and so did
+the scrape of a static target. With 10,000 collectors, a probe of the last
+one answered from the cache took 0.1 to 0.2 ms, where one of the first took
+0.02.
+
+- The place of each collector is now kept by its name with the
+  configuration's fingerprints (`fingerprintGeneration.place` in
+  `fingerprint.go`), which live as long as the configuration does and are
+  shared by the same callers.
+- The collectors are scanned once per configuration, by the reload that
+  prepares it before it is in force, or, for the configuration that the
+  exporter started with, by whoever first asks for a name. That takes 0.1 ms
+  and 109 kB for 2,000 collectors, where the reload takes a third of a
+  second.
+- The map is built under a `sync.Once` and never changed afterwards, so the
+  scrape loop, the probes and a reload read it without a lock.
+- `followedConfig.collectorOf` and `fingerprintOf` read it only for the
+  configuration that their following belongs to, and
+  `fingerprintMemo.fingerprint` only while the remembered fingerprints are
+  that configuration's. For any other configuration, as for a scrape that
+  waited for a slot across a reload, and for a caller that follows none, the
+  collectors are scanned as before.
+- `schedule-scans/op` is how many times the examination scanned them: none
+  now, and once for every collector with a static target before.
+
+The benchmark also has 10,000 collectors with a target each, for which
+`-bench 'FollowReloadSchedule/.*/n=10000$' -benchtime 5x` is enough (a
+reload of that many takes seconds, which are not timed but are still waited
+for), and 500 collectors with 20 targets each (`/targets=20`). As measured on
+two shared cores, old and new in turn; the bytes and allocations of the
+examination are unchanged, because a scan allocated nothing:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2021,71 +2082,86 @@ allocated nothing:
 | `unchanged/n=500/targets=20` | 14–24 ms | 14–31 ms |
 | `changed/n=500/targets=20` | 7–17 ms | 7–17 ms |
 
-With 20 targets to a collector the look is as long as it was: it asked once
-for each collector then too, 500 times through 500, and the time is that of
-the 10,000 targets, each compared with its place in the schedule. A probe of
-the last of 2,000 collectors answered from the cache takes 17–24 µs where it
-took 23–37, and of 10,000, 14–22 µs where it took 106–224; the scrape of the
-last static target of 2,000, answered from the cache, 13–15 µs where it took
-22–53. What a probe allocates is what it was. `reloadschedule_http_test.go`
-holds it by counting the times the collectors are gone through
-(`collectorsScannedHook`), never by time: once by the schedule's first look,
-once by a reload, and not at all by the look after it, by a probe or by a
-scrape, for 60 collectors and for 240, and with five targets to a collector.
-`collectorplace_test.go` holds that what is found by a name is what going
-through the collectors found, the former lookups kept beside the test.
-`reloadschedule_http_test.go` also holds the rest by counting where a
-definition is encoded: a reload of a configuration whose collectors all have a static
-target encodes each collector once, before it is in force, and the look
-after it none, driven as the loop drives it and with the loop running; the
-fingerprints the schedule asks for first are the ones the probes use; a
-static target file reloaded alone has the look encode only a collector that
-nothing had asked about; and over generated runs of reloads every look
-leaves the schedule as the former one, kept beside the test, leaves it.
+With 20 targets per collector the examination takes as long as before: it
+also asked once for each collector then, 500 times through 500, and the time
+is that of the 10,000 targets, each compared with its place in the schedule.
 
-Two more lookups by a name grew with the configuration, both for the static
-targets. A scrape of a static target asked when it ended, before it
-published, whether a target of its name was in force, by going through the
-targets of the file (`staticTargetInForce` in `statictargetsendpoint.go`),
-and a read of the static targets endpoint that names targets noted every
-name of the file anew to look its few up (`requestedStaticTargets`). And a
-read of the verbose self-metrics, which finds the request of every static
-target to keep it tracked (`seedStaticRequests` in `requeststats.go`), went
-through the collectors of the configuration once for every target
-(`model.CollectorByName`): 2,000 times through 2,000 at every read. Now the
-first two read the names the following of a file notes anyway, once for the
-file, with the generation each target has been there from
-(`followedConfig.targetNames`, `targetsDefinedFrom` in `reconcile.go`).
-Nothing more is kept, and a reload does nothing more than it did:
-`BenchmarkFollowReload` allocates what it allocated, 390.8 MB in 1,178,256
-allocations for 2,000 collectors with a static target each. The names are
-those of the file followed and are read only when the file in force is that
-very file. From a reload putting another file in force to that reload's
-following of it, which it makes at once and works out before the statistics
-lock is taken, the targets are gone through as they were, so what is told
-is of the file in force either way. The read of the verbose self-metrics
-finds each target's collector where the configuration followed keeps its
-place (`followedConfig.collectorOf`), as a probe and a scrape do, and under
-the same condition: the read follows what is in force before it looks for
-the requests, so only a reload that comes between the two has the
-collectors gone through as they were. `staticlookups_bench_test.go` has
-both, for 100, 2,000 and 10,000 static targets of as many collectors:
+- A probe of the last of 2,000 collectors answered from the cache takes
+  17–24 µs where it took 23–37, and of 10,000, 14–22 µs where it took
+  106–224. The scrape of the last static target of 2,000, answered from the
+  cache, takes 13–15 µs where it took 22–53. What a probe allocates is
+  unchanged.
+- `reloadschedule_http_test.go` checks this by counting how often the
+  collectors are scanned (`collectorsScannedHook`), never by time: once by
+  the schedule's first examination, once by a reload, and not at all by the
+  examination after it, by a probe or by a scrape, for 60 collectors and for
+  240, and with five targets per collector.
+- `collectorplace_test.go` checks that what is found by a name is what
+  scanning the collectors found, with the previous lookups kept next to the
+  test.
+- `reloadschedule_http_test.go` also checks the rest by counting where a
+  definition is encoded: a reload of a configuration whose collectors all
+  have a static target encodes each collector once, before it is in force,
+  and the examination after it encodes none, driven as the loop drives it and
+  with the loop running; the fingerprints that the schedule requests first
+  are the ones that the probes use; a static target file reloaded alone has
+  the examination encode only a collector that nothing had asked about; and
+  over generated runs of reloads every examination leaves the schedule as the
+  previous version, kept next to the test, leaves it.
+
+**Other lookups by name.** Two more lookups by name grew with the
+configuration, both for the static targets, and a third in the verbose
+self-metrics:
+
+- A scrape of a static target asked, when it ended and before it published,
+  whether a target of its name was in force, by scanning the file's targets
+  (`staticTargetInForce` in `statictargetsendpoint.go`).
+- A read of the static targets endpoint that names targets recorded every
+  name of the file again to look up its few names (`requestedStaticTargets`).
+- A read of the verbose self-metrics, which finds the request of every static
+  target to keep it tracked (`seedStaticRequests` in `requeststats.go`),
+  scanned the configuration's collectors once for every target
+  (`model.CollectorByName`): 2,000 times through 2,000 at every read.
+
+Now:
+
+- The first two read the names that the following of a file records anyway,
+  once per file, with the generation that each target has existed since
+  (`followedConfig.targetNames`, `targetsDefinedFrom` in `reconcile.go`).
+  Nothing more is kept, and a reload does no more work than before:
+  `BenchmarkFollowReload` allocates the same, 390.8 MB in 1,178,256
+  allocations for 2,000 collectors with a static target each.
+- The names belong to the followed file and are read only when the file in
+  force is exactly that file. Between a reload putting another file in force
+  and that reload's following of it (which it does immediately and computes
+  before the statistics lock is taken), the targets are scanned as before,
+  so the answer reflects the file in force either way.
+- The read of the verbose self-metrics finds each target's collector where
+  the followed configuration keeps its place (`followedConfig.collectorOf`),
+  as a probe and a scrape do, and under the same condition. The read follows
+  what is in force before it looks for the requests, so only a reload that
+  comes between the two makes it scan the collectors as before.
+
+`staticlookups_bench_test.go` has both, for 100, 2,000 and 10,000 static
+targets of as many collectors:
 
 ```sh
 go test -run '^$' -bench 'StaticTargetLookup|SelfMetricsSeedStatic' ./internal/exporter/
 ```
 
-`BenchmarkStaticTargetLookup` is what the scrape of the last static target
-asks when it ends (`in-force`), that scrape whole, answered from the cache
-(`scrape`), and what a read of the endpoint that names that one target asks
-(`named`). `BenchmarkSelfMetricsSeedStatic` is what a verbose read does for
-the static targets: finding the request of each (`keys`), and that with the
-tracker told of them (`seed`). A configuration of 10,000 collectors takes
-seconds to load, which are not timed: `-bench 'StaticTargetLookup/n=2000$'`
-asks for one size. As measured on two shared cores that other work kept
-busy all the while, old and new in turn, seven to ten times, which is why
-the ranges are wide; what `in-force`, `scrape`, `keys` and `seed` allocate
-is what they allocated:
+- `BenchmarkStaticTargetLookup` measures what the scrape of the last static
+  target asks when it ends (`in-force`), that whole scrape answered from the
+  cache (`scrape`), and what a read of the endpoint that names that one
+  target asks (`named`).
+- `BenchmarkSelfMetricsSeedStatic` measures what a verbose read does for the
+  static targets: finding the request of each (`keys`), and that plus
+  notifying the tracker of them (`seed`).
+
+A configuration of 10,000 collectors takes seconds to load, which are not
+timed; `-bench 'StaticTargetLookup/n=2000$'` selects one size. As measured
+on two shared cores that other work kept busy throughout, old and new in
+turn, seven to ten times, which is why the ranges are wide. What `in-force`,
+`scrape`, `keys` and `seed` allocate is unchanged:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2104,69 +2180,79 @@ is what they allocated:
 | `n=2000/seed` | 92–330 ms | 113–338 ms |
 | `n=10000/seed` | 1.4–3.6 s | 0.8–1.9 s |
 
-What is left of `keys` is a target's own, about 3 µs and six allocations
-each: the overrides of its request and the label of its URL, made again at
-every read. `seed` with more than 1,000 static targets was the tracker's and
-was not changed by this: it tracks `VerboseRequestSeriesLimit` requests, the
-static targets over that are offered to it again at every read, and each
-offer went through everything tracked for an idle request to make room for
-it (`setStatic`, `adoptLocked`, `expireLocked`), so 1,000 times through
-1,000 for 2,000 targets and 9,000 times for 10,000, which is most of the
-time above and hid what `keys` gained. The tracker no longer does that:
-see below. The read that names a target goes
-on to filter every series of the endpoint by the names, which is as long as
-the endpoint is large, as it was.
+What remains of `keys` belongs to each target, about 3 µs and six
+allocations each: the overrides of its request and the label of its URL,
+built again at every read. `seed` with more than 1,000 static targets was
+dominated by the tracker and was not changed by this. The tracker tracks
+`VerboseRequestSeriesLimit` requests, the static targets beyond that are
+offered to it again at every read, and each offer scanned everything tracked
+for an idle request to make room (`setStatic`, `adoptLocked`,
+`expireLocked`): 1,000 times through 1,000 for 2,000 targets and 9,000 times
+for 10,000. That is most of the time above, and it hid what `keys` gained.
+The tracker no longer does that: see below. The read that names a target
+still filters every series of the endpoint by the names, which takes as long
+as the endpoint is large.
 
-It is held by counting, never by time. `targetsScannedHook`, beside
-`collectorsScannedHook`, is called whenever the targets of a file are gone
-through to tell whether one has a name or to note the names they have, and
-`staticlookups_http_test.go` counts both: a read of the verbose
-self-metrics goes through the collectors once, the first time, for the
-configuration the exporter started with, and not at all after, where it
-went through them once for every static target; the scrape of the last
-static target and a read that names it go through the targets not at all,
-where each did once; and a reload goes through the collectors of its
-configuration once and the targets of its file once — for 60 collectors
-with a target each, for 240, and with five targets to a collector. The
-former lookups are kept beside the tests. Over 200 generated target files
-given to the server as they are, with targets that share a name, names that
-differ by case or by blanks and the empty name, a name is told in force,
-and a read that names targets is given its names or refused, exactly as the
-former lookups do (`statictargetnames_test.go`), with the file followed,
-with one in force that is not followed yet and with nothing followed. Over
-a run of reloads of both files, of either alone and of files that are
-refused, the same holds when the files are read and not yet in force, when
-they are in force and not yet followed, and when the reload is done, and
-every scrape that read its target before a reload publishes exactly when
-the former lookup and the target's stay say it does. And over 60 generated
-configurations, collectors that share a name among them and targets of a
-collector the configuration does not have, the requests found are the
-former search's, and a verbose read is answered with the same bytes as by a
-server that tracked the former search's requests, but for the families of
-the Go runtime and of the process. Two readers that ask all three while
-reloads replace both files and either alone are answered as the former
-lookups answer whenever no reload came during the asking, which, run with
-the race detector, also shows that what was noted for the files followed is
-read while a reload notes the next. Only a test sets one of the hooks: the
-exporter declares each and reads it in one place
-(`test/repository/scanhooks_test.go`).
+This is checked by counting, never by time. `targetsScannedHook`, next to
+`collectorsScannedHook`, is called whenever the targets of a file are
+scanned to find whether one has a name or to record their names.
+`staticlookups_http_test.go` counts both:
 
-Past the limit, a static target the tracker has no room for is offered to
-it at every read of the verbose self-metrics, and every offer looked for an
-idle request to make room by going through all the requests tracked
-(`expireLocked`): with 2,000 static targets, 1,000 times through 1,000 at
-each read, once for every scrape of the self-metrics. The tracker now keeps
-a time no request that can expire was last used before (`idleFloor`), set
-when it goes through them and moved earlier when a request is used at an
-earlier time, and goes through them only when that time is an hour old, so
-when one of them may be idle; what it drops, keeps and counts is what it
-did. `BenchmarkVerboseSelfMetricsRead` in `staticlookups_bench_test.go` is
-what the tracked requests make a read do — the static targets' requests
-told to the tracker, the idle ones expired and the series of every one —
+- A read of the verbose self-metrics scans the collectors once, the first
+  time, for the configuration that the exporter started with, and not at all
+  afterwards, where it used to scan them once for every static target.
+- The scrape of the last static target and a read that names it scan the
+  targets not at all, where each used to scan them once.
+- A reload scans the collectors of its configuration once and the targets of
+  its file once.
+
+These hold for 60 collectors with a target each, for 240, and with five
+targets per collector. The previous lookups are kept next to the tests:
+
+- Over 200 generated target files given to the server as they are (with
+  targets that share a name, names that differ by letter case or blanks, and
+  the empty name), a name is reported in force, and a read that names
+  targets is given its names or refused, exactly as the previous lookups do
+  (`statictargetnames_test.go`). This holds with the file followed, with one
+  in force that is not followed yet, and with nothing followed.
+- Over a run of reloads of both files, of either alone and of refused files,
+  the same holds when the files are read and not yet in force, when they are
+  in force and not yet followed, and when the reload is done. Every scrape
+  that read its target before a reload publishes exactly when the previous
+  lookup and the target's lifetime say it does.
+- Over 60 generated configurations (with collectors that share a name, and
+  targets of a collector that the configuration does not have), the
+  requests found are those of the previous search, and a verbose read is
+  answered with the same bytes as by a server that tracked the previous
+  search's requests, except for the families of the Go runtime and of the
+  process.
+- Two readers that ask all three questions while reloads replace both files
+  and either alone are answered as the previous lookups answer whenever no
+  reload came during the question. Run with the race detector, this also
+  shows that what was recorded for the followed files is read while a reload
+  records the next.
+- Only a test sets one of the hooks: the exporter declares each and reads it
+  in one place (`test/repository/scanhooks_test.go`).
+
+**The request tracker.** Past the limit, a static target that the tracker
+has no room for is offered to it at every read of the verbose self-metrics,
+and every offer looked for an idle request to make room by scanning all the
+tracked requests (`expireLocked`): with 2,000 static targets, 1,000 times
+through 1,000 at each read, once for every scrape of the self-metrics.
+
+The tracker now keeps a time before which no request that can expire was
+last used (`idleFloor`). It is set when the tracker scans the requests and
+moved earlier when a request is used at an earlier time, and the tracker
+scans them only when that time is an hour old, that is, when one of them may
+be idle. What it drops, keeps and counts is unchanged.
+
+`BenchmarkVerboseSelfMetricsRead` in `staticlookups_bench_test.go` measures
+what the tracked requests make a read do (the static targets' requests
+reported to the tracker, the idle ones expired, and the series of each),
 with the tracker full of the static targets' requests (`static`) or of
-requests of probes that leave no room for any of them (`probed`);
+requests of probes that leave no room for any of them (`probed`).
 `BenchmarkSelfMetricsSeedStatic/seed` is the first part. Old and new back to
-back on two shared cores; neither allocates more or less than it did:
+back on two shared cores; neither allocates more or less than before:
 
 ```sh
 go test -run '^$' -bench 'SelfMetricsSeedStatic/.*/seed|VerboseSelfMetricsRead' ./internal/exporter/
@@ -2183,38 +2269,41 @@ go test -run '^$' -bench 'SelfMetricsSeedStatic/.*/seed|VerboseSelfMetricsRead' 
 | `n=2000/seed` | 71 ms | 3.4 ms |
 | `n=10000/seed` | 0.60 s | 25 ms |
 
-What is left is as long as the static targets are many: about two thirds
-is finding each target's request (`staticRequestKeys`, mostly
-`fetch.RequestLabelFor` making its URL's label again), and most of the rest
-is `setStatic` itself, which makes new statistics for each target left over
-that the tracker then turns away. It is held by counting, not by time:
-`requestsScannedHook` is called whenever `expireLocked` goes through the
-requests, and a read with twice as many static targets as the tracker holds
-goes through them at most once, with the tracker full of requests of
-probes, with them idle an hour later and with it full of static targets'
-(`requeststats_oracle_test.go`), where it went through them 2,001 times.
-The former tracker is kept beside the tests as an oracle: over generated
-runs of probes of new and tracked requests, scrapes of static targets,
-reads with the static targets as they were or changed by a reload to a few,
-nearly as many as the tracker holds or a few more, collectors removed,
-verbose switched off and time passing by seconds, minutes, about the hour
-and backwards, the tracker keeps the same requests with the same values,
-times and counts as the former one after every step, and gives the same
-series at every read; past the limit the former tracker took the static
-targets in the map's order, and the new one is held to an order it could
-have had. It costs about a second, plain or under the race detector.
+What remains grows with the number of static targets. About two thirds is
+finding each target's request (`staticRequestKeys`, mostly
+`fetch.RequestLabelFor` building its URL's label again), and most of the
+rest is `setStatic` itself, which builds new statistics for each left-over
+target that the tracker then rejects.
 
-The debug scrape of a static target, `/static-targets?debug=<name>`, finds
-its target and the target's collector before it scrapes (`staticDebugTarget`
-in `probedebug.go`). It went through the targets by value, keeping a pointer
-to the loop's copy, which put a copy of each target it passed, 416 bytes, on
-the heap, and then through the collectors (`model.CollectorByName`). It now
-goes through the targets by index and points into the file in force, which
-nothing the debug scrape does writes to, and finds the collector where the
-configuration followed keeps its place (`followedConfig.collectorOf`), as a
-scrape does, falling back to going through the collectors where a scrape
-does. `BenchmarkStaticTargetLookup` times it with the last target asked for
-(`debug`), old and new taken back to back:
+- This is checked by counting, not by time. `requestsScannedHook` is called
+  whenever `expireLocked` scans the requests. A read with twice as many
+  static targets as the tracker holds scans them at most once, with the
+  tracker full of probe requests, with those requests idle an hour later,
+  and with it full of static targets' requests
+  (`requeststats_oracle_test.go`), where it used to scan them 2,001 times.
+- The previous tracker is kept next to the tests as an oracle. Over
+  generated runs of probes of new and tracked requests, scrapes of static
+  targets, reads with the static targets unchanged or changed by a reload
+  (to a few, nearly as many as the tracker holds, or a few more), removed
+  collectors, verbose switched off, and time passing by seconds, minutes,
+  about an hour and backwards, the tracker keeps the same requests with the
+  same values, times and counts as the previous one after every step, and
+  returns the same series at every read. Past the limit, the previous tracker
+  took the static targets in the map's order, and the new one is held to an
+  order that it could have had. It costs about a second, plain or under the
+  race detector.
+
+**The debug scrape.** The debug scrape of a static target,
+`/static-targets?debug=<name>`, finds its target and the target's collector
+before it scrapes (`staticDebugTarget` in `probedebug.go`). It iterated over
+the targets by value, keeping a pointer to the loop's copy, which put a copy
+of each target it passed (416 bytes) on the heap, and then scanned the
+collectors (`model.CollectorByName`). It now iterates over the targets by
+index and points into the file in force, which nothing in the debug scrape
+writes to, and finds the collector where the followed configuration keeps
+its place (`followedConfig.collectorOf`), as a scrape does, falling back to
+scanning the collectors where a scrape does. `BenchmarkStaticTargetLookup`
+times it with the last target requested (`debug`), old and new back to back:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2222,48 +2311,52 @@ does. `BenchmarkStaticTargetLookup` times it with the last target asked for
 | `n=2000/debug` | 0.61 ms, 832,000 bytes, 2,000 allocations | 4.8 µs, none |
 | `n=10000/debug` | 2.3 ms, 4,160,000 bytes, 10,000 allocations | 54 µs, none |
 
-What is left is comparing the names of the targets passed, which costs much
-less than the scrape that follows; the targets are not noted by their names
-for it. `staticdebugtarget_test.go` holds it: finding the last of 2,000 and
-of 10,000 targets allocates nothing, where the lookup as it was, measured
-beside it, allocates once for each target; and over 200 generated pairs of
-configuration and target file, with targets that share a name, collectors
-that share one and targets of a collector the configuration lacks, the
-target and collector found are those the lookup as it was found — the
-target the first of its name, in the file itself — with the configuration
-followed, which goes through its collectors once in all
-(`collectorsScannedHook`), and with one followed that keeps no places,
-which goes through them once for each target found.
+What remains is comparing the names of the targets passed, which costs much
+less than the scrape that follows; the targets are not indexed by name for
+it. `staticdebugtarget_test.go` checks this:
 
-The check of a static target file against a configuration, which the start
-and `--dry-run` make once and a reload once for each pair of the two it asks
-about (see below), has a benchmark in
+- finding the last of 2,000 and of 10,000 targets allocates nothing, where
+  the previous lookup, measured next to it, allocates once per target;
+- over 200 generated pairs of configuration and target file (with targets
+  that share a name, collectors that share one, and targets of a collector
+  that the configuration lacks), the target and collector found are those
+  that the previous lookup found (the target being the first of its name, in
+  the file itself). This holds with the configuration followed, which scans
+  its collectors once in all (`collectorsScannedHook`), and with a followed
+  configuration that keeps no places, which scans them once for each target
+  found.
+
+**Checking a static target file.** The check of a static target file against
+a configuration, which startup and `--dry-run` make once and a reload once
+for each pair of the two that it asks about (see below), has a benchmark in
 `internal/config/targetcheck_bench_http_test.go`:
 
 ```sh
 go test -run '^$' -bench 'StaticTargetsAgainst|TargetsChecked' ./internal/config/
 ```
 
-`BenchmarkValidateStaticTargetsAgainst` is the check
-(`ValidateStaticTargetsAgainst`) of n targets against n collectors: `own`
-with each target of its own collector, `last` with every target of the last
-collector, whose path has a placeholder, and `one` with a single target.
-`BenchmarkTargetsChecked` is the search for the collectors whose descriptor
-files the check opens (`targetsChecked`), which a reload that reads the
-target file makes for the configuration read and the one in force:
-`no_message` with no target setting a `request.message`, as in every file
-without a grpc collector, `every_message` and `one_message`. The check found
-a target's collector by going through the configuration's collectors
-(`model.CollectorByName`), four times for every target, and the search once
-more for every target, whether or not it set a message, reading a name out
-of each definition of 1,224 bytes: for as many targets as collectors that is
-the square of their number. Now the collectors are gone through once for a
-check, to note where each is by its name (`collectorsByName` in
-`statictargets.go`), in the map the check made before to know the names, and
-the search does so only once it meets a target that sets a message.
-`indexes/op` is how many times they were gone through. As measured on two
-shared cores, old and new in turn (the times are the range of two or three
-runs):
+- `BenchmarkValidateStaticTargetsAgainst` is the check
+  (`ValidateStaticTargetsAgainst`) of n targets against n collectors: `own`
+  with each target of its own collector, `last` with every target of the
+  last collector, whose path has a placeholder, and `one` with a single
+  target.
+- `BenchmarkTargetsChecked` is the search for the collectors whose descriptor
+  files the check opens (`targetsChecked`), which a reload that reads the
+  target file makes for the configuration read and the one in force:
+  `no_message` with no target setting a `request.message`, as in every file
+  without a grpc collector, `every_message` and `one_message`.
+
+The check found a target's collector by scanning the configuration's
+collectors (`model.CollectorByName`), four times for every target, and the
+search scanned them once more for every target, whether or not it set a
+message, reading a name out of each definition of 1,224 bytes. For as many
+targets as collectors, that is the square of their number. Now the
+collectors are scanned once per check, to record where each is by its name
+(`collectorsByName` in `statictargets.go`), in the map that the check
+already built to know the names, and the search does so only once it meets
+a target that sets a message. `indexes/op` is how many times they were
+scanned. As measured on two shared cores, old and new in turn (the times are
+the range of two or three runs):
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2279,20 +2372,24 @@ runs):
 | `every_message/n=10000` | 0.67–0.85 s, 58,424,448 bytes, 20 allocations | 67–78 ms, 58,861,712 bytes, 55 allocations |
 | `one_message/n=10000` | 0.53–0.54 s, 1,280 bytes, 1 allocation | 1.3–1.6 ms, 438,544 bytes, 36 allocations |
 
-What was left of the check was a target's own, 4 to 6 µs each whatever the
-configuration holds: about half of it reading which keys the target's
-`request` block sets, by reflection over the block's fields and their tags
-(`setKeys` in `internal/fetch`), and a quarter binding the target's params,
-which parsed the placeholders of the collector's request anew for every
-target of it, the path's twice (`fetch.CheckRequestParams`). Which field of
-a block has which yaml key depends on its type alone, and is now read from
-the tags once for a type and kept by it (`yamlKeysOf`); only whether each
-field is set is looked at for each target. A collector's placeholders are
-found once for a check, for its first target, and kept for its others
+What then remained of the check belonged to each target, 4 to 6 µs each
+whatever the configuration holds:
+
+- about half was reading which keys the target's `request` block sets, by
+  reflection over the block's fields and their tags (`setKeys` in
+  `internal/fetch`);
+- a quarter was binding the target's params, which parsed the placeholders
+  of the collector's request again for every target of it, the path's twice
+  (`fetch.CheckRequestParams`).
+
+Which field of a block has which yaml key depends only on its type, and is
+now read from the tags once per type and kept (`yamlKeysOf`); only whether
+each field is set is examined for each target. A collector's placeholders are
+found once per check, for its first target, and kept for its others
 (`fetch.RequestParamsCheck`, which lives for one check, so that what it keeps
-cannot go stale), and `CheckRequestParams` itself, which a probe calls,
-finds them once where it found them twice. The same benchmark, old and new
-in turn, twice:
+cannot go stale). `CheckRequestParams` itself, which a probe calls, finds
+them once where it found them twice. The same benchmark, old and new in
+turn, twice:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2303,62 +2400,74 @@ in turn, twice:
 | `own/n=10000` | 39–40 ms, 3,877,267 bytes, 50,038 allocations | 18–22 ms, 3,828,729 bytes, 43,451 allocations |
 | `last/n=10000` | 49–50 ms, 6,757,022 bytes, 90,034 allocations | 15 ms, 2,597,295 bytes, 50,038 allocations |
 
-What is left for a target is 1.5 to 2 µs: whether each field of its
+What remains for a target is 1.5 to 2 µs: whether each field of its
 `request` block is set, still by reflection, a fifth of the check;
-`url.Parse` of its address, which checking the address is, as much; and
-binding its params against the placeholders found. `own` also finds the
-placeholders of each collector, each its first. Noting where 10,000
-collectors are is 1 to 2 ms. The search with every target setting a message is
-the copies it returns, a collector's definition for each such target. One
-case costs more than it did: a target file of fewer than ten or so targets,
-one of which sets a message, checked against thousands of collectors, for
-which going through them a few times was less than noting where all of them
-are — 0.6 ms where it was 0.1 for one target and 10,000 collectors, at a
-reload that reads a configuration of that size in seconds.
+`url.Parse` of its address, which is what checking the address is, as much
+again; and binding its params against the placeholders found. `own` also
+finds the placeholders of each collector, each for its first target.
+Recording where 10,000 collectors are takes 1 to 2 ms. The search with every
+target setting a message is dominated by the copies it returns, a
+collector's definition for each such target.
 
-It is held without a duration. `targetcheck_http_test.go` and
-`targetcheck_test.go` count the times the collectors are gone through
-(`collectorsIndexedHook`): once for a check, of one target and of 400, of a
-file accepted and of one refused at its last target; and for the search once
-for each configuration given, not at all for a file none of whose targets
-sets a message. `test/repository/collectorbyname_test.go` reads the two
-source files and fails when either uses `model.CollectorByName` again. And
-the check and the search as they were are kept beside the tests: over 20,000
-generated pairs of a configuration and a target file — collectors that share
-a name, a request type the build lacks, targets refused for each thing the
-check refuses and for several at once — and over every static target file
-the repository ships against every configuration it ships, the check says
-what it said, message for message, and the search finds the same collectors
-in the same order. That a collector's placeholders are found once for a
-check and a block's yaml keys once for its type is held by counting
-(`placeholdersParsedHook` and `yamlKeysReadHook` in `internal/fetch`,
-`targetcheckcost_test.go`): 1,000 checks of the params of three collectors,
-whatever parts of the request each replaces, find the placeholders three
-times, and the request blocks of 1,000 targets are read for their keys once
-at most; and by allocations (`targetcheck_http_test.go`): checking 1,100
-targets of a collector with a placeholder in its path allocates no more than
-five times for each target past 100, where it allocated nine times. Beside
-them, `setKeys` and `CheckRequestParams` as they were hold the present ones:
-over 4,000 generated collectors with placeholders well formed or not in each
-part of the request and in label values, checked with generated params and
-overrides through `CheckRequestParams` and a `RequestParamsCheck` shared by
-eight checks, the same params unused or the same error, and over generated
-request blocks of a collector and of a target, every field set and left
-unset, the same keys in the same order.
+One case costs more than before: a target file of fewer than about ten
+targets, one of which sets a message, checked against thousands of
+collectors. There, scanning the collectors a few times cost less than
+recording where all of them are: 0.6 ms where it was 0.1 for one target and
+10,000 collectors, during a reload that reads a configuration of that size
+in seconds.
 
-A reload asks whether a target file and a configuration agree up to five
-times (`Manager.apply` in `internal/config/config.go`): for the pair it read,
-for each file it read with the other in force, and again for the error of
-each file it refuses. It checked a pair each time it asked, the same pair up
-to three times, so a refused reload of a target file of 10,000 targets
-repeated a check of 30 ms or so under the reload lock. Now a reload checks
-each pair once and gives the verdict it got, the very error, when it asks
-again (`pairVerdicts`); and a target file read alone, whose check opens the
-descriptor files of the configuration read and of the one in force, which
-are then one, looks through that one once (`targetsChecked`).
+This is checked without a duration:
+
+- `targetcheck_http_test.go` and `targetcheck_test.go` count the scans of the
+  collectors (`collectorsIndexedHook`): once per check, for one target and
+  for 400, for an accepted file and for one refused at its last target; and
+  for the search, once for each configuration given, and not at all for a
+  file in which no target sets a message.
+- `test/repository/collectorbyname_test.go` reads the two source files and
+  fails when either uses `model.CollectorByName` again.
+- The previous check and search are kept next to the tests. Over 20,000
+  generated pairs of a configuration and a target file (with collectors that
+  share a name, a request type that the build lacks, targets refused for each
+  thing that the check refuses and for several at once), and over every
+  static target file that the repository ships against every configuration
+  it ships, the check returns the same result, message for message, and the
+  search finds the same collectors in the same order.
+- That a collector's placeholders are found once per check and a block's
+  yaml keys once per type is checked by counting (`placeholdersParsedHook`
+  and `yamlKeysReadHook` in `internal/fetch`, `targetcheckcost_test.go`):
+  1,000 checks of the params of three collectors, whatever parts of the
+  request each replaces, find the placeholders three times, and the request
+  blocks of 1,000 targets are read for their keys at most once.
+- It is also checked by allocations (`targetcheck_http_test.go`): checking
+  1,100 targets of a collector with a placeholder in its path allocates no
+  more than five times for each target beyond 100, where it allocated nine
+  times.
+- Next to them, the previous `setKeys` and `CheckRequestParams` check the
+  current ones. Over 4,000 generated collectors, with well-formed or
+  malformed placeholders in each part of the request and in label values,
+  checked with generated params and overrides through `CheckRequestParams`
+  and a `RequestParamsCheck` shared by eight checks, they report the same
+  unused params or the same error. Over generated request blocks of a
+  collector and of a target, with every field set and unset, they return the
+  same keys in the same order.
+
+**Checking each pair once.** A reload asks whether a target file and a
+configuration agree up to five times (`Manager.apply` in
+`internal/config/config.go`): for the pair that it read, for each file that
+it read with the other one in force, and again for the error of each file
+that it refuses. It checked a pair each time it asked, the same pair up to
+three times, so a refused reload of a target file of 10,000 targets repeated
+a check of about 30 ms under the reload lock.
+
+- A reload now checks each pair once, and returns the same verdict, the very
+  same error, when it asks again (`pairVerdicts`).
+- A target file read alone, whose check opens the descriptor files of the
+  configuration read and of the one in force, which are then the same,
+  looks through that configuration once (`targetsChecked`).
+
 `BenchmarkRefusedPairReload` in `internal/config/refusedpair_http_test.go`
-makes each kind of reload at 10,000 targets, the files read from disk, each
-refused at its last target where it is refused; `checks/op` is how many
+makes each kind of reload at 10,000 targets, with the files read from disk,
+each refused at its last target where it is refused. `checks/op` is how many
 checks it made:
 
 ```sh
@@ -2377,37 +2486,41 @@ range of two runs):
 | `targets_alone`, both read, the target file goes alone | 279–282 ms, 58.1 MB, 880,830 allocations, 4 checks | 249–262 ms, 56.1 MB, 850,829 allocations, 3 checks |
 | `neither_alone`, both read and refused | 295–305 ms, 60.1 MB, 910,839 allocations, 5 checks | 251–253 ms, 56.1 MB, 850,831 allocations, 3 checks |
 
-The rest is reading the files. It is held without a duration:
-`TestAReloadChecksEachPairOfFilesOnce` counts the checks of each of these
-reloads (`targetsValidatedHook`, which only a test sets,
-`test/repository/scanhooks_test.go`), one for each pair asked about, and
-`TestATargetFileReadAloneLooksThroughTheConfigurationInForceOnce` the times
-the collectors are gone through for a target file read alone. The reload as
-it was is kept beside the tests (`oldApply`), and over generated sequences
-of reloads — of http collectors and of a grpc collector whose descriptor set
-is replaced, removed and put back; each file accepted, refused for itself
-or refused for the other; one read or both, on demand or by a tick, with the
-watch on and off — two managers of the same files, one reloading as before
-and one as now, leave the same files in force, return the same errors, log
-the same lines in the same order, count the same reloads, and watch the same
-files for a refused one, stamped alike.
+The rest is reading the files. This is checked without a duration:
 
-The read of every collector's statistics, which each scrape of the
-self-metrics makes under that same lock, has a benchmark beside that one,
-`internal/exporter/collectorstats_bench_test.go`:
+- `TestAReloadChecksEachPairOfFilesOnce` counts the checks of each of these
+  reloads (`targetsValidatedHook`, which only a test sets,
+  `test/repository/scanhooks_test.go`): one for each pair asked about.
+- `TestATargetFileReadAloneLooksThroughTheConfigurationInForceOnce` counts
+  how often the collectors are scanned for a target file read alone.
+- The previous reload is kept next to the tests (`oldApply`). Over generated
+  sequences of reloads (of http collectors and of a grpc collector whose
+  descriptor set is replaced, removed and restored; each file accepted,
+  refused for itself or refused because of the other; one file read or both,
+  on demand or by a tick, with the watch on and off), two managers of the
+  same files, one reloading as before and one as now, leave the same files
+  in force, return the same errors, log the same lines in the same order,
+  count the same reloads, and watch the same files, stamped alike, for a
+  refused reload.
+
+**Collector statistics.** The read of every collector's statistics, which
+each scrape of the self-metrics makes under the same lock, has a benchmark
+next to that one, `internal/exporter/collectorstats_bench_test.go`:
 
 ```sh
 go test -run '^$' -bench 'CollectorStats/steady' ./internal/exporter/
 go test -run '^$' -bench 'CollectorStats/reloaded' -benchtime 20x ./internal/exporter/
 ```
 
-`steady` is a read that finds every collector's statistics there, as every
-read but the first after a reload does, and `reloaded` the first read after
-a reload that replaced every collector by another, which makes the
-statistics of each with the lock held; the reload is not timed and takes far
-longer than the read, hence the fixed number of rounds. It reports
-`locked-ns/op` as `FollowReload` does. As measured on two shared cores, old
-and new in turn, three times:
+- `steady` is a read that finds every collector's statistics already there,
+  as every read except the first after a reload does.
+- `reloaded` is the first read after a reload that replaced every collector
+  with another, which builds the statistics of each with the lock held. The
+  reload is not timed and takes far longer than the read, hence the fixed
+  number of rounds.
+
+It reports `locked-ns/op` as `FollowReload` does. As measured on two shared
+cores, old and new in turn, three times:
 
 | Benchmark | Before | After |
 | --- | --- | --- |
@@ -2418,74 +2531,87 @@ and new in turn, three times:
 | `reloaded/n=500` | 397–438 µs, 236–266 µs of it under the lock; 388,560 bytes, 1,031 allocations | 311–332 µs, 129–155 µs of it under the lock; 354,992 bytes, 1,010 allocations |
 | `reloaded/n=2000` | 1.7–2.1 ms, 1.0–1.4 ms of it under the lock; 1,580,216 bytes, 4,054 allocations | 1.2–1.3 ms, 0.58–0.59 ms of it under the lock; 1,419,680 bytes, 4,022 allocations |
 
-The read took the lock and did under it all that gave it the statistics by
-name. Of the 100–110 µs for 500 collectors, about 25 were the copy of each
-collector's definition, 1,224 bytes, which `for _, c := range` made to read
-a name; about 50 the map of the statistics, made without its size and grown
-as it was filled; about 9 the slice of the names, grown likewise; and the
-rest filling the map and finding each collector's statistics, of which only
-the finding, 6–9 µs, needs the lock. Now the names are read by index and the
-map and the slices made at their size before the lock is taken, the
-statistics are found into a slice under it, and the map is filled from that
-once it is released (`collectorStats` in `selfmetrics.go`). What the first
-read after a reload still does with the lock held is make the statistics of
-the collectors the reload added, a quarter of a microsecond each: 320 bytes,
-which is most of it, and a reading of the clock, which is when the
-collector's counters began to count. The sort of the names and the copy of
-each collector's counters, under that collector's own lock, are as they were
-and are the rest of the read.
+The read used to take the lock and do everything that produced the
+statistics by name under it. Of the 100–110 µs for 500 collectors:
 
-`collectorstats_http_test.go` holds it without a duration. One read of 500
-collectors may make 515 allocations of 210,000 bytes: it makes 510 of
-194,992, and made 531 of 228,560 while the map and the names grew; either
-left without its size is past the bound alone. And over generated sequences
-of reloads that remove, add and bring back collectors, in every order, a
-server read as now gives the names, the counters and the very statistics
-that one read as before gives, the former read kept beside the test, with a
-reload between the read of the configuration and the lock and without. The
-copy allocates nothing, so the lint holds it: gocritic's `rangeValCopy`
-reports a loop that copies a kilobyte or more at each round, which in this
-code is a loop over collectors by value and nothing else (static analysis,
-below).
+- about 25 were the copy of each collector's definition, 1,224 bytes, which
+  `for _, c := range` made to read a name;
+- about 50 were the map of the statistics, created without its size and
+  grown as it was filled;
+- about 9 were the slice of the names, grown in the same way;
+- the rest was filling the map and finding each collector's statistics, of
+  which only the finding, 6–9 µs, needs the lock.
 
-`BenchmarkOTLPPoints` (`otlpkeys_bench_test.go`) measures what an OTLP export
-does for each of its points beside encoding them. `queue` queues n series
-under a resource, as a probe or a static target's scrape does, and empties
-the queue in order, as an export does; `start` makes them the points of an
-export, each with the start time of its series:
+Now the names are read by index, and the map and the slices are created at
+their size before the lock is taken. The statistics are collected into a
+slice under the lock, and the map is filled from it once the lock is
+released (`collectorStats` in `selfmetrics.go`). What the first read after a
+reload still does with the lock held is build the statistics of the
+collectors that the reload added, a quarter of a microsecond each: 320
+bytes, which is most of it, and a reading of the clock, which marks when the
+collector's counters began. The sort of the names and the copy of each
+collector's counters, under that collector's own lock, are unchanged and
+make up the rest of the read.
+
+`collectorstats_http_test.go` checks this without a duration:
+
+- One read of 500 collectors may make 515 allocations of 210,000 bytes. It
+  makes 510 of 194,992, and made 531 of 228,560 while the map and the names
+  grew; either one left without its size exceeds the bound on its own.
+- Over generated sequences of reloads that remove, add and restore
+  collectors, in every order, a server read the new way returns the same
+  names, counters and statistics as one read the previous way, which is kept
+  next to the test, with and without a reload between the read of the
+  configuration and the lock.
+- The copy allocates nothing, so the linter checks it: gocritic's
+  `rangeValCopy` reports a loop that copies a kilobyte or more per
+  iteration, which in this code is only a loop over collectors by value
+  (static analysis, below).
+
+**OTLP keys.** `BenchmarkOTLPPoints` (`otlpkeys_bench_test.go`) measures what
+an OTLP export does for each of its points, apart from encoding them.
+`queue` queues n series under a resource, as a probe or a static target's
+scrape does, and empties the queue in order, as an export does. `start`
+turns them into the points of an export, each with the start time of its
+series:
 
 ```sh
 go test -run '^$' -bench 'OTLP' -benchtime 2s ./internal/exporter/
 ```
 
-Both make a key for every point (`otlpKey` in `otlp.go`): what a resource,
-and a series of one, is told from every other by — where points wait for an
-export, among the resources of one, and where start times are kept. A key
-was its parts joined, a NUL between them and an `=` between a name and its
-value, and the parts are a target's and the operator's: the series
-`m{a="1\x00b=2"}` had the key of `m{a="1",b="2"}`, and was never exported
-while the other was queued after it; the resource with the attribute `a=b`
-of the value `c` had the key of the one with `a` of the value `b=c`, and the
-points of both went out under the attributes of the first; and a resource
-whose last attribute held what another's series began with shared a start
-time with it. Now a key is that join and then the length of every part, so
-that no two subjects have one key whatever their parts hold
-(`TestAnOTLPKeyIsReadBackToItsParts` reads every generated key back to its
-parts, which only a test does). The join is kept, where the failure log's
-keys have each part after its length, because an export's resources and the
-points of each are sent in the order of their keys, which was the order of
-the joins: a NUL of the join is written with a `0x01` after it and two NULs
-end it, and so written the keys are in the order of the joins still
-(`TestOTLPKeysAreInTheOrderTheOldKeysHad`).
-`TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey` holds generated
-runs of exports, byte for byte, to the export as it was with the old keys,
-which are kept beside the tests, wherever no two subjects of a run had one
-old key, and every run to an export whose keys are each subject's own.
+Both build a key for every point (`otlpKey` in `otlp.go`): what distinguishes
+a resource, and a series of a resource, from every other, in the places where
+points wait for an export, among the resources of an export, and where start
+times are kept.
 
-The old key grew as it was written, beside a slice of the label names in
-order, and a start time's was joined to its resource's: four allocations for
-a series of three labels, five for its start time. The new one is made at
-its size, with the parts put in order in place: one allocation
+- A key used to be its parts joined, with a NUL between them and an `=`
+  between a name and its value, and the parts come from a target and the
+  operator. The series `m{a="1\x00b=2"}` had the key of `m{a="1",b="2"}`,
+  and was never exported while the other was queued after it. The resource
+  with the attribute `a=b` of value `c` had the key of the one with `a` of
+  value `b=c`, and the points of both went out under the attributes of the
+  first. A resource whose last attribute held what another's series began
+  with shared a start time with it.
+- A key is now that join followed by the length of every part, so that no two
+  subjects have one key, whatever their parts hold
+  (`TestAnOTLPKeyIsReadBackToItsParts` reads every generated key back into
+  its parts, which only a test does).
+- The join is kept, where the failure log's keys have each part after its
+  length, because an export sends its resources, and the points of each, in
+  the order of their keys, which was the order of the joins. A NUL of the
+  join is written with a `0x01` after it, and two NULs end it; written this
+  way, the keys are still in the order of the joins
+  (`TestOTLPKeysAreInTheOrderTheOldKeysHad`).
+- `TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey` checks
+  generated runs of exports, byte for byte, against the export with the old
+  keys, which are kept next to the tests, wherever no two subjects of a run
+  had one old key, and checks every run against an export whose keys belong
+  to each subject alone.
+
+The old key grew as it was written, next to a slice of the label names in
+order, and a start time's key was joined to its resource's: four allocations
+for a series of three labels, five for its start time. The new one is
+created at its size, with the parts sorted in place: one allocation
 (`TestAnOTLPKeyIsMadeInOneAllocation`). As measured on two shared cores (the
 times are the range of four runs, old and new in turn):
 
@@ -2496,22 +2622,24 @@ times are the range of four runs, old and new in turn):
 | `start/n=100` | 130–205 µs, 86.0 kB, 912 allocations | 122–209 µs, 67.6 kB, 515 allocations |
 | `start/n=5000` | 6.0–10.8 ms, 4.53 MB, 45,069 allocations | 5.8–8.2 ms, 3.61 MB, 25,071 allocations |
 
-A key is remembered — where a point waits, and where a start time is kept —
-as itself up to 256 bytes (`otlpKeyLongest`), and past that by its SHA-256
-digest (`otlpKeyOf`), so that what a series keeps there is bounded whatever
-its labels hold: with `otlp.probe_attributes` a probe's target, up to 8 KiB,
-was a copy in every point waiting and in every start time, 8.4 KiB each, 1.6
-GiB at the start times' bound
-(`TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget`). Shorter keys are
-not made digests: a digest of a key of 100 bytes takes about half a
-microsecond on the machine above, a fifth more than a point costs in the
-queue. A long key is made again from its point for the moment a queue is
-emptied, so the points are still in the order of their keys, and an export is
-what it was byte for byte
-(`TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests`, against
-the export with every key whole). A key is now made where its caller has
-room, one allocation up to 256 bytes and two past it, and a start time
-already known is found with none:
+A key is stored, where a point waits and where a start time is kept, as
+itself up to 256 bytes (`otlpKeyLongest`), and beyond that as its SHA-256
+digest (`otlpKeyOf`), so that what a series stores there is bounded whatever
+its labels hold. With `otlp.probe_attributes`, a probe's target, up to
+8 KiB, was copied into every waiting point and every start time, 8.4 KiB
+each, 1.6 GiB at the start times' bound
+(`TestWhatIsRememberedOfASeriesIsBoundedWhateverTheTarget`).
+
+- Shorter keys are not turned into digests: a digest of a key of 100 bytes
+  takes about half a microsecond on the machine above, a fifth more than a
+  point costs in the queue.
+- A long key is rebuilt from its point when a queue is emptied, so the
+  points are still in the order of their keys, and an export is unchanged
+  byte for byte
+  (`TestOTLPExportsAreWhatTheyWereWithKeysRememberedByTheirDigests`, against
+  the export with every key whole).
+- A key is now built in the caller's buffer: one allocation up to 256 bytes
+  and two beyond, and a start time that is already known is found with none.
 
 | Benchmark | Keys whole | Keys up to 256 bytes, digests past it |
 | --- | --- | --- |
@@ -2520,59 +2648,70 @@ already known is found with none:
 | `start/n=100` | 236–292 µs, 67.6 kB, 515 allocations | 173–217 µs, 51.8 kB, 415 allocations |
 | `start/n=5000` | 10.9–11.7 ms, 3.62 MB, 25,120 allocations | 8.5–9.0 ms, 2.82 MB, 20,134 allocations |
 
-`BenchmarkDescriptorFilesCheck` (`internal/fetch/grpcdescriptors_bench_test.go`)
-is what a call of a grpc collector with descriptor files costs before it
-uses them when they did not change: the look at each file the set was read
-from (`fileSets.getStamped`), for 1, 10 and 50 files, each at a realistic
-depth (`deep`) or a link through `..data` as Kubernetes mounts a ConfigMap
-(`kubernetes`). `BenchmarkProbeGRPC` (`internal/exporter/probe_bench_grpc_test.go`)
-is a whole probe of a collector with `.proto` files and of one with a
-descriptor set, against a server on the same machine:
+**gRPC descriptor files.** `BenchmarkDescriptorFilesCheck`
+(`internal/fetch/grpcdescriptors_bench_test.go`) measures what a call of a
+grpc collector with descriptor files costs before it uses them, when they
+did not change: the check of each file that the set was read from
+(`fileSets.getStamped`), for 1, 10 and 50 files, each at a realistic depth
+(`deep`) or behind a link through `..data` as Kubernetes mounts a ConfigMap
+(`kubernetes`). `BenchmarkProbeGRPC`
+(`internal/exporter/probe_bench_grpc_test.go`) is a whole probe of a
+collector with `.proto` files and of one with a descriptor set, against a
+server on the same machine:
 
 ```sh
 go test -run '^$' -bench 'DescriptorFilesCheck' -benchtime 1s ./internal/fetch/
 go test -run '^$' -bench 'ProbeGRPC' -benchtime 1s ./internal/exporter/
 ```
 
-The look tells, as the configuration's watch does, which file a path leads
-to and its permissions besides its time and size. The watch resolves the
-path's links (`filepath.EvalSymlinks`), a look at each component; done at
-every call that cost 18–19 µs for one file and 0.8–1.0 ms for 50, against
-2–5 µs and 85–120 µs for the time and size alone, and 46 allocations for one
-file against 5. The look takes the file's device and inode from the stat it
-makes anyway (`fetch.FileIdentity`, `fileidentity_unix.go`, which the
-watch's stamp also writes; elsewhere it resolves the links), and writes its numbers without allocating: one file
-costs 4 allocations and 50 cost 110, against 5 and 160 before, in the same
-time within the noise of two shared cores, and a probe of `BenchmarkProbeGRPC`
-(0.3–0.7 ms here) allocates no more than it did (560 and 549 allocations against 563 and 551). `TestTheQuietCheckOfDescriptorFilesAllocatesNoMoreThanBefore`
-holds the look at no more allocations than the old one, kept beside the tests.
+The check determines, as the configuration's watch does, which file a path
+leads to and its permissions, in addition to its time and size.
 
-What was made fast stays fast by tests, not by the benchmarks: the decoders,
-the transforms, the duplicate check and the body read each have a test that
-bounds their allocations per series or per body, and a test that compares
-them with the plainer code they replaced, kept beside the tests, over a
-table and tens of thousands of generated inputs. The hand-over to Python is
-compared the same way, down to the worker's script as it was
-(`internal/transform/pythonoracle_test.go`), which a second pool of workers
-runs beside the current one. What the failure log costs a scrape whose rules
-fail has a benchmark of its own, `LogRuleFailures` — nothing failing, one
-rule and thirty failing and remembered, and, as `/full_log`, one and thirty
-failing while the log is full and remembers neither — and a bound that does
-not depend on the length of the rules' expressions, for the remembered and
-for the full log alike (the failure log, above). The
-allocation bounds are
-skipped under `-race`, which changes what is allocated; `make ci` runs the
-tests without it as well.
+- The watch resolves the path's links (`filepath.EvalSymlinks`), a lookup
+  per component. Done at every call, that cost 18–19 µs for one file and
+  0.8–1.0 ms for 50, against 2–5 µs and 85–120 µs for the time and size
+  alone, and 46 allocations for one file against 5.
+- The check takes the file's device and inode from the stat that it makes
+  anyway (`fetch.FileIdentity`, `fileidentity_unix.go`, which the watch's
+  stamp also writes; on other systems it resolves the links), and formats
+  their numbers without allocating. One file costs 4 allocations and 50 cost
+  110, against 5 and 160 before, in the same time within the noise of two
+  shared cores. A probe of `BenchmarkProbeGRPC` (0.3–0.7 ms here) allocates
+  no more than before (560 and 549 allocations against 563 and 551).
+- `TestTheQuietCheckOfDescriptorFilesAllocatesNoMoreThanBefore` holds the
+  check to no more allocations than the old one, which is kept next to the
+  tests.
+
+**Keeping it fast.** What was made fast stays fast through tests, not
+benchmarks:
+
+- The decoders, the transforms, the duplicate check and the body read each
+  have a test that bounds their allocations per series or per body, and a
+  test that compares them, over a table and tens of thousands of generated
+  inputs, with the simpler code they replaced, which is kept next to the
+  tests.
+- The hand-over to Python is compared in the same way, down to the worker's
+  previous script (`internal/transform/pythonoracle_test.go`), which a second
+  pool of workers runs next to the current one.
+- What the failure log costs a scrape whose rules fail has its own
+  benchmark, `LogRuleFailures` (nothing failing; one rule and thirty failing
+  and remembered; and, as `/full_log`, one and thirty failing while the log
+  is full and remembers neither), and a bound that does not depend on the
+  length of the rules' expressions, for the remembered failures and for the
+  full log alike (see the failure log, above).
+- The allocation bounds are skipped under `-race`, which changes what is
+  allocated; `make ci` also runs the tests without it.
 
 ## Tests that reach the internet
 
-`make ci` never touches the network. The demo configurations under `examples/`
-describe real services, though, and a stub replaying a captured response cannot
-tell you when one of those services renames a field or a column: the local
-tests go on passing while the shipped configuration quietly stops working.
+`make ci` never uses the network. The demo configurations under `examples/`
+describe real services, though, and a stub replaying a captured response
+cannot tell you when one of those services renames a field or a column: the
+local tests keep passing while the shipped configuration silently stops
+working.
 
-`internal/exporter/external_e2e_test.go` closes that gap by probing the real endpoints, and it is
-off unless asked for:
+`internal/exporter/external_e2e_test.go` closes that gap by probing the real
+endpoints. It is off unless requested:
 
 ```sh
 EXTERNAL_E2E=1 go test -run TestExternal -v ./...
@@ -2580,25 +2719,27 @@ EXTERNAL_E2E=1 go test -run TestExternal -v ./...
 make test-external
 ```
 
-Without `EXTERNAL_E2E` the tests skip with a message saying how to run them, so
-`go test ./...` stays offline and deterministic. They are deliberately not in
-CI: a red build caused by somebody else's afternoon outage teaches everyone to
-ignore red builds. Run them when changing a demo configuration, and every so
-often to catch a source that has moved on.
+Without `EXTERNAL_E2E` the tests are skipped with a message saying how to run
+them, so `go test ./...` stays offline and deterministic. They are
+deliberately not in CI: a red build caused by someone else's outage teaches
+everyone to ignore red builds. Run them when changing a demo configuration,
+and occasionally to catch a source that has changed.
 
-A failure here usually means the service changed or is unreachable rather than
-that this code broke, and the assertions say so — they check that the probe
-returned 200, that each metric the configuration declares is present, and that
-the per-row or per-entry labels survived.
+A failure here usually means that the service changed or is unreachable, not
+that this code broke, and the assertions say so. They check that the probe
+returned 200, that each metric the configuration declares is present, and
+that the per-row or per-entry labels survived.
 
-The suite also holds the status page demo's detailed tests,
-`internal/exporter/grafanastatus_external_e2e_test.go`, which run its configuration against a
-captured copy of status.grafana.com's summary. They need no network but are
-opt-in like the rest.
-A test file joins the suite by being listed in `test/repository/externalgate_test.go`; every test
-in it must be named `TestExternal*`, so `make test-external` picks it up, and
-start with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which
-does run by default, fails when either is missing.
+The suite also holds the detailed tests of the status page demo,
+`internal/exporter/grafanastatus_external_e2e_test.go`, which run its
+configuration against a captured copy of status.grafana.com's summary. They
+need no network but are opt-in like the rest.
+
+A test file joins the suite by being listed in
+`test/repository/externalgate_test.go`. Every test in it must be named
+`TestExternal*`, so that `make test-external` picks it up, and must start
+with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which does
+run by default, fails when either is missing.
 
 The default suite covers every example too, without the network. The tests in
 `test/repository` that check the examples — against the schemas, that each

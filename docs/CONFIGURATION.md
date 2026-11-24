@@ -5396,24 +5396,24 @@ collectors:
 `prometheus-universal-exporter --config.collector-file-schema` prints the JSON
 Schema of a collector file, published as
 [`configs/collector-file.schema.json`](../configs/collector-file.schema.json). Start a collector
-file with
+file with this line:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/collector-file.schema.json
 ```
 
-and the editor checks it the way it checks the configuration, including that it
-has no key but `collectors` and `defaults`.
+The editor then checks it the way it checks the configuration, including
+that it has no key other than `collectors` and `defaults`.
 
 ## Defaults for the collectors of a file
 
 A file of many similar collectors repeats the same limits, retries and
-target policies in each. A top-level `defaults` block writes them once: every
-collector of the same file takes each key of it that it does not set itself.
-The configuration file and each [collector file](#collector-files) have a
-block of their own, which applies to the collectors of that file alone —
-the configuration's does not reach the collectors of a collector file, nor
-the other way round.
+target policies in each. A top-level `defaults` block states them once:
+every collector of the same file takes each key of the block that it does
+not set itself. The configuration file and each
+[collector file](#collector-files) have their own block, which applies to
+the collectors of that file only. The configuration's block does not reach
+the collectors of a collector file, or the other way round.
 
 ```yaml
 # collectors.d/payments.yaml
@@ -5447,84 +5447,94 @@ collectors:
   `request.max_response_bytes`, `request.allowed_targets`,
   `request.denied_targets`, `request.proxy_url`,
   `request.proxy_basic_auth_file`, `limits`, `error_handling`,
-  `failure_backoff` and `cache`, each as a collector writes it: settings that
-  are alike for collectors of different request types and decoders, or, for
-  the proxy, of where the exporter runs. The `proxy_basic_auth_file` of a
-  block that also sets `proxy_url` is for that proxy alone: a collector that
-  writes a `proxy_url` of its own, another proxy or `direct`, leaves it out.
-  Without a `proxy_url` in the block, the credentials are for the collectors
-  that name their own proxies, and one that writes `proxy_url: direct`
-  leaves them out ([A collector's own
-  proxy](REQUESTS.md#a-collectors-own-proxy)). A collector that sends its
-  requests to a [`unix_socket`](REQUESTS.md#over-a-unix-socket) takes
-  neither. Any other key, of a
-  collector (`metrics`, `request.path`, `request.type`, a key of one request
-  type's own) or of nothing, is refused when the configuration loads, naming
-  the key and its line, and so is a value of the wrong kind.
-- **Key by key.** A collector takes every key of the block it does not write
-  itself, at every depth: one that writes `limits.max_metrics` keeps the
-  block's other limits, and one that writes `retry.attempts` keeps its
-  `retry.backoff`. A key the collector writes is its own whatever its value,
-  so `cache: {ttl: 0s}` answers every probe of that collector from the
-  target, while a key written `""` is left out, as everywhere, and taken
-  from the block. A list is one key and replaced whole: a collector's own
-  `allowed_targets` is the list it is held to, never joined with the block's.
-  A `request.tls` or `failure_backoff` written in `defaults`, even empty,
-  turns TLS, or the backoff with its own defaults, on for every collector
-  that does not write it. A collector that must never back off writes
-  `failure_backoff: {enabled: false}`, and takes none of the block's
-  `failure_backoff` keys; `enabled: false` in `defaults` itself, which would
-  give every collector what leaving `failure_backoff` out gives, is refused.
-  A key merged in with `<<:` is written where the merge puts it, in a
-  collector and in `defaults` alike.
+  `failure_backoff` and `cache`, each written as a collector writes it.
+  These are settings that are the same for collectors of different request
+  types and decoders or, for the proxy, that depend on where the exporter
+  runs. Any other key, whether a collector's (`metrics`, `request.path`,
+  `request.type`, a key specific to one request type) or unknown, is refused
+  when the configuration loads, with an error that names the key and its
+  line. So is a value of the wrong kind.
+- **Proxy credentials.** The `proxy_basic_auth_file` of a block that also
+  sets `proxy_url` is for that proxy only: a collector that writes its own
+  `proxy_url`, another proxy or `direct`, does not take it. Without a
+  `proxy_url` in the block, the credentials are for the collectors that
+  name their own proxies, and a collector that writes `proxy_url: direct`
+  does not take them
+  ([A collector's own proxy](REQUESTS.md#a-collectors-own-proxy)). A
+  collector that sends its requests to a
+  [`unix_socket`](REQUESTS.md#over-a-unix-socket) takes neither.
+- **Key by key.** A collector takes every key of the block that it does not
+  write itself, at every depth. One that writes `limits.max_metrics` keeps
+  the block's other limits, and one that writes `retry.attempts` keeps the
+  block's `retry.backoff`.
+  - A key the collector writes is its own whatever its value, so
+    `cache: {ttl: 0s}` answers every probe of that collector from the
+    target. A key written `""` counts as omitted, as everywhere, and is
+    taken from the block.
+  - A list is one key and is replaced as a whole: a collector's own
+    `allowed_targets` is the list it is held to, never combined with the
+    block's.
+  - A `request.tls` or `failure_backoff` written in `defaults`, even empty,
+    turns TLS, or the backoff with its own defaults, on for every collector
+    that does not write it. A collector that must never back off writes
+    `failure_backoff: {enabled: false}` and takes none of the block's
+    `failure_backoff` keys. `enabled: false` in `defaults` itself, which
+    would give every collector the same as leaving `failure_backoff` out,
+    is refused.
+  - A key merged in with `<<:` counts as written where the merge puts it, in
+    a collector and in `defaults` alike.
 - **Request types.** A key of `request` applies only to the collectors whose
-  request type takes it, so collectors of several types share one file:
-  `retry` does not reach a `dns` collector, nor `retry.statuses` a `grpc` one.
-  A key that applies to no collector of the file — none of their types takes
-  it, or each that does sets it itself, or turns the backoff off — would be a
-  setting nothing uses, and is refused, once for a block and its keys, as `defaults.request.retry.attempts applies to no collector of
+  request type takes it, so collectors of several types can share one file:
+  `retry` does not reach a `dns` collector, nor `retry.statuses` a `grpc`
+  one. A key that applies to no collector of the file (none of their types
+  takes it, or each that does sets it itself or turns the backoff off) would
+  be a setting that nothing uses. It is refused, once for a block and its
+  keys, as `defaults.request.retry.attempts applies to no collector of
   the file: request.retry.attempts does not apply to request.type "dns" of
   its collectors; remove it from defaults`. So is a `defaults` block in a
   configuration file that defines no collectors of its own.
-- **Checked once, and with each collector.** A value that is wrong whatever
-  collector takes it — a negative limit, an unknown error policy, more than
-  10 retry attempts — is refused once, naming the block, as
-  `defaults.limits.max_metrics is -1, and a limit must not be negative; leave
-  it out, or 0, for the default`, with the collector file in front when it is
-  in one. A value that is wrong for one collector, such as an allowed target
-  that is no bucket name for an `s3file` collector, or a `failure_backoff.max`
-  shorter than the `initial` the block gives, is refused with that
-  collector, and the error ends by saying where the value is written:
-  `(failure_backoff.initial comes from the defaults of the file)`. So does a
-  warning about such a value, logged at load and listed in the
-  [dry run](#dry-run), as the one that a `POST` collector's `retry.attempts`
-  makes no retries. The problems with the keys of the block
-  itself are reported together, in the order of the file; while the block is
-  refused, the collectors of its file are not checked, since without the
-  values it was to give them they would be refused for what it gives.
+- **Checked once, and with each collector.**
+  - A value that is wrong whatever collector takes it (a negative limit, an
+    unknown error policy, more than 10 retry attempts) is refused once, with
+    an error that names the block, as `defaults.limits.max_metrics is -1,
+    and a limit must not be negative; leave it out, or 0, for the default`,
+    preceded by the collector file when it is in one.
+  - A value that is wrong for one collector, such as an allowed target that
+    is not a bucket name for an `s3file` collector, or a
+    `failure_backoff.max` shorter than the `initial` the block gives, is
+    refused with that collector. The error ends by saying where the value is
+    written: `(failure_backoff.initial comes from the defaults of the
+    file)`. A warning about such a value says the same; it is logged at load
+    and listed in the [dry run](#dry-run), like the warning that a `POST`
+    collector's `retry.attempts` makes no retries.
+  - The problems with the keys of the block itself are reported together, in
+    file order. While the block is refused, the collectors of its file are
+    not checked, because without the values it was meant to give them they
+    would be refused for the wrong reasons.
 - **The collectors are what count.** A collector is validated, compared on a
   reload and keyed in the [response cache](#response-caching) with the
-  values it took, as if it wrote them: moving a value from every collector
-  into `defaults` changes no collector, and changing a default changes each
-  collector that takes it, which is what
+  values it took, as if it had written them. Moving a value from every
+  collector into `defaults` changes no collector. Changing a default changes
+  each collector that takes it, which is what
   [What a reload changed](#what-a-reload-changed) lists and what drops their
   cached results.
-- **Everything else as before.** [Environment
-  variables](#environment-variables) are expanded in `defaults` as anywhere
-  in the file, the [target allocator](ALLOCATOR.md) carries the files as
-  written, `defaults` and all, a [static target](STATIC-TARGETS.md) scrapes
-  through the collector as it took its defaults, and the
-  [debug page](#the-debug-page), which reads one collector, takes no
-  `defaults` key. The [dry run](#dry-run) lists under
-  `details.collector_defaults`, for each collector that took any, the keys it
-  took. Both [schemas](#editor-support) take `defaults` with these keys alone.
+- **Everything else as before.**
+  [Environment variables](#environment-variables) are expanded in `defaults`
+  as anywhere in the file. The [target allocator](ALLOCATOR.md) carries the
+  files as written, including `defaults`. A
+  [static target](STATIC-TARGETS.md) scrapes through the collector with the
+  defaults it took. The [debug page](#the-debug-page), which reads one
+  collector, accepts no `defaults` key. The [dry run](#dry-run) lists under
+  `details.collector_defaults`, for each collector that took any, the keys
+  it took. Both [schemas](#editor-support) accept `defaults` with these keys
+  only.
 
 ## Environment variables
 
-A configuration file is usually committed, and some of what belongs in it is
-not: an internal hostname, a tenant identifier, a token. Pass
-`--config.expand-env` and the exporter substitutes `${NAME}` references from its
-own environment before parsing the document:
+A configuration file is usually committed to version control, and some of
+what belongs in it is not: an internal hostname, a tenant identifier, a
+token. With `--config.expand-env`, the exporter substitutes `${NAME}`
+references from its own environment before it parses the document:
 
 ```yaml
 collectors:
@@ -5541,16 +5551,16 @@ API_PATH=/v1/status API_TOKEN=... \
   prometheus-universal-exporter --config.file=config.yaml --config.expand-env
 ```
 
-It is off by default, and that default is the point. A configuration is full of
-dollar signs that are not references — a regex metric rule, a jq expression, a
-Python pre-script — and expanding them by default would rewrite an operator's
-own text behind their back. With the flag off, nothing in the file means
-anything but itself.
+Expansion is off by default, deliberately. A configuration is full of dollar
+signs that are not references (a regex metric rule, a jq expression, a
+Python pre-script), and expanding them by default would silently rewrite the
+operator's own text. With the flag off, everything in the file means exactly
+what it says.
 
 Even with the flag on, only the braced form is a reference. `$VAR` is left
 exactly as written, so `expression: '\$([0-9]+)'` and shell-style text in a
 pre-script keep working. Write `$$` for a literal dollar: `$${NOT_A_REFERENCE}`
-survives as `${NOT_A_REFERENCE}`.
+is kept as `${NOT_A_REFERENCE}`.
 
 A reference to a variable that is not set is a startup error, not an empty
 string:
@@ -5560,100 +5570,112 @@ config.yaml: environment variable "API_TOKEN" not set; --config.expand-env
 requires every ${NAME} it finds to be defined
 ```
 
-An empty substitution would produce a document that parses and is wrong — a
-collector with no path, credentials that are silently blank — and the exporter
-would serve it. Every missing name is listed at once. A variable that is set to
-an empty string is a deliberate choice and substitutes normally: as the whole
-of a value, `X-A: ${A}`, it is the value written `""`, which loads or is
-refused just as `X-A: ""` would be, and not a key with nothing after its
-colon.
+An empty substitution would produce a document that parses and is wrong,
+such as a collector with no path or credentials that are silently blank,
+and the exporter would serve it. Every missing name is listed at once. A
+variable that is set to an empty string is a deliberate choice and is
+substituted normally: as the whole of a value, `X-A: ${A}`, it is the value
+written `""`, which loads or is refused exactly as `X-A: ""` would be, and
+not a key with nothing after its colon.
 
-A reference is expanded where the document holds it as a value — a value
-or a key, quoted or not, whole or part of a longer one — and the variable is
-always exactly that value. A token holding ` #`, one starting with `*`, `&` or
-`[`, quotes, backslashes and line breaks all arrive as written: the value is
-written back quoted where YAML would otherwise read it differently, and left
-unquoted where it reads the same, so a number stays a number. So does a
-boolean: at a key that takes text alone, such as a `name`, write the
-reference in quotes, `name: "${NAME}"`, or a variable set to `true` or `1`
-is [refused](#checked-when-the-configuration-loads) as the boolean or the
-number it then is. A reference in
-a comment is left alone, set or not. That holds in a flow collection too,
-where a bare reference is not YAML until it is expanded — alone, as in
-`regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}`, as part of a
-longer value, as in `{Authorization: Bearer ${TOKEN}}`, and beside quoted
-values, as in `{X-Name: "x", X-Token: ${TOKEN}}` — and reading such a file
-changes no other value in it: a reference in a block value or after a comma
-in an unquoted description expands to the variable's value, exactly as in a
-file without one. It holds after an anchor,
-as in `&base ${BASE}`, and for values YAML reads specially on their own, such as
-`-` or an empty string: a key is always written quoted, and so are an empty
-value and `-`. A variable supplies a value and never
-structure: `headers: ${ALL_HEADERS}` is one string, not a mapping. A block
-value (`|` or `>`) is expanded in every line, also when its header says how
-far it is indented, as in `|2`. Two places
-cannot take every value: a block value takes one without a line
-break, and an unquoted value folded over several lines is refused; quote the
-reference there, as in `"${NAME}"`. A literal `$${NAME}` in a flow collection
-must be quoted, since its braces are not YAML there. Errors name the file's
-own line numbers.
+**Where references are expanded.** A reference is expanded where the
+document holds it as a value: a value or a key, quoted or not, whole or part
+of a longer one. The variable is always exactly that value.
 
-`--config.watch` re-expands on every reload, so a reload cannot quietly
+- A token that contains ` #`, or starts with `*`, `&` or `[`, and quotes,
+  backslashes and line breaks all arrive as written. The value is written
+  back quoted where YAML would otherwise read it differently, and left
+  unquoted where it reads the same, so a number stays a number.
+- A boolean stays a boolean too. At a key that accepts text only, such as a
+  `name`, write the reference in quotes, `name: "${NAME}"`. Otherwise a
+  variable set to `true` or `1` is
+  [refused](#checked-when-the-configuration-loads) as the boolean or the
+  number it then is.
+- A reference in a comment is left alone, whether the variable is set or
+  not.
+- All of this applies in a flow collection too, where a bare reference is
+  not valid YAML until it is expanded: alone, as in
+  `regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}`; as part of a
+  longer value, as in `{Authorization: Bearer ${TOKEN}}`; and beside quoted
+  values, as in `{X-Name: "x", X-Token: ${TOKEN}}`. Reading such a file
+  changes no other value in it: a reference in a block value, or after a
+  comma in an unquoted description, expands to the variable's value exactly
+  as in a file without a flow collection.
+- It also applies after an anchor, as in `&base ${BASE}`, and for values
+  that YAML reads specially on their own, such as `-` or an empty string: a
+  key is always written quoted, and so are an empty value and `-`.
+- A variable supplies a value and never structure: `headers: ${ALL_HEADERS}`
+  is one string, not a mapping.
+- A block value (`|` or `>`) is expanded in every line, also when its header
+  specifies the indentation, as in `|2`.
+- Two places cannot take every value. A block value takes only a value
+  without a line break, and an unquoted value folded over several lines is
+  refused; quote the reference there, as in `"${NAME}"`.
+- A literal `$${NAME}` in a flow collection must be quoted, because its
+  braces are not valid YAML there.
+- Errors name the line numbers of the file as you wrote it.
+
+`--config.watch` expands again on every reload, so a reload cannot silently
 replace a working configuration with literal references.
 
 The static target document has its own flag, `--static-targets.expand-env`,
-which works the same way; `--config.expand-env` does not reach it, so either
-file can take values from the environment while the other is used as written.
-See [Static targets](STATIC-TARGETS.md#environment-variables).
+which works the same way. `--config.expand-env` does not apply to it, so
+either file can take values from the environment while the other is used as
+written. See [Static targets](STATIC-TARGETS.md#environment-variables).
 
 Environment references are fixed when the file is read. For a value that
-changes per scrape — a tenant in the URL path — use a
-[path parameter](REQUESTS.md#path-parameters), `{{param_tenant}}`, which the probe
-fills in. The two syntaxes never overlap, and a path parameter's default can
-itself be an environment reference.
+changes per scrape, such as a tenant in the URL path, use a
+[path parameter](REQUESTS.md#path-parameters), `{{param_tenant}}`, which the
+probe fills in. The two syntaxes never overlap, and a path parameter's
+default can itself be an environment reference.
 
 ## OpenMetrics
 
 `/probe`, `/self-metrics` and the static targets endpoint answer in
 [OpenMetrics](https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md)
-1.0.0 when the scraper's `Accept` header prefers it, and in the Prometheus text
-format, version 0.0.4, otherwise. Prometheus 2 and 3 ask for OpenMetrics first,
-so they get it; `curl`, a browser and anything that does not ask get the text
-format, as before. Nothing needs configuring. The answer's `Content-Type` says
-which it is, and it carries `Vary: Accept`.
+1.0.0 when the scraper's `Accept` header prefers it, and otherwise in the
+Prometheus text format, version 0.0.4. Prometheus 2 and 3 ask for OpenMetrics
+first, so they get it. `curl`, a browser and any client that does not ask
+get the text format, as before. No configuration is needed. The answer's
+`Content-Type` identifies the format, and the answer carries `Vary: Accept`.
 
-In both formats the series of a metric are written together, under one `HELP`
-and `TYPE`: the metrics in the order each first appears, and a metric's series
-in the order they were made — a `csv` rule's in the order of the rows.
-Nothing is sorted. That holds whatever order the series come in: two rules of
-one name with another rule between them, a script that emits a series of each
-metric row after row, and a `prometheus` collector whose rules or `rename`
-give two of a target's metrics one name are all answered with each metric's
-series as one group, as the text format requires.
+In both formats, the series of a metric are written together under one
+`HELP` and `TYPE`. The metrics appear in the order in which each first
+appears, and a metric's series in the order they were produced (for a `csv`
+rule, the order of the rows). Nothing is sorted. This holds whatever order
+the series arrive in: two rules of one name with another rule between them,
+a script that emits a series of each metric row after row, and a
+`prometheus` collector whose rules or `rename` give two of a target's
+metrics one name are all answered with each metric's series as one group, as
+the text format requires.
 
-The two formats hold the same series, written the way each requires, with one
-difference in names: an OpenMetrics counter's samples always end in `_total`.
-A counter named `jobs_done_total` is the series `jobs_done_total` either way,
-but one named `jobs_done` becomes `jobs_done_total` in OpenMetrics. Name
-counters with `_total`, as Prometheus' naming conventions ask, and the names
-are the same whichever format a scraper takes; the exporter's own counters all
-are. In OpenMetrics, `untyped` is written as `unknown`, timestamps are in
-seconds, `le` and `quantile` values are written as floats (`1.0`), and the
-answer ends with `# EOF`; Prometheus reads either the same.
+The two formats hold the same series, written as each requires, with one
+difference in names: the samples of an OpenMetrics counter always end in
+`_total`. A counter named `jobs_done_total` is the series `jobs_done_total`
+in both, but one named `jobs_done` becomes `jobs_done_total` in OpenMetrics.
+Name counters with `_total`, as Prometheus' naming conventions recommend,
+and the names are the same whichever format a scraper requests; all of the
+exporter's own counters follow this. In OpenMetrics, `untyped` is written as
+`unknown`, timestamps are in seconds, `le` and `quantile` values are written
+as floats (`1.0`), and the answer ends with `# EOF`. Prometheus reads both
+formats the same way.
 
-OpenMetrics also forbids two families from claiming one name, which the text
-format allows: a counter `foo_total` is the OpenMetrics family `foo`, so beside
-a gauge `foo` the name would be used twice and Prometheus would fail the
-scrape. The same goes for counters `jobs` and `jobs_total`, or a histogram `h`
-beside a gauge `h_count` (the histogram's own `h_count` sample). Families that
-would clash like this are written as OpenMetrics `unknown` families under the
-very names their samples have in the text format, whichever comes first: the
-counter `foo_total` stays the series `foo_total`, only without its counter
-type in OpenMetrics, and the gauge `foo` stays a gauge. A counter gives way
-before a histogram or summary does; a histogram or summary that still clashes
-is written as `unknown` families `h_bucket`, `h_sum` and `h_count` (a summary's
-as `s`, `s_sum` and `s_count`). Every series is the same in both formats.
-Distinct names avoid all this, and keep the types.
+**Name clashes.** OpenMetrics forbids two families from claiming one name,
+which the text format allows. A counter `foo_total` is the OpenMetrics
+family `foo`, so beside a gauge `foo` the name would be used twice and
+Prometheus would fail the scrape. The same applies to counters `jobs` and
+`jobs_total`, and to a histogram `h` beside a gauge `h_count` (the
+histogram's own `h_count` sample).
+
+Families that would clash in this way are written as OpenMetrics `unknown`
+families under exactly the names their samples have in the text format,
+whichever comes first. The counter `foo_total` stays the series
+`foo_total`, only without its counter type in OpenMetrics, and the gauge
+`foo` stays a gauge. A counter gives way before a histogram or summary does.
+A histogram or summary that still clashes is written as the `unknown`
+families `h_bucket`, `h_sum` and `h_count` (for a summary, `s`, `s_sum` and
+`s_count`). Every series is the same in both formats. Distinct names avoid
+all of this and keep the types.
 
 Two kinds of family have no OpenMetrics form of their own type, and are
 written so that the answer stays valid:
@@ -5667,56 +5689,58 @@ written so that the answer stays valid:
   series as in the text format.
 
 A counter whose name was escaped by [`name_escaping: values`](#utf-8-names)
-is written as any counter is, and as Prometheus writes one: its family is the
-escaped name without a `_total` it ends in, and its sample the family with
-`_total`, the plain text in both places. `my.errors`, exported as
+is written like any counter, and as Prometheus writes one. Its family is the
+escaped name without a trailing `_total`, and its sample is the family with
+`_total`, as plain text in both places. `my.errors`, exported as
 `U__my_2e_errors`, is the family `U__my_2e_errors` with the sample
 `U__my_2e_errors_total`. The escaping doubles every underscore, so
 `my.requests_total` is exported as `U__my_2e_requests__total`, which is the
 family `U__my_2e_requests_` with that same sample: the family keeps one of
-the two underscores. A sample is always its family and `_total`, which is
-what lets a reader of OpenMetrics — Prometheus, and this exporter's own
-`prometheus` decoder — find the counter's sample in its family.
+the two underscores. A sample is always its family plus `_total`, which is
+what lets an OpenMetrics reader (Prometheus, and this exporter's own
+`prometheus` decoder) find the counter's sample in its family.
 
-The text format also lets a target write values that OpenMetrics does not
-allow a family of its type, and a strict OpenMetrics parser refuses a whole
-answer over one of them. The exporter passes such values on in both formats —
-a negative counter a target wrote is not refused, and not left out — and keeps
-the OpenMetrics answer valid in the same way: the family is written as
-`unknown` families under its sample names, with the same series and values as
-in the text format, and loses only a type it does not meet. A family has one
-type, so the whole family is written so when one of its series is:
+**Values OpenMetrics does not allow.** The text format lets a target write
+values that OpenMetrics does not allow for a family of its type, and a
+strict OpenMetrics parser refuses a whole answer over one of them. The
+exporter passes such values on in both formats (a negative counter that a
+target wrote is neither refused nor left out) and keeps the OpenMetrics
+answer valid in the same way as above: the family is written as `unknown`
+families under its sample names, with the same series and values as in the
+text format, and loses only a type it does not conform to. A family has one
+type, so the whole family is written this way when one of its series is:
 
-- a counter that is `NaN` or negative. `+Inf` is a counter's value;
+- a counter that is `NaN` or negative (`+Inf` is a valid counter value);
 - a histogram whose `_sum` is `NaN` or negative; one with a `_sum` and a
   bucket with a negative bound, which OpenMetrics allows only without a sum;
   one with a bound that is not a number, `le="NaN"`; one whose bucket
-  counts fall from one bound to the next higher, or whose highest bucket
+  counts decrease from one bound to the next higher, or whose highest bucket
   holds more than its `+Inf` bucket; one whose `+Inf` bucket and `_count`
   differ, as a target scraped between two of its updates writes them; or one
   with neither of the two (see [Prometheus input](#character-encodings));
 - a summary whose `_sum` is `NaN` or negative; one with a `quantile` outside
   0 to 1, such as percentiles written as `50` and `99`; or one with a negative
-  value for a quantile. `NaN`, which a quantile is while nothing was observed,
-  is allowed.
+  value for a quantile. `NaN`, which a quantile is while nothing has been
+  observed, is allowed.
 
-A gauge and an untyped series may have any value. So a target's counter
-`jobs_total -5` is `# TYPE jobs_total unknown` and `jobs_total -5` in
-OpenMetrics, and a histogram `h` whose counts fall is the `unknown` families
-`h_bucket`, `h_sum` and `h_count`; a family whose values its type allows
-always keeps the type. [OTLP export](OTLP.md#delivery) follows the same rule,
-with gauges.
+A gauge and an untyped series may have any value. A target's counter
+`jobs_total -5` is therefore `# TYPE jobs_total unknown` and `jobs_total -5`
+in OpenMetrics, and a histogram `h` whose counts decrease is the `unknown`
+families `h_bucket`, `h_sum` and `h_count`. A family whose values its type
+allows always keeps the type. [OTLP export](OTLP.md#delivery) follows the
+same rule, with gauges.
 
-Order is not among these: a histogram's buckets are written in ascending order
-of `le`, with `+Inf` last, and a summary's quantiles in ascending order, in
-both formats, in whatever order the target wrote them.
+Order is not one of these cases. A histogram's buckets are written in
+ascending order of `le`, with `+Inf` last, and a summary's quantiles in
+ascending order, in both formats, whatever order the target wrote them in.
 
-OpenMetrics can give a counter, a histogram and a summary a `_created` time,
-when it started counting. The exporter writes none for what it reads from
-targets, on `/probe` and the static targets endpoint: it cannot know when a
-target's counter started, and OpenMetrics leaves `_created` out when it is not
-known. It does know that of its own counters, and writes it on the
-self-metrics endpoint when `web.self_metrics.created_timestamps` is set; see
+**Created timestamps.** OpenMetrics can give a counter, a histogram and a
+summary a `_created` time, the time when it started counting. The exporter
+writes none for what it reads from targets, on `/probe` and the static
+targets endpoint: it cannot know when a target's counter started, and
+OpenMetrics omits `_created` when it is not known. The exporter does know
+the start time of its own counters, and writes it on the self-metrics
+endpoint when `web.self_metrics.created_timestamps` is set; see
 [Created timestamps](SELF-METRICS.md#created-timestamps).
 
 To keep a Prometheus job on the text format, set its `scrape_protocols`:
@@ -5729,9 +5753,9 @@ scrape_configs:
 
 A Prometheus that asks for its protobuf format first, as it does when it
 scrapes native histograms, gets OpenMetrics from `/probe` and the static
-targets endpoint, which do not write protobuf, and protobuf from the
-self-metrics endpoint, whose scrape-time histograms then carry native buckets
-too; see [Native histograms](SELF-METRICS.md#native-histograms).
+targets endpoint, which do not write protobuf. It gets protobuf from the
+self-metrics endpoint, whose scrape-time histograms then also carry native
+buckets; see [Native histograms](SELF-METRICS.md#native-histograms).
 
 ## Response caching
 
@@ -5750,53 +5774,66 @@ collectors:
 ```
 
 While a cached result is younger than `ttl`, a repeat of the same probe is
-answered from memory and the target is not contacted again. Caching is off by
-default; omitting `cache` or setting `0s` disables it, and a negative value is
-rejected at startup. `cache` is always a mapping: `cache: 60s` is refused with
-the form to write instead.
+answered from memory, and the target is not contacted again. Caching is off
+by default. Omitting `cache` or setting `0s` disables it, and a negative
+value is rejected at startup. `cache` is always a mapping: `cache: 60s` is
+refused, with a message that shows the form to write instead.
 
-The cache is in-memory and local to the exporter process. Nothing is written to
-disk, replicas do not share entries, and a restart empties it.
+The cache is in memory and local to the exporter process. Nothing is written
+to disk, replicas do not share entries, and a restart empties it.
 
-A stored result is only ever returned to an identical request. The cache key
-covers the collector name and its full effective configuration, the `target`,
-every `/probe` parameter the collector's request type accepts (`method`,
-`path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
-`enable_http2`, `new_connection`, `ip_family`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
-and every `param_<name>`, whether it fills the request or only a [label
-value](REQUESTS.md#in-label-values)), and every header forwarded to the target, including
-a forwarded `Authorization` value and the `header_<name>` parameters that are
-forwarded. A parameter that changes nothing sent is not part of it: one no
-request type knows, which a probe ignores, and a `header_<name>` for a header
-the collector does not forward. Probes differing only in those share an entry,
-so a caller adding `&x=1`, `&x=2`, ... cannot fill the cache with copies of one
-result. The parameters are keyed as the probe reads them, not as they were
-written: `method=get` and `method=GET`, `timeout=5s` and `timeout=5000ms`,
-`insecure_skip_verify=TRUE` and `true` are one request and one entry, and a
-parameter [given twice](#request-types) is refused rather than keyed. Presence
-and absence differ: a probe that sends
-no credential, no forwarded header, or no TLS override cannot read an entry
-stored by a probe that sent one, and two probes with different credentials never
-share an entry. Because the collector definition is part of the key, a
-configuration reload retires the entries cached under the previous definition.
-Credentials loaded from files are covered through their configured paths, so a
-rotated credential file applies to a cached request once the entry expires; keep
-`cache` shorter than the rotation interval where that matters.
+**The cache key.** A stored result is only ever returned to an identical
+request. The key covers:
 
-Only fully successful probes are cached; HTTP, decode, transform, and validation
-failures are not. `limits.max_cache_entries` bounds each collector's live
-entries and defaults to 1000, dropping expired entries first and then the ones
-closest to expiry. An expired entry kept to be
-[revalidated](#revalidating-expired-responses) counts in it too.
+- the collector's name and its full effective configuration;
+- the `target`;
+- every `/probe` parameter the collector's request type accepts (`method`,
+  `path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
+  `enable_http2`, `new_connection`, `ip_family`, `retry_attempts`,
+  `retry_backoff`, `message`, `from`, `until` and every `param_<name>`,
+  whether it fills the request or only a
+  [label value](REQUESTS.md#in-label-values));
+- every header forwarded to the target, including a forwarded
+  `Authorization` value and the `header_<name>` parameters that are
+  forwarded.
+
+Further rules:
+
+- A parameter that changes nothing in what is sent is not part of the key:
+  one that no request type knows, which a probe ignores, and a
+  `header_<name>` for a header the collector does not forward. Probes that
+  differ only in those share an entry, so a caller adding `&x=1`, `&x=2`,
+  ... cannot fill the cache with copies of one result.
+- The parameters are keyed as the probe reads them, not as they were
+  written. `method=get` and `method=GET`, `timeout=5s` and `timeout=5000ms`,
+  `insecure_skip_verify=TRUE` and `true` are one request and one entry. A
+  parameter [given twice](#request-types) is refused, not keyed.
+- Presence and absence differ. A probe that sends no credential, no
+  forwarded header or no TLS override cannot read an entry stored by a probe
+  that sent one, and two probes with different credentials never share an
+  entry.
+- The collector's definition is part of the key, so a configuration reload
+  retires the entries cached under the previous definition.
+- Credentials loaded from files are covered through their configured paths.
+  A rotated credential file therefore applies to a cached request once the
+  entry expires. Keep `cache` shorter than the rotation interval where that
+  matters.
+
+Only fully successful probes are cached; HTTP, decode, transform and
+validation failures are not. `limits.max_cache_entries` bounds each
+collector's live entries and defaults to 1000. When the limit is reached,
+expired entries are dropped first, then the ones closest to expiry. An
+expired entry kept to be [revalidated](#revalidating-expired-responses)
+counts towards the limit too.
 
 ### Serving the last good result when the target fails
 
-A target that is briefly unavailable — restarting, overloaded, behind a flaky
-network — fails its probes, and every series of the collector disappears from
-Prometheus for as long as it does, breaking graphs and firing absent-series
-alerts. `stale_if_error` keeps each result for that much longer after `ttl`,
-and answers a probe whose trip fails with the last successful result instead
-of the error:
+A target that is briefly unavailable (restarting, overloaded, behind an
+unreliable network) fails its probes. Every series of the collector then
+disappears from Prometheus for as long as the outage lasts, which breaks
+graphs and fires absent-series alerts. `stale_if_error` keeps each result
+for that much longer after `ttl`, and answers a probe whose trip fails with
+the last successful result instead of the error:
 
 ```yaml
     cache:
@@ -5804,30 +5841,40 @@ of the error:
       stale_if_error: 5m
 ```
 
-Within 30 seconds of a successful probe, repeats are answered from memory as
-above. After that the target is asked again; if it answers, the new result is
-served and stored. If the trip fails — the target is down, times out, answers
-an error status, its response cannot be decoded or transformed, the
-collector is at `max_concurrent_probes`, or it is
-[backing off](#backing-off-from-failing-targets) from the target — and the last good result of the same
-probe is less than 5m30s old, that result is answered with `200`. Past that,
-the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
-the target, and the last good result is kept only as a fallback.
+Within 30 seconds of a successful probe, repeats are answered from memory,
+as described above. After that, the target is asked again. If it answers,
+the new result is served and stored. If the trip fails and the last good
+result of the same probe is less than 5m30s old, that result is answered
+with `200`. A trip fails when the target is down, times out or answers an
+error status, when its response cannot be decoded or transformed, when the
+collector is at `max_concurrent_probes`, or when the collector is
+[backing off](#backing-off-from-failing-targets) from the target. After
+5m30s, the failure is answered as usual. `ttl` may be `0s`: every probe then
+goes to the target, and the last good result is kept only as a fallback.
 
-Two failures are never answered stale. One is the target refusing the
-credential it was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
-`PERMISSION_DENIED`. A credential forwarded with `forward_authorization` is
-part of the cache key, but a token that has just been revoked would otherwise
-still be answered with what it was given before, for as long as
-`stale_if_error` lasts; the probes [`failure_backoff`](#backing-off-from-failing-targets)
-keeps from the target after such a refusal are not answered stale either,
-since they stand for it. The other is the collector's own
-[`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
-refusing the target, answered `403`: its name now resolves, or a redirect now
-leads, somewhere the collector may not go, and the refusal is the answer.
+Two kinds of failure are never answered with a stale result:
+
+- **The target refuses the credential it was sent**: HTTP `401` or `403`, or
+  gRPC `UNAUTHENTICATED` or `PERMISSION_DENIED`. A credential forwarded with
+  `forward_authorization` is part of the cache key, but a token that has
+  just been revoked would otherwise still be answered with the earlier
+  result for as long as `stale_if_error` lasts. The probes that
+  [`failure_backoff`](#backing-off-from-failing-targets) keeps from the
+  target after such a refusal are not answered stale either, because they
+  stand for that refusal.
+- **The collector's own
+  [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
+  refuse the target**, answered `403`. The target's name now resolves, or a
+  redirect now leads, to somewhere the collector may not go, and the refusal
+  is the answer.
+
 Such a probe fails as usual, and a static target's scrape publishes no stale
-result. A fresh result within `ttl` is still
-answered from the cache without asking the target, as any cached result is.
+result. A fresh result within `ttl` is still answered from the cache without
+asking the target, like any cached result.
+
+A stale answer must never be mistaken for a fresh one. While
+`stale_if_error` is set, every answer of the collector therefore carries two
+series of the exporter's own:
 
 A stale answer must never pass for a fresh one, so while `stale_if_error` is
 set every answer of the collector carries two series of the exporter's own:
@@ -5837,103 +5884,116 @@ http_exporter_result_stale 0
 http_exporter_result_age_seconds 0
 ```
 
-`http_exporter_result_stale` is `1` when the answer is the last good result
-standing in for a failed trip. `http_exporter_result_age_seconds` is how long
-ago the answered result was fetched from the target — `0` for a trip just
-made, the entry's age for a cached answer. On the
-[static targets endpoint](STATIC-TARGETS.md), which serves each target's last
-result until its next scrape, it is worked out at every read, so it says how
-old the data is when Prometheus reads it: a target scraped every 10 minutes
-reads from `0` up to about `600` before its next scrape. Watch them rather than `up`, which
-stays `1` while stale results are answered: `http_exporter_result_stale == 1`
-selects the targets currently bridged by an old result.
+- `http_exporter_result_stale` is `1` when the answer is the last good
+  result standing in for a failed trip.
+- `http_exporter_result_age_seconds` is how long ago the answered result was
+  fetched from the target: `0` for a trip just made, and the entry's age for
+  a cached answer. On the
+  [static targets endpoint](STATIC-TARGETS.md), which serves each target's
+  last result until its next scrape, the age is calculated at every read, so
+  it shows how old the data is when Prometheus reads it. A target scraped
+  every 10 minutes reads from `0` up to about `600` before its next scrape.
+
+Watch these series instead of `up`, which stays `1` while stale results are
+answered. `http_exporter_result_stale == 1` selects the targets that are
+currently bridged by an old result.
 
 The failure is still logged and counted in the self-metrics as it would have
-been, a warning says the last good result was answered and how old it is, and
-`http_exporter_cache_stale_served_total` counts the stale answers. A stale
-answer does not count in `http_exporter_scrape_success_total`. A collector's
-rules must not produce either series name while `stale_if_error` is set.
+been. A warning says that the last good result was answered and how old it
+is, and `http_exporter_cache_stale_served_total` counts the stale answers. A
+stale answer does not count in `http_exporter_scrape_success_total`. A
+collector's rules must not produce either series name while `stale_if_error`
+is set.
 
-Samples are served without timestamps, so Prometheus stores the old values at
-the time of each scrape: a counter stays flat and a gauge repeats its last
-value. Keep `stale_if_error` to the outages you would rather bridge than see —
-minutes, not hours. A changed collector definition never serves a result stored
-under the old one. A [static target](STATIC-TARGETS.md) whose scrape
-fails serves the last good result the same way, marked stale, while its
-`http_exporter_target_up` stays `0`.
+Samples are served without timestamps, so Prometheus stores the old values
+at the time of each scrape: a counter stays flat, and a gauge repeats its
+last value. Limit `stale_if_error` to outages you would rather bridge than
+see: minutes, not hours. A changed collector definition never serves a
+result stored under the old one. A [static target](STATIC-TARGETS.md) whose
+scrape fails serves the last good result in the same way, marked stale,
+while its `http_exporter_target_up` stays `0`.
 
 Cache activity is visible per collector in the self-metrics as
 `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total`,
 `http_exporter_cache_stale_served_total` and `http_exporter_cache_entries`,
-which counts stale entries too. A cache hit counts as a successful scrape and
-cached metrics are still queued for OTLP export, while
+which counts stale entries too. A cache hit counts as a successful scrape,
+and cached metrics are still queued for OTLP export.
 `http_exporter_scrape_http_status_code` and
-`http_exporter_scrape_response_bytes` continue to describe the last real target
-request.
+`http_exporter_scrape_response_bytes` continue to describe the last real
+request to the target.
 
 ### Revalidating expired responses
 
-An `http` or `graphite` collector's cache also keeps, with each result, the
-response it was made from, when that response carried an `ETag` or a
-`Last-Modified` header. Once the result is no longer fresh, the next trip of
-the same probe asks the target whether the response is still current, as
-RFC 9110 describes: it sends `If-None-Match` with the `ETag` exactly as it was
+The cache of an `http` or `graphite` collector also keeps, with each result,
+the response it was produced from, when that response carried an `ETag` or
+a `Last-Modified` header. Once the result is no longer fresh, the next trip
+of the same probe asks the target whether the response is still current, as
+RFC 9110 describes. It sends `If-None-Match` with the `ETag` exactly as
 received, weak (`W/"..."`) or strong, and `If-Modified-Since` with the
-`Last-Modified` exactly as it was received.
+`Last-Modified` exactly as received.
 
 - A `304 Not Modified` answer means the kept response is still current. Its
   body is used again, and the kept headers are updated from the 304's as
-  RFC 9111 § 4.3.4 says: each header the 304 sends, such as `ETag`,
-  `Last-Modified`, `Cache-Control`, `Expires` or `Date`, replaces the kept one,
-  except `Content-Length`, `Content-Encoding`, `Transfer-Encoding`,
-  `Content-Type`, `Content-Range` and the headers of the connection, which
-  describe a body the 304 does not have. The trip then goes on as if the
+  RFC 9111 § 4.3.4 specifies. Each header the 304 sends, such as `ETag`,
+  `Last-Modified`, `Cache-Control`, `Expires` or `Date`, replaces the kept
+  one, except `Content-Length`, `Content-Encoding`, `Transfer-Encoding`,
+  `Content-Type`, `Content-Range` and the connection's headers, which
+  describe a body the 304 does not have. The trip then continues as if the
   response had just been downloaded: it is decoded and transformed again,
-  every rule seeing the original status (`$status` is `200`, not `304`) and
-  the updated headers, and the new result is stored, fresh for `ttl`.
-  Only the download is saved; the series are made anew on every trip.
-- Any other answer is handled as any trip's is: a new response that the
-  collector accepts replaces the kept one, and a failing status fails the
+  with every rule seeing the original status (`$status` is `200`, not
+  `304`) and the updated headers, and the new result is stored, fresh for
+  `ttl`. Only the download is saved; the series are produced anew on every
   trip.
+- Any other answer is handled like any trip's answer: a new response that
+  the collector accepts replaces the kept one, and a failing status fails
+  the trip.
 
 A 304 is never a failed status: it stands for the kept response, whose
 status the collector accepted. A 304 to a request that was not conditional
 on a kept response has nothing to stand for, and fails the probe as
 `received HTTP status 304 Not Modified to a request that was not conditional
 on a cached response`, unless `request.accept_status` accepts `304`, as
-`[304]`, `["3xx"]` and `[any]` do. A request
-the collector makes conditional itself, with `If-None-Match` or
-`If-Modified-Since` in `request.headers` or forwarded, is sent as configured,
-and its answer is not taken for a revalidation.
+`[304]`, `["3xx"]` and `[any]` do. A request that the collector makes
+conditional itself, with `If-None-Match` or `If-Modified-Since` in
+`request.headers` or forwarded, is sent as configured, and its answer is not
+treated as a revalidation.
 
 An expired entry whose response has a validator is not dropped when its
-`ttl` and `stale_if_error` have run out: it answers no probe, but stays for
+`ttl` and `stale_if_error` have run out. It answers no probe, but stays for
 the next trip to revalidate, until a new result replaces it, a reload
 changes or removes the collector, or `limits.max_cache_entries` needs its
-place, of which it is the first to go. It counts in
-`http_exporter_cache_entries`. An entry without a validator is dropped at its
-expiry, as before. The kept response holds the body as it was downloaded, up
-to the collector's response limit, so each kept entry costs about the size
-of its response besides its series.
+place, in which case it is the first to go. It counts in
+`http_exporter_cache_entries`. An entry without a validator is dropped when
+it expires, as before. The kept response holds the body as downloaded, up to
+the collector's response limit, so each kept entry costs about the size of
+its response in addition to its series.
 
-Revalidation and [`stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
-work together, in this order: a fresh result answers without a trip; past
-`ttl`, the trip is conditional when the kept response has a validator; a 304
-or a new response answers fresh; a trip that fails — the conditional request
-answered `500`, or a timeout — is answered with the stale result while it is
-within `stale_if_error`, and with the failure after it, even though the
-entry is still kept for the next revalidation.
+Revalidation and
+[`stale_if_error`](#serving-the-last-good-result-when-the-target-fails) work
+together, in this order:
 
-Only a response that one validator speaks for is revalidated: one fetched
-with `GET` or `HEAD`, the method of every `graphite` request but one too long
-for a URL, which is sent as a form with `POST`. A matching `If-None-Match`
-on another method asks the target for `412 Precondition Failed` rather than
-a 304. A collector with [`request.pagination`](REQUESTS.md#pagination)
-stores its pages merged into one response, which no page's validator
-speaks for, so its responses are neither kept nor revalidated. Every attempt
-of a conditional request carries the validators: a retry, and the request
-sent again after a `401`, or a status of `relogin_on`, made [`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log
-in again.
+1. A fresh result answers without a trip.
+2. After `ttl`, the trip is conditional when the kept response has a
+   validator.
+3. A 304 or a new response answers with a fresh result.
+4. A trip that fails (the conditional request answered `500`, or timed out)
+   is answered with the stale result while it is within `stale_if_error`,
+   and with the failure after that, even though the entry is still kept for
+   the next revalidation.
+
+Only a response that a single validator represents is revalidated:
+
+- It must have been fetched with `GET` or `HEAD`. That is the method of
+  every `graphite` request except one too long for a URL, which is sent as a
+  form with `POST`. A matching `If-None-Match` on another method asks the
+  target for `412 Precondition Failed`, not a 304.
+- A collector with [`request.pagination`](REQUESTS.md#pagination) stores its
+  pages merged into one response, which no single page's validator
+  represents, so its responses are neither kept nor revalidated.
+
+Every attempt of a conditional request carries the validators: a retry, and
+the request sent again after a `401`, or a status in `relogin_on`, made
+[`request.login`](AUTHENTICATION.md#logging-in-to-a-target) log in again.
 
 Revalidation is on by default. A collector whose target sends validators it
 does not honour can turn it off:

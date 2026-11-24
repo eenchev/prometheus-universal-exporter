@@ -76,20 +76,21 @@ other decoder, and a transform that does not read JSON (`regex`, `csv`,
 
 ## The target
 
-The target is the name to resolve, such as `example.com` or
-`_http._tcp.example.com` for an SRV record: a name alone, of letters,
-digits, `.`, `-` and `_`, at most 253 characters with every label between
-the dots from 1 to 63. It is matched in any case, and a trailing dot is
-dropped. A URL, a name with a port or a path, and an IP address are refused
-with `400` before anything is asked, a static target's when it loads.
+The target is the name to resolve, such as `example.com`, or
+`_http._tcp.example.com` for an SRV record. It is a name alone, of letters,
+digits, `.`, `-` and `_`, at most 253 characters, with every label between
+the dots from 1 to 63 characters. It is matched in any case, and a trailing
+dot is dropped. A URL, a name with a port or a path, and an IP address are
+refused with `400` before anything is asked, and a static target's when it
+loads.
 
 With `record_type: PTR` the target is instead the IP address whose names
 are asked for, IPv4 or IPv6, such as `192.0.2.1` or `2001:db8::1`; the
 exporter asks for the PTR records of its `in-addr.arpa` or `ip6.arpa` name.
 
-The name is always asked as an absolute one: the search domains of
-`/etc/resolv.conf` are never appended to it, so `db` is asked as `db.`, and
-a name inside a Kubernetes cluster is written out in full,
+The name is always asked as an absolute one. The search domains of
+`/etc/resolv.conf` are never appended to it, so `db` is asked as `db.`, and a
+name inside a Kubernetes cluster is written out in full:
 `api.default.svc.cluster.local`.
 
 ## The document
@@ -135,10 +136,10 @@ a name inside a Kubernetes cluster is written out in full,
   | `RRSIG` | `type_covered`, the type of the records it signs, `algorithm`, `labels`, `original_ttl`, `key_tag` and `signer`, the key that signed it, `inception` and `expiration`, seconds since 1970, and `seconds_until_expiration`: see [DNSSEC signatures](#dnssec-signatures) |
 
   Names are given without their trailing dot. The records are in an order of
-  their own — by preference or priority first where the type has one, then
-  by their data — so that two lookups of the same records give the same
-  document and the same series, though a resolver shuffles records of the
-  same priority.
+  their own (by preference or priority first where the type has one, then by
+  their data), so that two lookups of the same records give the same
+  document and the same series, even though a resolver shuffles records of
+  the same priority.
 - `count` is the number of records, `answers | length`.
 - `rcode` is the answer's response code: `NOERROR`, `NXDOMAIN`, `SERVFAIL`,
   `REFUSED`, `FORMERR`, `NOTIMP`, or another by name or as `RCODE<n>`.
@@ -159,38 +160,43 @@ a name inside a Kubernetes cluster is written out in full,
 
 ## The question
 
-The exporter asks the question itself, with a client of its own: one
-question of the record type, class `IN`, recursion desired, the AD bit set
-so that a validating resolver reports it (RFC 6840), and an EDNS(0) record
-offering answers of 1232 bytes over UDP, as resolvers do since DNS Flag Day
-2020; a server that answers it `FORMERR`, knowing no EDNS, is asked again
-without it. Over `udp` the question is sent again every 2 seconds while no
-answer comes, and asked again over TCP when the answer is marked truncated;
-over `tcp` it is asked over TCP alone. For `PTR` the question is of the
-address's `in-addr.arpa` or `ip6.arpa` name.
+The exporter asks the question itself, with a client of its own:
 
-It goes to `server`, or without one to the `nameserver` lines of
-`/etc/resolv.conf` in their order, on port 53, `127.0.0.1` and `::1` when
-the file names none; the next is asked when one fails, does not answer
-within 5 seconds, or answers `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`;
-the last of those answers is the document when no server answers better,
-kept over a later server's failure, and the scrape fails only when no server
-answers at all. The file's
-`search`, `options` (`timeout`, `attempts`, `rotate`, `ndots`) and
-`/etc/hosts` are not read: a name in `/etc/hosts` is asked of the server
-like any other.
+- One question of the record type, class `IN`, recursion desired, with the
+  AD bit set so that a validating resolver reports it (RFC 6840), and an
+  EDNS(0) record offering answers of 1232 bytes over UDP, as resolvers have
+  done since DNS Flag Day 2020. A server that answers `FORMERR` because it
+  knows no EDNS is asked again without it.
+- Over `udp`, the question is sent again every 2 seconds while no answer
+  comes, and asked again over TCP when the answer is marked truncated. Over
+  `tcp`, it is asked over TCP only.
+- For `PTR`, the question is about the address's `in-addr.arpa` or
+  `ip6.arpa` name.
 
-The answer is the server's records of the type of the name, or of the
-names its CNAME records lead to, followed to the end of the chain however
-the server orders them, as a resolver gives them; for `CNAME` it is the
-name's own CNAME record alone, so an alias of an alias gives the next name
-of the chain, not its end. Nothing is validated by the exporter:
+The question goes to `server` or, without one, to the `nameserver` lines of
+`/etc/resolv.conf` in their order, on port 53, with `127.0.0.1` and `::1`
+when the file names none.
+
+- The next server is asked when one fails, does not answer within 5
+  seconds, or answers `SERVFAIL`, `REFUSED`, `NOTIMP` or `FORMERR`.
+- The last of those answers is the document when no server answers better,
+  and it is kept over a later server's failure. The scrape fails only when
+  no server answers at all.
+- The file's `search` and `options` (`timeout`, `attempts`, `rotate`,
+  `ndots`) and `/etc/hosts` are not read: a name in `/etc/hosts` is asked of
+  the server like any other.
+
+The answer is the server's records of the type for the name, or for the
+names that its CNAME records lead to, followed to the end of the chain
+however the server orders them, as a resolver gives them. For `CNAME`, it
+is the name's own CNAME record alone, so an alias of an alias gives the next
+name of the chain, not its end. The exporter validates nothing:
 `authenticated_data` is the resolver's word.
 
-A server that does not answer within the deadline, and an answer that is no
-answer to the question — another id, name or type — or whose records do not
-parse fail the scrape, in the `dns` stage, saying what was asked of which
-server: `resolving A www.example.com on 10.0.0.53:53: cannot unmarshal DNS
+The scrape fails in the `dns` stage, saying what was asked of which server,
+when a server does not answer within the deadline, or when an answer does
+not answer the question (another id, name or type) or its records do not
+parse: `resolving A www.example.com on 10.0.0.53:53: cannot unmarshal DNS
 message`. A lookup cut short by the scrape's deadline says so and counts as
 a timeout.
 
@@ -199,12 +205,12 @@ a timeout.
 A zone signed with DNSSEC stops resolving, for every validating resolver,
 the moment its signatures expire: a signer that stopped re-signing is an
 outage with a date on it. `record_type: RRSIG` asks for the name's
-signatures, with the DO bit set (RFC 3225) so that the server gives them,
-and answers each one: the type of the records it covers, the key that made
-it (`key_tag`, as a `DNSKEY` answer names the keys, and `signer`), and when
-it was made and expires. The wire writes those times as 32-bit serial
-numbers; the exporter places each at the time nearest to now (RFC 4034
-§ 3.1.5), so they stay right past 2106.
+signatures, with the DO bit set (RFC 3225) so that the server gives them.
+Each signature is answered with the type of the records that it covers, the
+key that made it (`key_tag`, as a `DNSKEY` answer names the keys, and
+`signer`), and when it was made and when it expires. The wire writes those
+times as 32-bit serial numbers; the exporter places each at the time
+nearest to now (RFC 4034 § 3.1.5), so they stay correct past 2106.
 
 ```yaml
   - name: zone_signatures
@@ -266,14 +272,16 @@ would fail on.
 ## Target lists
 
 `allowed_targets` and `denied_targets` take the hosts, globs, addresses and
-networks they take for [any other type](REQUESTS.md#restricting-targets), and
-are matched against the name to resolve, by name alone: a lookup connects to
-nothing at the name, so what it resolves to is the answer, not a host the
-exporter reaches. A name that matches `denied_targets`, and with
-`allowed_targets` one that matches none of its names, is refused with `403`
-before the server is asked; a network in `allowed_targets` allows no name.
-A PTR target, an address, is matched by address, the cloud metadata
-addresses refused as every collector refuses them.
+networks that they take for [any other type](REQUESTS.md#restricting-targets),
+and are matched against the name to resolve, by name alone. A lookup
+connects to nothing at the name, so what the name resolves to is the answer,
+not a host that the exporter reaches.
+
+- A name that matches `denied_targets`, or, with `allowed_targets`, one that
+  matches none of its names, is refused with `403` before the server is
+  asked. A network in `allowed_targets` allows no name.
+- A PTR target, which is an address, is matched by address, and the cloud
+  metadata addresses are refused, as every collector refuses them.
 
 The server is the configuration's and is not held to the lists.
 

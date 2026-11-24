@@ -1,18 +1,19 @@
 # SNMP agents
 
 The `snmp` request type reads an SNMP agent, as snmp_exporter does: a
-switch, a router, a firewall, a UPS, a printer, a server's `snmpd`. A
-collector names the objects it reads one by one, such as `sysUpTime.0`, and
-the tables it walks whole, such as the interface table, each by a name of
-its own and its numeric identifier; the exporter asks the agent over UDP,
-with SNMP v1, v2c or v3, and hands the transforms a JSON document of what
-it answered, which `jq`, `yq` or `python` turn into series.
+switch, a router, a firewall, a UPS, a printer, or a server's `snmpd`. A
+collector names the objects that it reads one by one, such as
+`sysUpTime.0`, and the tables that it walks whole, such as the interface
+table, each by a name of its own and its numeric identifier. The exporter
+asks the agent over UDP, with SNMP v1, v2c or v3, and hands the transforms a
+JSON document of what it answered, which `jq`, `yq` or `python` turn into
+series.
 
-MIBs are not read. The names in the document are the collector's, the
-numbers the agent's, so the type needs neither net-snmp nor a MIB
-directory; a MIB, or `snmptranslate -On`, gives the number of a name once,
-when the collector is written ([Finding an object's
-number](#finding-an-objects-number)).
+MIBs are not read. The names in the document are the collector's and the
+numbers are the agent's, so the type needs neither net-snmp nor a MIB
+directory. A MIB, or `snmptranslate -On`, gives the number for a name once,
+when the collector is written
+([Finding an object's number](#finding-an-objects-number)).
 
 It needs nothing outside Go's standard library.
 
@@ -129,10 +130,10 @@ How a value is written:
 | Opaque | the number of a float or a double, as net-snmp writes them; anything else in hexadecimal |
 | NULL | `null` |
 
-`hex` names the objects of `get`, and the `table.column`s of `walk`,
-whose bytes are written in hexadecimal even when they read as text: a MAC
-address whose bytes happen to be printable is otherwise written as the
-letters they spell.
+`hex` names the objects of `get`, and the `table.column`s of `walk`, whose
+bytes are written in hexadecimal even when they read as text. Otherwise, a
+MAC address whose bytes happen to be printable is written as the letters
+that they spell.
 
 ```yaml
       hex: [interfaces.ifPhysAddress]
@@ -161,15 +162,15 @@ decoder is `json`, left out or written, and the transform `jq`, `yq` or
 ## Walking tables
 
 Each column of `walk` is walked from its identifier to the end of the
-column: with v2c and v3 by GetBulk, `max_repetitions` values a request,
-and with v1 by GetNext, one value a request, since v1 has no GetBulk. A
-column of 48 interfaces is two GetBulk requests of 25; five columns of it
-are ten. An agent that answers a GetBulk `tooBig`, its answer too large for
-a datagram, is asked for half as many values, down to one.
+column: with v2c and v3 by GetBulk, `max_repetitions` values per request,
+and with v1 by GetNext, one value per request, because v1 has no GetBulk. A
+column of 48 interfaces takes two GetBulk requests of 25; five such columns
+take ten. An agent that answers a GetBulk with `tooBig`, because its answer
+is too large for a datagram, is asked for half as many values, down to one.
 
 The index is what comes after the column's identifier, dotted: `1` for the
 first interface of `ifTable`, `192.0.2.1` for a row of `ipAddrTable`, whose
-index is the address, `4.192.0.2.1` for a table indexed by a type and an
+index is the address, and `4.192.0.2.1` for a table indexed by a type and an
 address. A rule reads it as text, and splits it when it holds several
 numbers:
 
@@ -221,10 +222,10 @@ alone. A community in the configuration itself is not taken: the file keeps
 it out of the configuration, the debug report and `--dry-run`, and can be
 mounted from a Kubernetes Secret.
 
-v1 is for agents that speak nothing else, older printers, UPSes and PDUs:
-it has no GetBulk, so a walk is a GetNext for each value, and no Counter64,
-so traffic counters are 32 bits wide and wrap quickly on fast links. v2c is
-what most agents are read with.
+v1 is for agents that speak nothing else, such as older printers, UPSes and
+PDUs. It has no GetBulk, so a walk is a GetNext for each value, and no
+Counter64, so traffic counters are 32 bits wide and wrap quickly on fast
+links. Most agents are read with v2c.
 
 ## SNMPv3
 
@@ -268,12 +269,13 @@ ones with a dash, `SHA-256`, and `-x` the AES ones `AES-192` and `AES-256`.
 A key the level does not use is refused at load, as is a v3
 key with v1 or v2c and `community_file` with v3.
 
-Each scrape first asks the agent its engine ID, boots and time, which an
-unauthenticated Report answers (RFC 3414 § 4); the passwords are then made
-keys for that engine, and every request names it, its boots and its time.
-A Report that a request was outside the engine's time window, as an agent
-rebooted since gives, has the request sent again, once, with the time the
-Report brings. The document's `engine_id` is the engine discovery found.
+Each scrape first asks the agent for its engine ID, boots and time, which an
+unauthenticated Report answers (RFC 3414 § 4). The passwords are then turned
+into keys for that engine, and every request names the engine, its boots
+and its time. When a Report says that a request was outside the engine's
+time window, as one from an agent that has rebooted since does, the request
+is sent again, once, with the time that the Report brings. The document's
+`engine_id` is the engine that discovery found.
 
 **AES-192 and AES-256 come two ways.** RFC 3826 standardises AES-128 alone,
 and agents extend the key of the longer ones in one of two incompatible
@@ -287,16 +289,19 @@ decryption error of the agent's (`usmStatsDecryptionErrors`).
 
 ## Static targets
 
-A [static target](STATIC-TARGETS.md) of an `snmp` collector names the
-agent as its `target`, which it requires, and may set under its `request`
-`timeout`, the whole scrape's budget, `request_timeout` and `retries`, how
-long each request waits and how many times it is sent again, a
-`request_timeout` of 0 keeping the collector's, and its own
-account: `community_file` of a v1 or v2c collector, and `username`,
-`auth_password_file` and `priv_password_file` of a v3 one, each as its
-collector's security level uses it. What is read is the collector's, so
-one collector serves agents that each have their own community or user,
-and an agent at the far end of a slow link waits longer than the rest:
+A [static target](STATIC-TARGETS.md) of an `snmp` collector names the agent
+as its `target`, which is required. Under its `request` it may set:
+
+- `timeout`, the whole scrape's budget;
+- `request_timeout` and `retries`: how long each request waits and how many
+  times it is sent again (a `request_timeout` of 0 keeps the collector's);
+- its own account: `community_file` for a v1 or v2c collector, and
+  `username`, `auth_password_file` and `priv_password_file` for a v3 one,
+  each as its collector's security level uses it.
+
+What is read belongs to the collector. One collector therefore serves agents
+that each have their own community or user, and an agent at the far end of
+a slow link can wait longer than the rest:
 
 ```yaml
 interval: 1m
@@ -346,15 +351,17 @@ The numbers of the objects most collectors read:
 
 ## Limits
 
-The scrape's every request ends at the probe's deadline, its `timeout` or
-the scrape's, 30 seconds without one, as well as at `request_timeout`: a
+Every request of the scrape ends at the probe's deadline (its `timeout`, or
+the scrape's, 30 seconds without one) as well as at `request_timeout`: a
 scrape of a large table over a slow link needs a deadline for all its
-requests. The document is held to `max_response_bytes`, or
-`limits.max_response_bytes`, 10 MiB when neither is set: a document past it
-fails the scrape as a limit exceeded, which counts in
+requests.
+
+The document is held to `max_response_bytes`, or
+`limits.max_response_bytes`, 10 MiB when neither is set. A document past it
+fails the scrape as an exceeded limit, which counts in
 `http_exporter_series_limit_exceeded_total`, and so does a column past
-`walk_limit`. A Get asks for at most 32 objects, and one the agent answers
-`tooBig` is split in half.
+`walk_limit`. A Get asks for at most 32 objects, and one that the agent
+answers with `tooBig` is split in half.
 
 ## Errors and self-metrics
 
@@ -404,9 +411,9 @@ the collector walks a table, `http_method="GET"` when it only reads objects.
   a v2c one, as the engine and its time are asked each time rather than
   kept between scrapes.
 - **Columns walked one after another.** Each column is its own walk, so a
-  table of many columns is as many walks, each of a GetBulk or more; the
-  requests of a scrape are sent one at a time, as an agent's CPU, often a
-  switch's management processor, takes them best.
+  table of many columns takes as many walks, each of one GetBulk or more.
+  The requests of a scrape are sent one at a time, which is how an agent's
+  CPU, often a switch's management processor, handles them best.
 - **No SNMP over TLS or DTLS** (RFC 6353), which few agents speak.
 
 ## Troubleshooting

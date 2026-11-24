@@ -1,11 +1,12 @@
 # Objects in S3
 
-The `s3file` request type is [`localfile`](LOCALFILE.md) for an object store:
-it reads an object, or every matching object under a prefix, from a bucket of
-Amazon S3 or of a store that speaks its API — MinIO, Ceph's RADOS Gateway,
-Cloudflare R2, Google Cloud Storage — and decodes, transforms and checks it
-exactly as `localfile` does a file of the exporter's own. Use it where what
-writes the metrics, or a status, leaves them in a bucket:
+The `s3file` request type is [`localfile`](LOCALFILE.md) for an object
+store. It reads an object, or every matching object under a prefix, from a
+bucket of Amazon S3 or of a store that speaks its API (MinIO, Ceph's RADOS
+Gateway, Cloudflare R2, Google Cloud Storage). It decodes, transforms and
+checks the object exactly as `localfile` does with a file of the exporter's
+own. Use it where whatever writes the metrics, or a status, leaves them in a
+bucket:
 
 - the `.prom` files a batch job, a Lambda function or a CI pipeline uploads
   in place of node_exporter's textfile collector directory;
@@ -63,24 +64,27 @@ The object read is `reports/backup/last-run.json` in the bucket
 | `checksums` | `when_present` | How the checksum the store keeps of an object is checked as it is read: `when_present`, `required` or `off`. See [Checksums](#checksums). |
 | `allowed_targets`, `denied_targets` | — | The buckets the collector may and may not read, by name or glob, such as `metrics-*`. See [Which object is read](#which-object-is-read). |
 
-No other request key applies, and setting one — `method`, `headers`, a
-`bearer_token`, `retry` — is a startup error. The credential files name
-files on the exporter's own filesystem, such as a mounted Secret, and take
-no placeholders; written with blanks alone, each is refused (`""` is the key
-left out). They are read at every request, not when the configuration
-loads: a file that is missing, unreadable or empty fails the scrape, naming
-it, and a key rotated on disk is used by the next scrape.
-[`--dry-run`](CONFIGURATION.md#dry-run) reads them, though, as a request would,
-and warns — without failing the check — of each a scrape would fail on now.
+No other request key applies, and setting one (`method`, `headers`, a
+`bearer_token`, `retry`) is a startup error.
+
+- The credential files name files on the exporter's own filesystem, such as
+  a mounted Secret, and take no placeholders. Each is refused when written
+  with only blanks (`""` is the same as leaving the key out).
+- They are read at every request, not when the configuration loads. A file
+  that is missing, unreadable or empty fails the scrape, naming it, and a
+  key rotated on disk is used by the next scrape.
+- [`--dry-run`](CONFIGURATION.md#dry-run) does read them, as a request
+  would, and warns, without failing the check, about each one that a scrape
+  would fail on now.
 
 ## Which object is read
 
 The probe's `target` is the bucket, `acme-backups` or `s3://acme-backups`.
-It is required, and a probe without one is answered `400`; so is a target
-that is no bucket name — 3 to 63 lower-case letters, digits, dots and
-hyphens, starting and ending with a letter or a digit — or that holds a key,
-a query or a user (`s3://acme-backups/reports/x.json`): the object is `root`
-and `path`, which a probe cannot move outside `root`.
+It is required, and a probe without one is answered `400`. So is a target
+that is not a bucket name (3 to 63 lower-case letters, digits, dots and
+hyphens, starting and ending with a letter or a digit), or that holds a key,
+a query or a user (`s3://acme-backups/reports/x.json`). The object is `root`
+and `path`, and a probe cannot move it outside `root`.
 
 | Probe | Object read |
 | --- | --- |
@@ -110,16 +114,20 @@ without `..` above it, and a path parameter a single name, without `/`:
 /probe?collector=tenant_usage&target=acme-billing&param_tenant=initech
 ```
 
-The bucket comes from whoever can reach `/probe`, while the store the
-request is sent to — AWS's endpoint of the region, or `endpoint` — is the
-configuration's. `allowed_targets` and `denied_targets` therefore name
-buckets, as for [any type](REQUESTS.md#restricting-targets) they name what
-a target is: a bucket matching `denied_targets` is refused with `403` before
-anything is sent, and with `allowed_targets` set, one matching none of it.
-An address or a network names no bucket, and is refused when the
-configuration loads. What a probe can read is still what the credentials
-can: give them `s3:GetObject` on the prefixes the collectors read, and
-`s3:ListBucket` where they read a prefix, and no more.
+The bucket comes from whoever can reach `/probe`, while the store that the
+request is sent to (AWS's endpoint for the region, or `endpoint`) comes from
+the configuration. `allowed_targets` and `denied_targets` therefore name
+buckets, just as for [any type](REQUESTS.md#restricting-targets) they name
+what a target is.
+
+- A bucket matching `denied_targets` is refused with `403` before anything
+  is sent, and so is one matching none of `allowed_targets`, when it is set.
+- An address or a network names no bucket, and is refused when the
+  configuration loads.
+
+What a probe can read is still what the credentials can read: give them
+`s3:GetObject` on the prefixes that the collectors read, and `s3:ListBucket`
+where they read a prefix, and no more.
 
 ## Credentials
 
@@ -142,12 +150,13 @@ client shared by every scrape of collectors with the same `region`,
 `endpoint`, `path_style` and credential files.
 
 **On Kubernetes,** the role of the pod's service account is the way to give
-an exporter on EKS its credentials, with nothing to rotate: annotate the
+an exporter on EKS its credentials, with nothing to rotate. Annotate the
 service account with the role, `eks.amazonaws.com/role-arn`, through the
-chart's `serviceAccount.annotations` (see the [chart
-README](../charts/prometheus-universal-exporter/README.md#s3-object-collectors)),
-or, for an existing account the chart runs the pods as, on that account
+chart's `serviceAccount.annotations` (see the
+[chart README](../charts/prometheus-universal-exporter/README.md#s3-object-collectors)),
+or, for an existing account that the chart runs the pods as, on that account
 itself.
+
 Elsewhere, put a key's two halves in a Secret and hand them in as the
 environment variables above, through `env` or `envFrom`, or mount the Secret
 and name its files with the credential keys.
@@ -188,19 +197,19 @@ not a host name of theirs:
 ```
 
 A store whose certificate is signed by a private authority is trusted with
-the SDK's own `AWS_CA_BUNDLE`, a file of the authority's certificate in PEM,
-and a proxy is taken from `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, as
-for every request the exporter makes.
+the SDK's own `AWS_CA_BUNDLE`, a file with the authority's certificate in
+PEM. A proxy is taken from `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, as for
+every request that the exporter makes.
 
 ## Reading a prefix
 
 With `files`, the collector reads every object directly under `root` whose
-name — its key after `root`'s prefix — matches one of the patterns, as a
-[`localfile` collector reads a directory](LOCALFILE.md#reading-a-directory),
-each object decoded and checked on its own and labelled `file`, with
+name (its key after `root`'s prefix) matches one of the patterns, as a
+[`localfile` collector reads a directory](LOCALFILE.md#reading-a-directory).
+Each object is decoded and checked on its own and labelled `file`, with
 `localfile_mtime_seconds`, `localfile_scrape_error` and
-`localfile_files_skipped` beside them, under the same names as `localfile`'s
-so one alert covers both:
+`localfile_files_skipped` beside them. These have the same names as
+`localfile`'s, so one alert covers both:
 
 ```yaml
   - name: textfiles
@@ -218,36 +227,46 @@ so one alert covers both:
 /probe?collector=textfiles&target=acme-metrics
 ```
 
-A bucket has no directories, only keys, so the prefix is read as one: a key
-below a further `/`, such as `textfiles/prod/old/a.prom`, is in a
-subdirectory and is not read, and the key of the prefix itself,
-`textfiles/prod/`, the marker a console leaves for a folder, is no file. A
-prefix nothing is under is an empty directory, whose read answers no object
-rather than failing. The limits are `localfile`'s — `max_files`, the response
-limit for each object, `max_total_bytes`, objects read four at a time, what
-was read when the deadline came answered, and the listing stopped after ten
-times `max_files` entries, at least 1000. The objects are listed with
-ListObjectsV2, 256 at a time, the next page asked for only when the one
-before has been looked at, so a prefix of a million keys costs a scrape what
-its first thousands do. A listing describes each object it lists, its size
-and when it was last modified, so the objects are not asked again before
-they are read. The `path` and `param_<name>` probe parameters are refused
-by such a collector, having no object to name.
+A bucket has no directories, only keys, so the prefix is read as a
+directory.
+
+- A key below a further `/`, such as `textfiles/prod/old/a.prom`, is in a
+  subdirectory and is not read.
+- The key of the prefix itself, `textfiles/prod/`, the marker that a console
+  leaves for a folder, is not a file.
+- A prefix that nothing is under is an empty directory, whose read answers
+  no object instead of failing.
+- The limits are `localfile`'s: `max_files`, the response limit for each
+  object, `max_total_bytes`, objects read four at a time, what was read by
+  the deadline answered, and the listing stopped after ten times
+  `max_files` entries, at least 1000.
+- The objects are listed with ListObjectsV2, 256 at a time, and the next
+  page is asked for only when the one before has been looked at, so a
+  prefix of a million keys costs a scrape what its first thousands do.
+- A listing describes each object that it lists, its size and when it was
+  last modified, so the objects are not asked about again before they are
+  read.
+- Such a collector refuses the `path` and `param_<name>` probe parameters,
+  because it has no single object to name.
 
 ## What a read asks of the store
 
-One object is read with a HeadObject, which says its size and when it was
-last modified, and a GetObject; an object whose size or modification time
-the GetObject finds changed since — replaced between the two — is read once
-more, and refused, saying it changed while it was read, if it changes again.
-A missing object is answered `404` to the HeadObject, and the bucket is then
-asked with a HeadBucket, so that a missing bucket is told apart. Every
-request is signed with Signature Version 4, and sent once: the SDK's retries
-are switched off, as a file read retries nothing, and the next scrape tries
-again. Every request is made within the probe's deadline, its `timeout`
-parameter or Prometheus's scrape timeout (see [Probe
-deadlines](CONFIGURATION.md#probe-deadlines)), and a store that stops
-answering is given up at it.
+One object is read with a HeadObject, which gives its size and when it was
+last modified, and a GetObject.
+
+- An object whose size or modification time the GetObject finds changed
+  since then (replaced between the two requests) is read once more. If it
+  changes again, it is refused, saying that it changed while it was read.
+- A missing object is answered `404` to the HeadObject, and the bucket is
+  then asked about with a HeadBucket, so that a missing bucket can be told
+  apart.
+- Every request is signed with Signature Version 4 and sent once. The SDK's
+  retries are switched off, as a file read retries nothing, and the next
+  scrape tries again.
+- Every request is made within the probe's deadline: its `timeout`
+  parameter or Prometheus's scrape timeout (see
+  [Probe deadlines](CONFIGURATION.md#probe-deadlines)). A store that stops
+  answering is given up at the deadline.
 
 Transforms see an object as `localfile`'s file: no status (`$status` is
 `null`, Python's `response.status_code` `None`), and `Content-Type` from the
@@ -261,11 +280,12 @@ CRC64NVME, SHA-1 or SHA-256, which current SDKs and the console add by
 default — and sends it with the object when asked. `checksums` says what
 the exporter does with it:
 
-- `when_present`, the default, asks for it and checks it as the object is
-  read: a body that does not match fails the read, saying `checksum did not
-  match`, as a body cut or changed on the way would. An object the store
-  keeps no checksum of, uploaded without one or in parts (whose checksum is
-  of the parts, `COMPOSITE`, and is not checked), is read unchecked.
+- `when_present`, the default, asks for the checksum and checks it as the
+  object is read. A body that does not match fails the read, saying
+  `checksum did not match`, as a body cut or changed on the way would. An
+  object that the store keeps no checksum of, because it was uploaded
+  without one or in parts (whose checksum is of the parts, `COMPOSITE`, and
+  is not checked), is read unchecked.
 - `required` fails the read of such an object too: `the store sent no
   checksum of the whole object`. Use it where every object is uploaded
   with one, and an unchecked read should not pass for a checked one.
@@ -337,10 +357,10 @@ placeholders, or the prefix's ending in `/`, and `http_method="READ"`.
 ## Limitations
 
 - **No limit on connections of its own.** The SDK's client keeps its
-  connections to the store, shared by the collectors with the same settings;
-  how many scrapes of a collector read at once is its
-  [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes), and
-  a prefix's objects are read four at a time.
+  connections to the store, shared by the collectors with the same settings.
+  How many scrapes of a collector read at once is set by its
+  [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes),
+  and a prefix's objects are read four at a time.
 - **No anonymous access.** A public bucket is read with credentials too, any
   the store takes.
 - **One object store per collector.** `endpoint` and `region` are the

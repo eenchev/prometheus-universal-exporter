@@ -10,10 +10,10 @@ import (
 )
 
 // The Basic Encoding Rules of ASN.1 as SNMP writes its messages (RFC 3416,
-// RFC 3417): a tag, a length and the content, a constructed value's content
-// the values it holds. encoding/asn1 reads DER, not the application tags of
-// SNMP's types, nor values a lax agent writes longer than they need be, so
-// the type reads and writes them itself.
+// RFC 3417): a tag, a length and the content. A constructed value's content
+// is the values it holds. encoding/asn1 reads DER, but not the application
+// tags of SNMP's types, nor values a lax agent writes longer than needed.
+// So the type reads and writes them itself.
 
 // The tags of the values SNMP sends.
 const (
@@ -304,10 +304,10 @@ func (o snmpOID) under(root snmpOID) bool {
 	return true
 }
 
-// parseSNMPOID reads an object identifier as a collector writes it:
-// numbers by dots, a leading dot or not, at least two arcs, the first 0, 1
-// or 2, the second below 40 under 0 and 1, each at most 4294967295, and at
-// most 128 arcs, as SNMP sends no longer one.
+// parseSNMPOID reads an object identifier as a collector writes it: numbers
+// separated by dots, with or without a leading dot. It takes at least two
+// arcs and at most 128, as SNMP sends no longer one. The first arc is 0, 1
+// or 2, the second is below 40 under 0 and 1, and each is at most 4294967295.
 func parseSNMPOID(text string) (snmpOID, error) {
 	trimmed := strings.TrimPrefix(strings.TrimSpace(text), ".")
 	if trimmed == "" {

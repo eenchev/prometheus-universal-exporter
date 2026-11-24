@@ -12,11 +12,11 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-// The credential, header forwarding and TLS keys' rules, for the types that
-// reach a server:
-// http and graphite, which send credentials as an Authorization header, and
-// grpc, which sends them as the authorization metadata. localfile reaches no
-// server, so a build with only it leaves them out.
+// Rules for the credential, header forwarding and TLS keys, for the types
+// that reach a server: http and graphite, which send credentials as an
+// Authorization header, and grpc, which sends them as the authorization
+// metadata. localfile reaches no server, so a build with only it leaves them
+// out.
 
 // validateCredentials refuses credential keys that contradict each other.
 func validateCredentials(x *model.Collector) error {
@@ -49,11 +49,11 @@ func checkTLSSettings(t model.TLSConfig) error {
 	return nil
 }
 
-// checkForwardHeaders refuses an entry of request.forward_headers that
-// would never be forwarded: one that is no header name, written with blanks
-// around it or not, as a probe's forwarding trims them, and one of the
-// headers a probe never forwards (UnforwardableReason). Either was taken, and
-// the header listed silently never reached the target.
+// checkForwardHeaders refuses an entry of request.forward_headers that would
+// never be forwarded. That is an entry that is not a header name, with or
+// without blanks around it (a probe's forwarding trims them), or one of the
+// headers a probe never forwards (UnforwardableReason). Either was accepted
+// before, and the listed header silently never reached the target.
 func checkForwardHeaders(names []string) error {
 	for _, written := range names {
 		name := strings.TrimSpace(written)

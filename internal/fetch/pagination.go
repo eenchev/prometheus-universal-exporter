@@ -21,13 +21,14 @@ import (
 )
 
 // An API that pages its answer gives one request only the first page. With
-// request.pagination an http collector fetches the pages after it too and
-// merges them into one JSON document: the first page, with the array its
-// items are in (request.pagination.items) holding the items of every page in
-// order. The decoder, the transform and the limits then read that document as
-// the answer, so a collector written for one page reads every page unchanged.
+// request.pagination, an http collector also fetches the following pages
+// and merges them into one JSON document. It is the first page, with its
+// items array (request.pagination.items) holding the items of every page in
+// order. The decoder, the transform and the limits then read that document
+// as the answer, so a collector written for one page reads every page
+// unchanged.
 //
-// How the next page is found is request.pagination.type:
+// request.pagination.type sets how the next page is found:
 //
 //   - link: the URL of the Link header's rel="next" (RFC 8288), as GitHub's
 //     and GitLab's APIs send it.
@@ -39,30 +40,30 @@ import (
 //   - offset: the offset in param, from start (0), moved on by the number of
 //     items the page held, or by size.
 //
-// The pages end at the first that names no next one: no rel="next", a next
-// expression that gives null, false or "", or, for page and offset, a page
-// whose items array is empty or missing; or at max_pages. A trip that stops
-// at max_pages while another page is to come is no failure: its answer is
-// the pages it fetched, and the stop is counted and logged by the exporter
-// (Pages.MoreLeft).
+// The pages end at max_pages, or at the first page that names no next one:
+// no rel="next", a next expression that gives null, false or "", or, for
+// page and offset, a page whose items array is empty or missing. A trip
+// that stops at max_pages while another page is left is not a failure. Its
+// answer is the pages it fetched, and the exporter counts and logs the
+// stop (Pages.MoreLeft).
 //
-// Every page is a request of the collector's own, made by fetch as the first
-// is: the same method, body, headers, credentials, TLS settings, retries and
-// redirect rules, and the same allowed_targets and denied_targets checked on
-// it. A next URL is the target's to name, and is sent the target's
-// credentials, so one that leaves the first page's origin, its scheme, host
-// and port, is refused, unless it names the virtual host the request's Host
-// header asks for, when it is fetched from the first page's host with that
-// Host (onVirtualHost); so is one that names a page fetched already, which
-// would go round in a circle. The probe's timeout covers every page, and the
-// response limit holds each page, the pages together, and the merged
-// document.
+// Every page is a request of the collector's own, made by fetch like the
+// first: the same method, body, headers, credentials, TLS settings, retries
+// and redirect rules, and the same allowed_targets and denied_targets
+// checks. The target names the next URL, and that URL is sent the target's
+// credentials. So a next URL that leaves the first page's origin (its
+// scheme, host and port) is refused. The exception is a URL that names the
+// virtual host the request's Host header asks for: it is fetched from the
+// first page's host with that Host (onVirtualHost). A URL that names a page
+// already fetched is also refused, since it would loop. The probe's timeout
+// covers every page. The response limit applies to each page, to the pages
+// together, and to the merged document.
 
 // validatePagination checks request.pagination at load and fills in its
 // defaults: max_pages, and start for page and offset. The type is taken as
-// written, in lower case and without blanks around it, the one spelling the
-// schemas take. The expressions are compiled, so a mistake in one is refused now
-// rather than by every scrape.
+// written: lower case without surrounding blanks, the only spelling the
+// schemas accept. The expressions are compiled, so a mistake in one is
+// refused now rather than by every scrape.
 func validatePagination(c *model.Collector) error {
 	p := httpRequest(c).Pagination
 	if p == nil {
@@ -163,11 +164,11 @@ func nextPageBy(typ string) string {
 // the configuration loads.
 const jqLoadCheckTimeout = 5 * time.Second
 
-// itemsPath is the path, in jq's terms, of the items array that the
-// expression items names in the document page: the keys and indexes that
-// lead to it. Checked against null at load, it tells an expression that is a
-// path, such as .items or .data[0].results, from one that is not, such as
-// .items | length, which names no place to put the merged items in.
+// itemsPath returns the jq path of the items array that the expression
+// items names in the document page: the keys and indexes that lead to it.
+// Checked against null at load, it tells a path expression, such as .items
+// or .data[0].results, from one that is not, such as .items | length,
+// which names no place to put the merged items.
 func itemsPath(ctx context.Context, items string, page any) ([]any, error) {
 	// The expression goes on a line of its own, so a comment at its end
 	// does not swallow the closing parenthesis.
@@ -234,10 +235,10 @@ func getPath(v any, path []any) any {
 	return v
 }
 
-// setPath puts value at path in v and returns what v becomes: v itself,
-// changed in place, or value for the empty path. A key missing on the way is
-// made, as jq's setpath makes it; an index past the end of an array, which
-// getPath found nothing at, leaves v as it is.
+// setPath puts value at path in v and returns the new v: v itself, changed
+// in place, or value for the empty path. A missing key on the way is
+// created, as jq's setpath does. An index past the end of an array, where
+// getPath found nothing, leaves v unchanged.
 func setPath(v any, path []any, value any) any {
 	if len(path) == 0 {
 		return value
@@ -413,19 +414,19 @@ func fetchPages(ctx context.Context, target string, c *model.Collector, override
 	return firstResponse, nil
 }
 
-// onVirtualHost is next, a page after the first that is not on the first's
-// origin, sent to the first's host instead, when it names the virtual host
-// the request asks for with its Host override (hostOverride): the same
-// scheme as the first, and the Host's host and port, the scheme's when the
-// Host names none. It is nil when there is no Host override or next is
-// elsewhere. A target reached by its address with Host: api.example builds
-// its links from that Host, so https://10.0.0.5 with Host: api.example is
-// answered with Link: <https://api.example/items?page=2>; that page is
-// fetched from https://10.0.0.5/items?page=2 with the same Host, as the
-// first was. Looking api.example up instead could reach another server,
-// which the policy has not checked and which would be sent the target's
-// credentials; at the target's address the page stays on the host the
-// policy let through, at the virtual host the configuration chose.
+// onVirtualHost returns next, a later page not on the first page's origin,
+// sent instead to the first page's host, when next names the virtual host
+// that the request asks for with its Host override (hostOverride). That is:
+// the first page's scheme, and the Host's host and port (the scheme's port
+// when the Host names none). It returns nil when there is no Host override
+// or next is elsewhere. A target reached by its address with
+// Host: api.example builds its links from that Host. So https://10.0.0.5
+// with Host: api.example answers with Link: <https://api.example/items?page=2>.
+// That page is fetched from https://10.0.0.5/items?page=2 with the same
+// Host, like the first. Looking up api.example instead could reach another
+// server, which the policy has not checked and which would get the target's
+// credentials. At the target's address the page stays on the host the
+// policy allowed, at the virtual host the configuration chose.
 func onVirtualHost(c *model.Collector, overrides RequestOverrides, forwarded http.Header, first, next *url.URL) (*url.URL, error) {
 	headers, err := renderedValues(c.Request.Headers, "header", "request.headers.", overrides.Params)
 	if err != nil {
@@ -583,12 +584,13 @@ func encodePage(document any) ([]byte, error) {
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
-// nextLink is the target of the Link header's link whose rel names next
-// (RFC 8288), or "" when there is none. Each header line may hold several
-// links, separated by commas; a link is a URI in angle brackets and its
-// parameters, each after a semicolon, a value bare or quoted, and rel is a
-// list of relation types separated by spaces, compared without regard to
-// case.
+// nextLink returns the target of the Link header's link whose rel names
+// next (RFC 8288), or "" when there is none. The format:
+//   - each header line may hold several links, separated by commas;
+//   - a link is a URI in angle brackets plus parameters, each after a
+//     semicolon, with a bare or quoted value;
+//   - rel is a space-separated list of relation types, compared without
+//     regard to case.
 func nextLink(h http.Header) string {
 	for _, value := range h.Values("Link") {
 		for _, link := range parseLinks(value) {

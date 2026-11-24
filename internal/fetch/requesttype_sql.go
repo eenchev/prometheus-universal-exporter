@@ -32,9 +32,9 @@ import (
 )
 
 // The sql request type runs one statement on a database and hands the rows
-// it returns to the transforms: by column name to a csv transform, one
-// series per row, and as a list of objects, [{column: value}, ...], to jq,
-// yq and python.
+// it returns to the transforms. A csv transform gets them by column name,
+// one series per row. jq, yq and python get a list of objects,
+// [{column: value}, ...].
 //
 //	request:
 //	  type: sql
@@ -45,40 +45,40 @@ import (
 //	  statement: SELECT state, count(*) AS n FROM jobs WHERE queue = $1 GROUP BY state
 //	  args: ["{{param_queue:default}}"]
 //
-// The probe's target is the server, host or host:port, the driver's port
-// when it is left out; a Snowflake target is the account identifier. No
-// credentials, database or options are written in the target: they are the
-// collector's keys, so a probe cannot reach a database the configuration
-// does not name. The statement is written in the driver's own placeholder
-// style ($1, ?, @p1, :1), and args are sent as values, never as SQL: bound
-// to it, or, by the clickhouse driver, written into it quoted as literals;
-// args and database may hold {{param_...}} placeholders, nothing else.
+// The probe's target is the server, host or host:port, with the driver's
+// port when the port is left out. A Snowflake target is the account
+// identifier. The target holds no credentials, database or options. They
+// are the collector's keys, so a probe cannot reach a database the
+// configuration does not name. The statement uses the driver's own
+// placeholder style ($1, ?, @p1, :1). args are sent as values, never as
+// SQL: bound to the statement, or, by the clickhouse driver, written into
+// it quoted as literals. Only args and database may hold {{param_...}}
+// placeholders.
 //
-//   - The statement runs read-only where the database can make it so: in a
+//   - The statement runs read-only where the database supports it: in a
 //     read-only transaction (postgres, mysql, oracle, vertica) or with a
-//     read-only setting (clickhouse). SQL Server cannot, and runs it in a
-//     transaction always rolled back; Snowflake runs it as it is. Both need
-//     an account that can only read.
-//   - It is bounded by the scrape's deadline, which the drivers cancel it
-//     at, and by the database's own time limit where it has one the
-//     exporter can set: postgres's statement_timeout, MySQL's
-//     max_execution_time, MariaDB's max_statement_time and SQL Server's
-//     LOCK_TIMEOUT.
+//     read-only setting (clickhouse). SQL Server cannot do this, so it runs
+//     the statement in a transaction that is always rolled back. Snowflake
+//     runs it as it is. Both need an account that can only read.
+//   - It is bounded by the scrape's deadline, at which the drivers cancel
+//     it, and by the database's own time limit where the exporter can set
+//     one: postgres's statement_timeout, MySQL's max_execution_time,
+//     MariaDB's max_statement_time and SQL Server's LOCK_TIMEOUT.
 //   - Connections are kept in a pool per collector, target and connection
-//     settings, shared by the collector's scrapes of the target, and closed
-//     when a reload removes or changes the collector (sqlpool.go).
+//     settings. The pool is shared by the collector's scrapes of the target
+//     and closed when a reload removes or changes the collector (sqlpool.go).
 //
 // The drivers live in sqldriver_<name>.go files, each the only file that
-// imports its module (sqldriver.go): mysql, postgres and sqlserver with the
-// type, the others only with their sql_driver_<name> tag. Without this
-// type's build constraint none of them is linked.
+// imports its module (sqldriver.go). mysql, postgres and sqlserver are
+// built with the type; the others only with their sql_driver_<name> tag.
+// Without this type's build constraint none of them is linked.
 
-// SQLConfig is a sql collector's own request keys: the database driver,
-// the database, the one statement run and the values bound to its
-// placeholders, the driver's allow-listed settings, and an Oracle
-// database's service; the most rows a statement may return, 0 for the
-// default; and how the type keeps connections to a target. The account and
-// its credential files are of the common part, which other types take too.
+// SQLConfig is a sql collector's own request keys: the database driver, the
+// database, the one statement run and the values bound to its placeholders,
+// the driver's allow-listed settings, an Oracle database's service, the
+// maximum rows a statement may return (0 for the default), and how the type
+// keeps connections to a target. The account and its credential files
+// belong to the common part, which other types also use.
 type SQLConfig struct {
 	Driver    string `yaml:"driver,omitempty"`
 	Database  string `yaml:"database,omitempty"`
@@ -97,17 +97,17 @@ type SQLConfig struct {
 	ServiceName string                `yaml:"service_name,omitempty"`
 	MaxRows     int                   `yaml:"max_rows,omitempty"`
 	Connections *model.SQLConnections `yaml:"connections,omitempty"`
-	// Statements are several statements, each with its name and its own
-	// args, run in order on one connection, in place of statement,
-	// statement_file, args and arg_types: the document holds each one's
-	// rows under its name (docs/SQL.md#several-statements).
+	// Statements are several statements, each with its own name and args,
+	// run in order on one connection. They replace statement,
+	// statement_file, args and arg_types. The document holds each
+	// statement's rows under its name (docs/SQL.md#several-statements).
 	Statements []SQLStatement `yaml:"statements,omitempty"`
 }
 
-// SQLStatement is one entry of request.statements: its name, which its rows
-// are under in the document, the statement, and the values bound to its
-// placeholders, with their types, as request.args and request.arg_types
-// are of a collector's one statement.
+// SQLStatement is one entry of request.statements: its name, under which
+// its rows appear in the document, the statement, and the values bound to
+// its placeholders with their types, like request.args and
+// request.arg_types for a collector's single statement.
 type SQLStatement struct {
 	Name      string   `yaml:"name"`
 	Statement string   `yaml:"statement"`
@@ -131,12 +131,12 @@ type sqlRun struct {
 	args            []any
 }
 
-// MarshalYAML writes the keys as a configuration writes them, and, for a
-// statement read from statement_file, a digest of the text read: the YAML
-// of a collector is what a reload compares to tell a changed collector and
-// what a probe's cache key is made from (model.RequestConfig.MarshalYAML),
-// and a statement file edited changes the collector as much as its
-// statement edited in place would. Nothing reads the YAML back.
+// MarshalYAML writes the keys as a configuration writes them. For a
+// statement read from statement_file, it also writes a digest of the text
+// read. A reload compares a collector's YAML to detect a changed collector,
+// and a probe's cache key is made from it (model.RequestConfig.MarshalYAML).
+// Editing a statement file changes the collector as much as editing its
+// statement in place would. Nothing reads the YAML back.
 func (s SQLConfig) MarshalYAML() (any, error) {
 	type plain SQLConfig
 	if s.StatementFile == "" {
@@ -169,10 +169,10 @@ const maxSQLStatementFileBytes = 1 << 20
 var sqlStatementPlaceholder = regexp.MustCompile(`\{\{\s*` + PathParamPrefix)
 
 // checkSQLStatementFileKey refuses a statement_file that is not an absolute
-// path written as it is meant: with blanks around it, a placeholder, which
-// nothing fills in a file's path, a NUL, or relative, which would be read
-// from whatever directory the exporter, or a replica of the target
-// allocator, was started in.
+// path written as intended. It refuses blanks around it, a placeholder
+// (nothing fills placeholders in a file's path), a NUL, or a relative path,
+// which would be read from whatever directory the exporter, or a replica of
+// the target allocator, was started in.
 func checkSQLStatementFileKey(path string) error {
 	switch {
 	case strings.TrimSpace(path) == "":
@@ -189,13 +189,13 @@ func checkSQLStatementFileKey(path string) error {
 	return nil
 }
 
-// readSQLStatementFile reads the statement of the file at path, refusing
-// what is no statement file: no regular file (a directory, a named pipe,
-// which would hold the load until something wrote to it, a device, a
-// socket), a file over maxSQLStatementFileBytes, text that is not UTF-8 or
-// holds a NUL, a file of blanks and nothing else, and a statement with a
-// placeholder. A UTF-8 byte order mark at its start, as some editors write,
-// and the blanks around the statement, are taken off.
+// readSQLStatementFile reads the statement from the file at path. It
+// refuses anything that is not a statement file: a non-regular file (a
+// directory, a device, a socket, or a named pipe, which would block the
+// load until something wrote to it), a file over maxSQLStatementFileBytes,
+// text that is not UTF-8 or holds a NUL, a file of only blanks, and a
+// statement with a placeholder. A UTF-8 byte order mark at the start, as
+// some editors write, and the blanks around the statement are removed.
 func readSQLStatementFile(path string) (string, error) {
 	where := "request.statement_file " + path
 	info, err := os.Stat(path)
@@ -474,10 +474,10 @@ func checkSQLArgs(prefix string, args, types []string) error {
 	return nil
 }
 
-// checkSQLStatements checks request.statements: not beside statement,
-// statement_file, args or arg_types, which are those of a collector's one
-// statement; at most maxSQLStatements entries, each with a name of its own,
-// a statement the driver takes, and its args.
+// checkSQLStatements checks request.statements. It must not be beside
+// statement, statement_file, args or arg_types, which belong to a
+// collector's single statement. It has at most maxSQLStatements entries,
+// each with a unique name, a statement the driver accepts, and its args.
 func checkSQLStatements(own SQLConfig, d *sqlDriver) error {
 	for key, set := range map[string]bool{"statement": own.Statement != "", "statement_file": own.StatementFile != "", "args": len(own.Args) > 0, "arg_types": len(own.ArgTypes) > 0} {
 		if set {
@@ -519,14 +519,14 @@ func checkSQLStatements(own SQLConfig, d *sqlDriver) error {
 }
 
 // loadSQLStatement checks the collector's statement, written in
-// request.statement or in the file request.statement_file names, which it
-// reads into the collector's own keys, as the statement the collector runs.
-// The file is not read when the configuration is loaded without opening
-// the files it names, as the target allocator loads it
-// (model.Collector.DescriptorFilesUnread): the replicas, which mount it,
-// read and check it when they load the bundle. Nor is the statement
-// required of the debug page's playground, which never makes a request
-// and refuses a key naming a file (model.Collector.RequestNotMade): a copy
+// request.statement or in the file request.statement_file names, and reads
+// it into the collector's own keys as the statement the collector runs.
+// The file is not read when the configuration is loaded without
+// opening the files it names, as the target allocator loads it
+// (model.Collector.DescriptorFilesUnread). The replicas, which mount the
+// file, read and check it when they load the bundle. The statement is also
+// not required for the debug page's playground, which never makes a request
+// and refuses a key naming a file (model.Collector.RequestNotMade). A copy
 // of a collector whose statement is in a file has none.
 func loadSQLStatement(x *model.Collector, d *sqlDriver) error {
 	own := sqlRequest(x)
@@ -582,13 +582,13 @@ func checkSQLDriver(collector, name string) (*sqlDriver, error) {
 	return nil, fmt.Errorf("collector %q has unknown request.driver %q; the sql drivers are %s, and this build has: %s", collector, name, strings.Join(knownSQLDrivers, ", "), built)
 }
 
-// checkSQLAccountKeys holds the account and credential keys of a collector,
-// or of a static target, to their rules: none written with blanks alone,
-// which is neither a name nor the key left out, which "" is; no line break
-// in the account's name; a private key only for a driver with key-pair
-// authentication, and not beside a password; and, for such a driver's
-// collector, one of the two. The keys take no placeholder, which the
-// configuration refuses where it is not filled.
+// checkSQLAccountKeys checks the account and credential keys of a collector
+// or a static target. No key may be only blanks, which is neither a name nor
+// a left-out key (that is ""). The account's name has no line break. A
+// private key is allowed only for a driver with key-pair authentication,
+// and not beside a password. A collector of such a driver needs one of the
+// two. The keys take no placeholder, which the configuration refuses where
+// it is not filled.
 func checkSQLAccountKeys(d *sqlDriver, username, passwordFile, privateKeyFile string, collector bool) error {
 	if username != "" && strings.TrimSpace(username) == "" {
 		return errors.New("request.username is written with blanks alone; name the account, or leave the key out")
@@ -624,10 +624,10 @@ func checkSQLNameKey(key, value string) error {
 	return nil
 }
 
-// checkSQLOptions holds request.options to the driver's allow-list, each
-// value to those its option takes, and request.tls to what the driver can
-// honour: a tls key beside an option that switches TLS off, or one the
-// driver cannot apply, would be ignored without a word.
+// checkSQLOptions checks request.options against the driver's allow-list,
+// each value against those its option accepts, and request.tls against what
+// the driver can honour. A tls key beside an option that turns TLS off, or
+// one the driver cannot apply, would otherwise be silently ignored.
 func checkSQLOptions(d *sqlDriver, options map[string]string, t model.TLSConfig) error {
 	for _, name := range model.SortedKeys(options) {
 		allowed, known := d.options[name]
@@ -684,10 +684,10 @@ func sqlVerifyingValue(d *sqlDriver) string {
 	return strings.Join(values, " or ")
 }
 
-// checkSQLConnections holds request.connections to its rules: no count or
-// duration below 0, a keepalive interval of a second at least but 0, and a
-// check of tcp or ping. A static target's block, target, may not set
-// max_targets, which is the collector's across its targets.
+// checkSQLConnections checks request.connections: no count or duration
+// below 0, a keepalive interval of 0 or at least a second, and a check of
+// tcp or ping. A static target's block (target set) may not set
+// max_targets, which is the collector's limit across its targets.
 func checkSQLConnections(conns *model.SQLConnections, target bool) error {
 	if conns == nil {
 		return nil
@@ -726,13 +726,13 @@ func checkSQLConnections(conns *model.SQLConnections, target bool) error {
 }
 
 // checkSQLTargetRequest checks what a static target's request block sets
-// for a sql collector: its account and credential file, which replace the
-// collector's together (a target that sets either replaces both of the
-// collector's credential files with its own), and take no placeholder, as
-// sshfile's do not, since a static target's own values are used as they are
-// written; its own tls block, which replaces the collector's whole and is
-// held to what the driver can honour with the collector's options; and its
-// connection settings.
+// for a sql collector. Its account and credential file replace the
+// collector's together: a target that sets either replaces both of the
+// collector's credential files with its own. They take no placeholder,
+// like sshfile's, since a static target's own values are used as written.
+// Its own tls block replaces the collector's entirely and is held to what
+// the driver can honour with the collector's options. Its connection
+// settings are checked too.
 func checkSQLTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	r := &t.Request
 	for _, key := range []struct{ name, value string }{{"request.username", r.Username}, {"request.password_file", r.PasswordFile}, {"request.private_key_file", r.PrivateKeyFile}} {
@@ -767,10 +767,10 @@ type sqlAddress struct {
 	host, port, hostPort, account string
 }
 
-// parseSQLTarget reads a target of c: host, host:port or [v6]:port, the
-// driver's port when it names none; for a driver whose targets are accounts,
-// an account identifier. Nothing else may come with it: the account is
-// request.username and the database request.database.
+// parseSQLTarget reads a target of c: host, host:port or [v6]:port, with the
+// driver's port when it names none. For a driver whose targets are
+// accounts, it is an account identifier. Nothing else may come with it: the
+// account is request.username and the database is request.database.
 func parseSQLTarget(c *model.Collector, raw string) (sqlAddress, error) {
 	raw = strings.TrimSpace(raw)
 	// A collector that was never validated may name no driver this build
@@ -858,9 +858,9 @@ func sqlDisplay(target string) string {
 	return target
 }
 
-// sqlLabel is the url label of a statement: driver://host:port/ and the
-// database, or an Oracle service, as written, escaped as a URL's path is
-// (pathURL), its placeholders as they are.
+// sqlLabel returns the url label of a statement: driver://host:port/ and the
+// database, or an Oracle service, as written, escaped like a URL's path
+// (pathURL), with its placeholders unchanged.
 // It holds neither the statement nor a credential.
 func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, error) {
 	address, err := parseSQLTarget(c, target)
@@ -874,13 +874,13 @@ func sqlLabel(target string, c *model.Collector, _ RequestOverrides) (string, er
 	return pathURL(sqlRequest(c).Driver, address.hostPort, "/"+database), nil
 }
 
-// sqlBase is what a pool depends on of a collector's configuration and of a
-// static target's request, besides the target: the account and credential
+// sqlBase is what a pool depends on, besides the target, from a collector's
+// configuration and a static target's request: the account and credential
 // files, the database as written, the options, the TLS settings, the
-// connection settings, the policy and the response limit, which bounds what
-// a driver reads of the server at once where the driver can be told
-// (sqlConnectSpec.limit). A collector's pools whose base the
-// configuration in force no longer gives are closed (sqlPoolCache.follow).
+// connection settings, the policy and the response limit. The limit bounds
+// how much a driver reads from the server at once, where the driver can be
+// told (sqlConnectSpec.limit). A collector's pools whose base the current
+// configuration no longer gives are closed (sqlPoolCache.follow).
 type sqlBase struct {
 	driver                                 string
 	username, passwordFile, privateKeyFile string
@@ -1032,9 +1032,9 @@ func sqlArgs(prefix string, list, types []string, overrides RequestOverrides) ([
 }
 
 // The types an arg is bound as (request.arg_types): text, the default, as
-// written; int, a whole number of 64 bits; float, a floating-point number
-// of 64 bits; bool, true or false in any case. Each is handed to the
-// driver as Go's own type of it, which the driver binds as the database's:
+// written; int, a 64-bit whole number; float, a 64-bit floating-point
+// number; bool, true or false in any case. Each is passed to the driver as
+// the matching Go type, which the driver binds as the database's type.
 // MySQL's LIMIT ? takes no text before 8.0.22, and a comparison of a number
 // with text may compare them as text.
 const (
@@ -1047,11 +1047,11 @@ const (
 // sqlArgTypes are the types an arg may be bound as.
 var sqlArgTypes = []string{sqlArgText, sqlArgInt, sqlArgFloat, sqlArgBool}
 
-// sqlArgKinds are the kinds of templated field of the args of each type
-// but text, whose kind is arg: a value that a placeholder fills is checked
-// against its type when it is filled (sqlArgRule), so that a probe whose
-// parameter is no number is answered 400 before the server is asked, as a
-// static target's is refused when its file loads.
+// sqlArgKinds are the templated field kinds of the args of each type except
+// text, whose kind is arg. A value that a placeholder fills is checked
+// against its type when it is filled (sqlArgRule). So a probe whose
+// parameter is not a number is answered 400 before the server is asked,
+// just as a static target's is refused when its file loads.
 var sqlArgKinds = map[string]string{sqlArgInt: "sql_int", sqlArgFloat: "sql_float", sqlArgBool: "sql_bool"}
 
 // sqlArgTypeOf is the type the arg at i is bound as, of types.
@@ -1122,10 +1122,10 @@ func checkSQLArgTypes(prefix string, args, types []string) error {
 	return nil
 }
 
-// checkSQLArgDefaults refuses, when the configuration loads, an arg that is
-// not of its type as it is bound when no probe parameter fills it: one
-// with no placeholder, and one whose every placeholder has a default, which
-// a probe that gives none of them binds.
+// checkSQLArgDefaults refuses, when the configuration loads, an arg whose
+// value as bound without probe parameters is not of its type. This covers
+// an arg with no placeholder, and one whose every placeholder has a
+// default, which a probe that gives none of them binds.
 func checkSQLArgDefaults(field templateField, placeholders []pathPlaceholder) error {
 	if field.kind == "arg" {
 		return nil
@@ -1290,12 +1290,13 @@ func sqlPrivateKey(file string) (*rsa.PrivateKey, error) {
 	return key, nil
 }
 
-// sqlTLSConfig is the TLS configuration of a connection with base to host:
-// none when its driver's TLS option, or the absence of tls keys, says so;
-// otherwise the tls block's, its files read now, the certificate checked
-// against tls.server_name or the host, and not checked at all when the
-// option asks for TLS without verification, or for TLS verified only as tls
-// keys say and none is set. digest tells it from another.
+// sqlTLSConfig returns the TLS configuration of a connection with base to
+// host. It is none when the driver's TLS option, or the absence of tls keys,
+// says so. Otherwise it is the tls block's, with its files read now. The
+// certificate is checked against tls.server_name or the host. It is not
+// checked at all when the option asks for TLS without verification, or for
+// TLS verified only as tls keys say and none is set. digest tells one
+// configuration from another.
 func sqlTLSConfig(d *sqlDriver, base *sqlBase, options map[string]string, host string) (config *tls.Config, digest string, err error) {
 	tlsSet := base.tls != model.TLSConfig{}
 	mode := sqlTLSModeOf(d, options, tlsSet)
@@ -1324,11 +1325,11 @@ func sqlTLSConfig(d *sqlDriver, base *sqlBase, options map[string]string, host s
 	return cfg, hex.EncodeToString(sum.Sum(nil))[:32], nil
 }
 
-// checkSQLFiles reads the credential files of a collector, or of a static
-// target that sets its own, and the TLS files, the collector's or a static
-// target's own block's, as making a connection reads
-// them, for --dry-run: a file missing or unreadable, an empty password, a
-// key that is none or is encrypted, a certificate that does not load.
+// checkSQLFiles reads, for --dry-run, the credential files of a collector,
+// or of a static target that sets its own, and the TLS files of the
+// collector's or a static target's own block, as making a connection reads
+// them. It reports a file missing or unreadable, an empty password, a key
+// that is not a key or is encrypted, and a certificate that does not load.
 // Loading the configuration reads none of them, since a file may be mounted
 // after the exporter starts.
 func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
@@ -1364,13 +1365,12 @@ func checkSQLFiles(c *model.Collector, t *model.StaticTarget) []string {
 }
 
 // sqlSchemaRule is what a sql collector's request requires, as the exporter
-// does (validateSQLRequest): driver and username, and one of statement,
+// does (validateSQLRequest): driver and username; one of statement,
 // statement_file and statements, each written with something other than ""
-// or an empty list, and with statements no args or arg_types;
-// for the oracle driver, when it is
-// built, service_name; and for the snowflake driver, when it is built,
-// password_file or private_key_file; each driver named as the exporter
-// matches it (SchemaCaselessOneOf).
+// or an empty list, and with statements no args or arg_types; for the
+// oracle driver, when it is built, service_name; and for the snowflake
+// driver, when it is built, password_file or private_key_file. Each driver
+// is named as the exporter matches it (SchemaCaselessOneOf).
 func sqlSchemaRule() map[string]any {
 	keys := []string{"driver", "username"}
 	properties := map[string]any{}

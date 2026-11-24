@@ -12,10 +12,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The rules of a request made over HTTP, shared by the types that make one:
-// http, and graphite, which asks a Graphite render API. They live outside
-// either type's file so a build with only one of them still has them, and
-// behind both types' tags so a build with neither leaves them out.
+// This file holds the rules for requests made over HTTP, shared by the
+// types that make them: http, and graphite, which queries a Graphite
+// render API. They live outside either type's file so a build with only
+// one type still has them, and behind both types' tags so a build with
+// neither leaves them out.
 
 // checkHTTPTarget checks a static target's address, which must be an
 // absolute URL. A probe's target may be a bare host:port, as Prometheus
@@ -45,13 +46,14 @@ func checkHTTPTarget(c *model.Collector, target string, static bool) error {
 	return nil
 }
 
-// checkHTTPTargetTLS checks a static target's own tls block, which replaces
-// the collector's whole for every request of the target's trips
-// (withTargetTLS), as the collector's is checked (checkTargetTLS). Beside
-// it, the target's insecure_skip_verify, which overrides the block's, would
-// leave two answers to one question; the block's own key says it. A block
-// on an http:// target is taken, as the collector's is: it is used by the
-// https requests the trip makes, a redirect's or a login's.
+// checkHTTPTargetTLS checks a static target's own tls block the same way
+// the collector's is checked (checkTargetTLS). The block replaces the
+// collector's entirely for every request of the target's trips
+// (withTargetTLS). The target's insecure_skip_verify, which overrides the
+// block's, cannot be set beside it, since that would give two answers to
+// one question; the block's own key says it. A block on an http:// target
+// is accepted, as the collector's is. It is used by the trip's https
+// requests, such as a redirect's or a login's.
 func checkHTTPTargetTLS(t *model.StaticTarget) error {
 	if err := checkTargetTLS(t); err != nil {
 		return err
@@ -62,10 +64,10 @@ func checkHTTPTargetTLS(t *model.StaticTarget) error {
 	return nil
 }
 
-// checkHTTPFiles reads, for --dry-run, the files of the login, the
-// collector's or a static target's (checkLoginFiles), with those of the
-// login's own tls block, and those of the collector's tls block, or of a
-// static target's own, as the first request would.
+// checkHTTPFiles reads, for --dry-run, the files the first request would
+// read: the login's files, from the collector or a static target
+// (checkLoginFiles), with those of the login's own tls block, and those of
+// the collector's tls block or of a static target's own.
 func checkHTTPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	warnings := checkLoginFiles(c, t)
 	who, login, settings := fmt.Sprintf("collector %q", c.Name), c.Request.Login, &c.Request.TLS
@@ -157,9 +159,9 @@ func validateHTTPRequest(x *model.Collector) error {
 }
 
 // validateProxy checks request.proxy_url and request.proxy_basic_auth_file
-// (proxy.go) when the configuration loads.
-// Which collectors take the credentials of their file's defaults, and which
-// leave them out, is decided as the defaults are given (config/defaults.go).
+// (proxy.go) when the configuration loads. Which collectors take the
+// credentials from their file's defaults, and which leave them out, is
+// decided when the defaults are applied (config/defaults.go).
 func validateProxy(x *model.Collector) error {
 	if x.Request.ProxyBasicAuthFile != nil && (x.Request.ProxyURL == "" || x.Request.ProxyURL == model.ProxyDirect) {
 		return fmt.Errorf("collector %q request.proxy_basic_auth_file is set without a request.proxy_url to send the credentials to", x.Name)
@@ -192,10 +194,10 @@ func validateRequestTemplates(c *model.Collector) error {
 	return nil
 }
 
-// checkQueryNames refuses a request.query name of nothing, which would be
-// sent as a pair with no name, =value, and one holding a control
-// character, almost always the line break an environment variable ended
-// with. Any other character of a name is sent escaped (url.Values.Encode).
+// checkQueryNames refuses two kinds of request.query name. An empty name
+// would be sent as a pair with no name, =value. A name holding a control
+// character almost always has the line break an environment variable ended
+// with. Any other character in a name is sent escaped (url.Values.Encode).
 func checkQueryNames(query map[string]string) error {
 	for _, name := range model.SortedKeys(query) {
 		if name == "" {
@@ -211,10 +213,10 @@ func checkQueryNames(query map[string]string) error {
 }
 
 // checkAllowedSchemes checks request.allowed_schemes at load. A request is
-// made over http or https and nothing else, so any other entry is a typing
-// mistake, such as htps, that would refuse every target the collector is
-// given; so would an entry with a space around it, or the :// of a URL,
-// which matches no scheme.
+// made over http or https only, so any other entry is a typing mistake,
+// such as htps, that would refuse every target the collector is given. The
+// same goes for an entry with a space around it, or with the :// of a URL,
+// since neither matches any scheme.
 func checkAllowedSchemes(schemes []string) error {
 	for i, scheme := range schemes {
 		if !strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https") {

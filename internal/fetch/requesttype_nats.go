@@ -21,12 +21,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The nats request type asks a NATS server whether it answers, how fast,
-// and, with JetStream, how its streams and consumers stand, over the
-// client protocol, so a server whose monitoring port is closed can still
-// be watched by a client that may connect. Its target is the server, host
-// or host:port, port 4222, or tls://host for a connection that must be
-// TLS.
+// The nats request type uses the client protocol to ask a NATS server
+// whether it answers, how fast, and, with JetStream, the state of its
+// streams and consumers. So a server whose monitoring port is closed can
+// still be watched by a client allowed to connect. Its target is the
+// server: host or host:port (port 4222), or tls://host for a connection
+// that must use TLS.
 //
 //	request:
 //	  type: nats
@@ -34,17 +34,17 @@ import (
 //	  streams: [ORDERS]
 //	  consumers: [ORDERS/billing]
 //
-// A scrape connects and reads the server's INFO, turns the connection to
-// TLS when the server requires it or the target says tls://, logs in with
-// CONNECT, and times a PING to its PONG. With jetstream it asks the
-// account's JetStream state, and each stream and consumer named, with the
-// JetStream API's requests, which read and change nothing. The answer is
-// one JSON document: the server's INFO, the round trip, and what JetStream
-// answered. A stream or a consumer the server does not have is not a
-// failure: its entry says found: false, so a rule decides.
+// A scrape connects and reads the server's INFO. It switches the
+// connection to TLS when the server requires it or the target says
+// tls://, logs in with CONNECT, and times a PING until its PONG. With
+// jetstream it asks for the account's JetStream state and for each named
+// stream and consumer, using JetStream API requests that read and change
+// nothing. The answer is one JSON document: the server's INFO, the round
+// trip, and the JetStream answers. A stream or consumer the server does not
+// have is not a failure. Its entry says found: false, and a rule decides.
 //
 // The account logs in with a user and a password or with a token. NKeys,
-// credentials files and account JWTs are not spoken.
+// credentials files and account JWTs are not supported.
 
 // NATSConfig is a nats collector's own request keys.
 type NATSConfig struct {
@@ -349,9 +349,9 @@ type natsMessage struct {
 	payload []byte
 }
 
-// next reads what the server sends until one of want comes, answering its
-// PINGs and passing over its +OK and INFO; an -ERR fails the scrape with
-// what it said. It returns the line that came, and, of a message, the
+// next reads what the server sends until one of want arrives. It answers
+// the server's PINGs and skips its +OK and INFO. An -ERR fails the scrape
+// with its text. It returns the line that arrived and, for a message, the
 // message.
 func (c *natsConn) next(want ...string) (string, *natsMessage, error) {
 	for {

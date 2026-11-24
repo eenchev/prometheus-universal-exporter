@@ -19,20 +19,26 @@ import (
 	"github.com/microsoft/go-mssqldb/msdsn"
 )
 
-// The sqlserver driver is microsoft/go-mssqldb. SQL Server has no read-only
-// transaction (the driver refuses one), so a statement runs in a
-// transaction that is always rolled back, which undoes what it wrote but
-// what commits by itself, and after SET LOCK_TIMEOUT to the scrape's time
-// left, so that a statement waiting on a lock gives up when nobody waits
-// for it any more (sqlServerLockTimeout); the account must still be one
-// that can only read. When the scrape's deadline comes the driver asks the
-// server to stop the statement. encrypt says how much of
-// the connection TLS covers: disable none of it, false the login alone (its
-// certificate verified only as tls keys say, as SQL Server's own tools do
-// not verify it), true and strict all of it (strict with TDS 8.0, TLS before
-// anything else); unless it is disable, a server that answers it cannot
-// encrypt is refused rather than sent the login in clear; a named instance
-// is reached by its port, since finding it would ask the SQL Server Browser
+// The sqlserver driver is microsoft/go-mssqldb.
+//
+// SQL Server has no read-only transaction (the driver refuses one). So a
+// statement runs in a transaction that is always rolled back. This undoes
+// what the statement wrote, except what commits by itself. Before it runs,
+// SET LOCK_TIMEOUT is set to the scrape's time left, so a statement waiting
+// on a lock gives up when nobody waits for it any more
+// (sqlServerLockTimeout). The account must still be read-only. When the
+// scrape's deadline comes, the driver asks the server to stop the statement.
+//
+// encrypt says how much of the connection TLS covers:
+//   - disable: none of it.
+//   - false: the login only. Its certificate is verified only as the tls
+//     keys say, as SQL Server's own tools do not verify it.
+//   - true and strict: all of it. strict uses TDS 8.0, with TLS before
+//     anything else.
+//
+// Unless encrypt is disable, a server that answers that it cannot encrypt
+// is refused rather than sent the login in clear. A named instance is
+// reached by its port, because finding it would ask the SQL Server Browser
 // over UDP, which the exporter's dialer refuses.
 func init() {
 	registerSQLDriver(&sqlDriver{
@@ -137,9 +143,9 @@ func sqlServerConnector(spec *sqlConnectSpec) (*mssql.Connector, error) {
 	connector := mssql.NewConnectorConfig(config)
 	connector.SessionInitSQL = sqlServerTextSize(spec.limit)
 	// The prelogin answer is read in clear unless the connection is TLS
-	// from its first byte (strict), so the guard reads it for every other
-	// setting; it refuses a server that cannot encrypt for encrypt false
-	// alone.
+	// from its first byte (strict). So the guard reads it for every other
+	// setting. It refuses a server that cannot encrypt only for encrypt
+	// false.
 	connector.Dialer = sqlServerDialer{
 		host: spec.host, dial: spec.dial,
 		guard:            config.Encryption != msdsn.EncryptionStrict,
@@ -149,16 +155,17 @@ func sqlServerConnector(spec *sqlConnectSpec) (*mssql.Connector, error) {
 }
 
 // sqlServerTextSize is the statement each connection runs when it is made
-// and before each use (mssql.Connector.SessionInitSQL), setting TEXTSIZE so
-// that the server sends at most twice the response limit, and two bytes, of
-// a varchar(max), nvarchar(max), varbinary(max), text, ntext or image value:
-// go-mssqldb reads such a value whole, as long as it is, before the limit
-// applies. The server cuts a longer value there, and a cut value is over the
-// limit as the exporter reads it, whatever it held: nvarchar text is two
-// bytes a character as sent and one at least as read, so it is refused by
-// the limit on the rows' values and never read cut. Other values are 8000
-// bytes at most, but xml and CLR types, which TEXTSIZE does not cover.
-// Empty, with no limit, the driver's own unlimited TEXTSIZE stays.
+// and before each use (mssql.Connector.SessionInitSQL). It sets TEXTSIZE so
+// that the server sends at most twice the response limit plus two bytes of
+// a varchar(max), nvarchar(max), varbinary(max), text, ntext or image
+// value. go-mssqldb reads such a value whole, however long, before the
+// limit applies. The server cuts a longer value at that size, and a cut
+// value is always over the limit as the exporter reads it. nvarchar text is
+// two bytes per character as sent and at least one as read. So a cut value
+// is refused by the limit on the rows' values and is never read cut. Other
+// values are at most 8000 bytes, except xml and CLR types, which TEXTSIZE
+// does not cover. With no limit the result is empty, and the driver's own
+// unlimited TEXTSIZE stays.
 func sqlServerTextSize(limit int64) string {
 	if limit <= 0 {
 		return ""
@@ -166,13 +173,13 @@ func sqlServerTextSize(limit int64) string {
 	return "SET TEXTSIZE " + strconv.FormatInt(min(limit, (math.MaxInt32-2)/2)*2+2, 10)
 }
 
-// sqlServerDialer hands the driver's connections to the exporter's dialer,
-// with the host's name rather than an address the driver looked up
+// sqlServerDialer hands the driver's connections to the exporter's dialer.
+// It passes the host's name rather than an address the driver looked up
 // (mssql.HostDialer), so the dialer resolves it and holds it to the policy.
-// guard says the server's prelogin answer is read in clear, and is checked
-// before the driver reads it (sqlServerPreloginGuard); allowUnencrypted
-// that an answer saying the server cannot encrypt is the driver's to take
-// (encrypt disable) or refuse (true), not the guard's.
+// guard says the server's prelogin answer is read in clear and checked
+// before the driver reads it (sqlServerPreloginGuard). allowUnencrypted says
+// that an answer saying the server cannot encrypt is for the driver to
+// accept (encrypt disable) or refuse (true), not for the guard.
 type sqlServerDialer struct {
 	host             string
 	dial             func(ctx context.Context, network, address string) (net.Conn, error)
@@ -202,17 +209,20 @@ var errSQLServerEmptyEncryption = errors.New("the server's answer to the prelogi
 	"check that the target is a SQL Server and that nothing between it and the exporter changes what it sends")
 
 // sqlServerPreloginGuard is a connection that reads the server's answer to
-// the driver's prelogin, its first message, before the driver does, and
+// the driver's prelogin, its first message, before the driver does. It
 // fails the read when that answer says the server does not support
-// encryption, unless allowUnencrypted, or when its ENCRYPTION option is
-// empty. With encrypt false the driver sends the login unencrypted to
-// such a server, and offers no hook to refuse it (go-mssqldb tds.go,
-// interpretPreloginResponse refuses that answer only for encrypt true);
-// and it reads the option's first byte without checking there is one
-// (interpretPreloginResponse, encryptBytes[0]), whatever encrypt is. The
-// answer is read as the driver reads it (readPrelogin): packets up to the
-// first with a status, then the option table; an answer the driver could not
-// read either is handed to it unchanged, for it to refuse.
+// encryption (unless allowUnencrypted), or when its ENCRYPTION option is
+// empty. The reasons:
+//   - With encrypt false the driver sends the login unencrypted to such a
+//     server and offers no hook to refuse it (go-mssqldb tds.go,
+//     interpretPreloginResponse refuses that answer only for encrypt true).
+//   - The driver reads the option's first byte without checking that it
+//     exists (interpretPreloginResponse, encryptBytes[0]), whatever encrypt
+//     is.
+//
+// The answer is read the way the driver reads it (readPrelogin): packets up
+// to the first with a status, then the option table. An answer the driver
+// could not read either is handed to it unchanged, for it to refuse.
 type sqlServerPreloginGuard struct {
 	net.Conn
 	allowUnencrypted bool
@@ -288,11 +298,11 @@ const sqlServerEncryptNotSupported = 2
 // ENCRYPTION option with no byte.
 const sqlServerEncryptEmpty = -2
 
-// sqlServerPreloginEncryption is the first byte of the ENCRYPTION option
-// (token 1) of a prelogin answer, the last one when it is given twice, as
-// the driver keeps it, sqlServerEncryptEmpty when that option has no byte,
-// or -1 when the driver could not read the option table or it has no such
-// option.
+// sqlServerPreloginEncryption returns the first byte of the ENCRYPTION
+// option (token 1) of a prelogin answer. When the option is given twice it
+// uses the last one, as the driver does. It returns sqlServerEncryptEmpty
+// when the option has no byte, and -1 when the driver could not read the
+// option table or the table has no such option.
 func sqlServerPreloginEncryption(payload []byte) int {
 	const terminator, traceID, encryption, optionSize = 0xff, 0x05, 0x01, 5
 	value := -1

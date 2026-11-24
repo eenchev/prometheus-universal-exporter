@@ -19,10 +19,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The amqp request type asks an AMQP 0-9-1 broker, RabbitMQ and the
-// brokers that speak its protocol, how deep its queues are, over AMQP
-// itself: where the management API is closed, a client that may connect
-// can still ask. Its target is the broker, host or host:port, port 5672, or
+// The amqp request type asks an AMQP 0-9-1 broker (RabbitMQ and brokers
+// that speak its protocol) how deep its queues are, over AMQP itself. So
+// where the management API is closed, a client allowed to connect can
+// still ask. Its target is the broker: host or host:port (port 5672), or
 // amqps://host for TLS on port 5671.
 //
 //	request:
@@ -32,15 +32,16 @@ import (
 //	  queues: [orders, emails]
 //
 // A scrape opens a connection, logs in with PLAIN, opens the virtual host,
-// and declares each queue passively, which creates nothing and answers how
-// many messages are ready in it and how many consumers it has. It then
-// closes the connection as the protocol has it. The answer is one JSON
-// document: what the broker says of itself, how long the login took, and
-// each queue with its counts. A queue the broker does not have is not a
-// failure: its entry says exists: false, so a rule decides.
+// and declares each queue passively. A passive declare creates nothing and
+// returns how many messages are ready in the queue and how many consumers
+// it has. The scrape then closes the connection as the protocol requires.
+// The answer is one JSON document: what the broker says about itself, how
+// long the login took, and each queue with its counts. A queue the broker
+// does not have is not a failure. Its entry says exists: false, and a rule
+// decides.
 //
-// Only the methods this needs are spoken: no message is published,
-// consumed or acknowledged, and nothing is declared but passively.
+// Only the methods this needs are implemented. No message is published,
+// consumed or acknowledged, and nothing is declared except passively.
 
 // AMQPConfig is an amqp collector's own request keys.
 type AMQPConfig struct {
@@ -424,10 +425,9 @@ func (r *amqpReader) longString() string {
 	return string(r.take(int(n)))
 }
 
-// table reads a field table's text values, by name, a table inside it
-// passed over: of the broker's properties the text ones are the ones a
-// rule reads. A type it does not know ends the reading, with what was read
-// kept.
+// table reads a field table's text values by name, skipping any nested
+// table: the text values are the broker properties a rule reads. A type it
+// does not know ends the reading, keeping what was read.
 func (r *amqpReader) table() map[string]string {
 	text := map[string]string{}
 	inner := amqpReader{b: []byte(r.longString())}

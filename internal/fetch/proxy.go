@@ -16,28 +16,29 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// An http or graphite collector may name the proxy its requests go through,
-// request.proxy_url, in place of the one the environment names for the whole
-// exporter (transport.go): a target only reachable through a proxy of its
-// own network, or one that must be reached directly although the rest of the
-// exporter's traffic goes through a proxy (model.ProxyDirect). Every request
-// of the collector goes through it, its login's, its redirects' and its
-// pages' included, whatever its host: there is no NO_PROXY of a collector,
-// and localhost goes through it too.
+// An http or graphite collector may name the proxy its requests go through
+// (request.proxy_url). It replaces the one the environment names for the
+// whole exporter (transport.go). Uses: a target reachable only through a
+// proxy on its own network, or one that must be reached directly although
+// the rest of the exporter's traffic uses a proxy (model.ProxyDirect).
+// Every request of the collector goes through it, whatever its host,
+// including its login, redirects and pages. A collector has no NO_PROXY,
+// and localhost goes through the proxy too.
 //
-// The proxy is part of the transport's settings, so collectors with
+// The proxy is part of the transport's settings. So collectors with
 // different proxies, or different credentials for one, never share a
-// connection pool, and a reload that changes the proxy gets a pool of its
-// own. Its credentials come from files (request.proxy_basic_auth_file), read
-// on every request, and never from the URL, which the configuration shows
-// to whoever reads it, and --dry-run and a debug report with it.
+// connection pool, and a reload that changes the proxy gets its own pool.
+// Its credentials come from files (request.proxy_basic_auth_file), read on
+// every request. They never come from the URL, because the configuration
+// shows the URL to whoever reads it, and so do --dry-run and a debug report.
 //
-// An http:// proxy is asked in plain text: it is sent an http target's
-// request whole, and asked to tunnel to an https target (CONNECT). An
-// https:// proxy is asked the same over TLS, verified against the system's
-// roots alone: request.tls is the target's, and a client certificate meant
-// for the target is not shown to the proxy. A socks5:// (or socks5h://)
-// proxy is asked to connect to the target by name, which it resolves.
+// An http:// proxy is asked in plain text. It is sent an http target's
+// whole request, and asked to tunnel to an https target (CONNECT). An
+// https:// proxy is asked the same over TLS, verified only against the
+// system's roots. request.tls belongs to the target, and a client
+// certificate meant for the target is not shown to the proxy. A socks5://
+// (or socks5h://) proxy is asked to connect to the target by name, which
+// the proxy resolves.
 
 // withProxy is settings with c's request.proxy_url and the files of its
 // credentials, and the request.unix_socket of an http collector, which
@@ -54,10 +55,10 @@ func withProxy(settings TransportSettings, c *model.Collector) TransportSettings
 	return settings
 }
 
-// transportProxy is the proxy function of a transport built for settings:
-// the environment's when the collector names none, nil, which is no proxy,
-// for model.ProxyDirect, and otherwise the collector's, with the credentials
-// its files hold as they are when the request is sent.
+// transportProxy returns the proxy function of a transport built for
+// settings: the environment's when the collector names none; nil (no
+// proxy) for model.ProxyDirect; otherwise the collector's, with the
+// credentials its files hold at the time the request is sent.
 func transportProxy(settings TransportSettings) (func(*http.Request) (*url.URL, error), *url.URL, error) {
 	switch settings.proxy {
 	case "":
@@ -83,11 +84,11 @@ func transportProxy(settings TransportSettings) (func(*http.Request) (*url.URL, 
 	}, u, nil
 }
 
-// proxyCredentialsError is a failure to read the proxy's credentials, which
-// Go's transport returns as the request's own: the files are read again by
-// a retry, which would wait out the backoff only to fail as the first
-// attempt did, so the request ends at once (fetcher.go), as one whose
-// basic_auth_file cannot be read does before it is sent.
+// proxyCredentialsError is a failure to read the proxy's credentials,
+// which Go's transport returns as the request's own error. A retry would
+// read the files again, wait out the backoff, and fail as the first
+// attempt did. So the request ends at once (fetcher.go), as a request whose
+// basic_auth_file cannot be read ends before it is sent.
 type proxyCredentialsError struct{ err error }
 
 func (e *proxyCredentialsError) Error() string { return e.err.Error() }
@@ -113,8 +114,8 @@ func readProxyCredentials(files model.ProxyBasicAuthFile) (username, password st
 
 // CheckProxy refuses a request.proxy_url that names no proxy a request can
 // be sent through, and a request.proxy_basic_auth_file without both its
-// paths, whether a collector or a defaults block writes them; "" and
-// model.ProxyDirect, and no files, pass.
+// paths, whether a collector or a defaults block writes them. "",
+// model.ProxyDirect and no files all pass.
 func CheckProxy(proxyURL string, files *model.ProxyBasicAuthFile) error {
 	if proxyURL != "" && proxyURL != model.ProxyDirect {
 		if _, err := parseProxyURL(proxyURL); err != nil {
@@ -127,12 +128,12 @@ func CheckProxy(proxyURL string, files *model.ProxyBasicAuthFile) error {
 	return nil
 }
 
-// ProxyURLPattern is what request.proxy_url may be, for the configuration's
-// JSON Schema: left out, direct, or a proxy's scheme, host and port, with
-// no credentials and nothing after the port. The scheme is of any case, as
-// the exporter reads it (url.Parse lowers it); it is spelled in classes
-// rather than with (?i), which JSON Schema's ECMA-262 patterns do not have.
-// What else it has to be is the exporter's to refuse.
+// ProxyURLPattern is the configuration's JSON Schema pattern for
+// request.proxy_url: left out, direct, or a proxy's scheme, host and port,
+// with no credentials and nothing after the port. The scheme may be in any
+// case, as the exporter reads it (url.Parse lowers it). It is spelled with
+// character classes rather than (?i), which JSON Schema's ECMA-262 patterns
+// lack. The exporter refuses anything else that is wrong.
 const ProxyURLPattern = `^$|^direct$|^([Hh][Tt][Tt][Pp][Ss]?|[Ss][Oo][Cc][Kk][Ss]5[Hh]?)://[^/?#@{}]+/?$`
 
 // proxySchemes are the schemes request.proxy_url may have: those Go's
@@ -141,8 +142,8 @@ var proxySchemes = []string{"http", "https", "socks5", "socks5h"}
 
 // parseProxyURL reads a request.proxy_url other than "" and
 // model.ProxyDirect: a scheme, a host and an optional port, and nothing
-// else. Its errors name it by its scheme and host alone (shownProxyURL),
-// never quoting the credentials, path or query written in it.
+// else. Its errors name the URL only by its scheme and host
+// (shownProxyURL), never quoting the credentials, path or query in it.
 func parseProxyURL(raw string) (*url.URL, error) {
 	if HasPathParams(raw) || strings.Contains(raw, "{{") {
 		return nil, errors.New("request.proxy_url has a placeholder; the proxy is the configuration's alone, and no probe parameter sets it")
@@ -189,22 +190,23 @@ func shownProxyURL(raw string) string {
 // against, nil for the system's roots. Only tests set it.
 var proxyTLSRoots *x509.CertPool
 
-// proxyTLSDialer is the DialTLSContext of a transport whose proxy is an
-// https:// one. Go's transport makes a TLS connection itself only for the
-// first hop, which with a proxy always set is the proxy: the handshake here
-// is the proxy's, against the system's roots and with no client
-// certificate, and the target's own handshake, with request.tls, is made
-// through the tunnel by the transport as without a proxy. Without this the
-// transport would greet the proxy with the target's TLS settings, showing it
-// the target's client certificate and expecting the target's server_name.
+// proxyTLSDialer is the DialTLSContext of a transport with an https://
+// proxy. Go's transport makes a TLS connection itself only for the first
+// hop, which is always the proxy when a proxy is set. So the handshake here
+// is with the proxy, against the system's roots and with no client
+// certificate. The transport makes the target's own handshake, with
+// request.tls, through the tunnel, as it does without a proxy. Without this
+// dialer, the transport would greet the proxy with the target's TLS
+// settings, showing it the target's client certificate and expecting the
+// target's server_name.
 //
 // The connection is handed over as a plain net.Conn (proxyConn). Given a
-// *tls.Conn, the transport would take it for the target's own: it would
-// report the finished handshake to the request's trace as the request's
-// TLS phase, a no-op of microseconds that left the target's real handshake
-// through the tunnel untimed, and keep the proxy's connection state as the
-// one the answer came on, which over plain HTTP is no connection of the
-// target's at all (HTTPTrip).
+// *tls.Conn, the transport would take it for the target's own connection.
+// It would report the finished handshake to the request's trace as the
+// request's TLS phase: a no-op of microseconds, leaving the target's real
+// handshake through the tunnel untimed. It would also keep the proxy's
+// connection state as the one the answer came on, which over plain HTTP is
+// not a connection to the target at all (HTTPTrip).
 func proxyTLSDialer(dial func(ctx context.Context, network, address string) (net.Conn, error), timeout time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := dial(ctx, network, address)
@@ -245,10 +247,11 @@ func (e *ProxyRefusedError) Error() string {
 	return fmt.Sprintf("the proxy refused the tunnel to %s: %s", e.Target, e.Status)
 }
 
-// refuseProxyConnect is every transport's OnProxyConnectResponse: a CONNECT
-// answered other than 200 fails as a ProxyRefusedError, where Go's own
-// error would be the proxy's reason phrase alone, which neither says it is
-// the proxy's nor can be told apart from any other error's text.
+// refuseProxyConnect is every transport's OnProxyConnectResponse. A
+// CONNECT answered with a status other than 200 fails as a
+// ProxyRefusedError. Go's own error would be only the proxy's reason
+// phrase, which neither says it came from the proxy nor can be told apart
+// from any other error's text.
 func refuseProxyConnect(_ context.Context, _ *url.URL, connect *http.Request, resp *http.Response) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil

@@ -18,32 +18,33 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// sftpLister lists a directory on the host as SFTP version 3
-// (draft-ietf-secsh-filexfer-02) lists one, a batch of entries at a time,
+// sftpLister lists a directory on the host the way SFTP version 3
+// (draft-ietf-secsh-filexfer-02) lists one: a batch of entries at a time,
 // each asked for only when the one before has been handed out. pkg/sftp,
-// which reads everything else, lists a directory only whole, every batch
-// until the end before it answers, so a directory of a million entries
-// would cost a million entries on every scrape before the bound on what a
-// scrape lists (maxListedEntries) applied. This one asks for the next batch
-// only when the directory read wants more, and stops when it stops.
+// which reads everything else, lists a directory only whole: it reads every
+// batch until the end before it answers. So a directory of a million
+// entries would cost a million entries on every scrape before the bound on
+// what a scrape lists (maxListedEntries) applied. This one asks for the
+// next batch only when the directory read wants more, and stops when it
+// stops.
 //
 // It speaks SFTP on a session of its own, opened on the connection for the
 // listing and closed when the listing ends, however it ends: at the end of
 // the directory, when the read stops listing or is abandoned, or on an
 // error. pkg/sftp's session is not shared because what it sends and
 // receives is its own. So a listing takes one SSH session beside the
-// connection's, which the host's limit on sessions (OpenSSH's MaxSessions,
-// 10 by default) must allow, one for each directory listed at once on the
-// connection.
+// connection's, one for each directory listed at once on the connection.
+// The host's limit on sessions (OpenSSH's MaxSessions, 10 by default) must
+// allow that.
 //
-// What the host sends is held to bounds before anything is made of it: a
-// packet past sftpMaxPacket is refused, as pkg/sftp refuses one, and so is
-// a count of names or of extended attributes larger than the rest of the
+// What the host sends is held to bounds before anything is made of it. A
+// packet past sftpMaxPacket is refused, as pkg/sftp refuses one. So is a
+// count of names or of extended attributes larger than the rest of the
 // packet could hold, before anything is allocated for them, and a name that
 // is empty or holds a / or a NUL.
 //
 // The conversation runs in a goroutine of its own (run), which ReadDir
-// waits for, so that abandon, which sftpSource.abandon calls at the probe's
+// waits for. So abandon, which sftpSource.abandon calls at the probe's
 // deadline, ends a listing the host stopped answering at once: ReadDir
 // returns, and the session is closed without waiting for the host.
 type sftpLister struct {
@@ -118,19 +119,20 @@ const (
 const sftpMaxPacket = 256 << 10
 
 // sftpDrainLimit is the most the lister reads of what the host still sends
-// on a listing's session once it has ended the session's input, before it
-// closes the session without waiting further: the answer to a request in
-// flight, when the listing was closed while it waited for one, and the
-// answer to the directory's CLOSE, each a packet of at most sftpMaxPacket.
-// A host sending more than that is not answering as an SFTP server does.
+// on a listing's session after the lister has ended the session's input.
+// Past it, the lister closes the session without waiting further. It covers
+// the answer to a request in flight, when the listing was closed while it
+// waited for one, and the answer to the directory's CLOSE, each a packet of
+// at most sftpMaxPacket. A host sending more than that is not answering as
+// an SFTP server does.
 const sftpDrainLimit = 2 * sftpMaxPacket
 
 // sftpMaxEmptyBatches is how many answers in a row to a request for
 // directory entries may hold no entry but . and .. (or none) before the
-// listing fails: a server sending one entry a batch sends two such, and one
+// listing fails. A server sending one entry a batch sends two such. One
 // that sends them without end would otherwise be asked again until the
-// probe's deadline, none of its answers counting toward the listing's
-// bound.
+// probe's deadline, and none of its answers would count toward the
+// listing's bound.
 const sftpMaxEmptyBatches = 16
 
 // sftpMinNameEntry is the fewest bytes one entry of a NAME packet takes: the
@@ -188,17 +190,17 @@ func (l *sftpLister) ReadDir(n int) ([]fs.DirEntry, error) {
 const sftpSessionCloseWait = 2 * time.Second
 
 // Close ends the listing. A listing that ended, or that waits for nothing
-// from the host, is waited for until run has ended, or until abandon: run
+// from the host, is waited for until run has ended, or until abandon. run
 // waits for the host to close its side of the session, at most
 // sftpSessionCloseWait (awaitHostClose), since the host counts the session
-// against its limit (OpenSSH's MaxSessions) until then, and a listing of the
-// next scrape would otherwise be refused a session the host has not freed
-// yet; then it closes the session, the host having closed its side or not.
-// Close has no timer of its own: one would end as run's does, and the
+// against its limit (OpenSSH's MaxSessions) until then. Otherwise a listing
+// of the next scrape would be refused a session the host has not freed
+// yet. Then run closes the session, whether or not the host closed its
+// side. Close has no timer of its own: one would end as run's does, and the
 // listing after it could start before run had remembered a host that keeps
 // sessions open. A listing waiting for the host's answer, to the session's
-// opening or to a request, is not waited for: its session is closed at
-// once, or, being opened, as soon as the host answers.
+// opening or to a request, is not waited for. Its session is closed at
+// once, or, if it is being opened, as soon as the host answers.
 func (l *sftpLister) Close() error {
 	if l.stop() {
 		select {
@@ -299,14 +301,14 @@ func (l *sftpLister) run() {
 }
 
 // awaitHostClose closes the directory and ends the input of the listing's
-// session, and reads what the host still sends on it until the host closes
-// its side, at most sftpDrainLimit bytes; all of it within
-// sftpSessionCloseWait, a host that does not read its input holding the
-// writes as one that does not close holds the read, and not past abandon.
-// A host that did not close it in time is remembered for the connection
-// before this returns, so the listings after it there, which may start once
-// Close has returned, wait for nothing: the scrape pays the wait once, and
-// the session is closed at once. The goroutine goes on after the session is
+// session. It then reads what the host still sends on it until the host
+// closes its side, at most sftpDrainLimit bytes. All of this happens within
+// sftpSessionCloseWait, and not past abandon: a host that does not read its
+// input holds the writes, as one that does not close holds the read. A host
+// that did not close it in time is remembered for the connection before
+// this returns. So the listings after it there, which may start once Close
+// has returned, wait for nothing: the scrape pays the wait once, and the
+// session is closed at once. The goroutine goes on after the session is
 // closed until the host confirms the close, which an SSH server does at
 // once, or the connection ends.
 func (l *sftpLister) awaitHostClose(c *sftpConversation) {
@@ -339,15 +341,15 @@ func (l *sftpLister) awaitHostClose(c *sftpConversation) {
 
 // sessionOnly is err, the error that ended the listing, unless it is the
 // listing's session ending under it (sftpSessionEnded) on a connection that
-// is still up: then it is errListingSessionEnded, which does not say the
-// connection was lost, so the connection is kept rather than dropped and
-// made again. A host's SFTP server may end its session on a request it
-// does not take, the host closing that session alone; and a session ends
-// too when the connection does, its channels closed with it, which is what
-// the mapping to a lost connection is for. Both read as the end of the
-// session's output, so the connection is asked: a keepalive@openssh.com
-// request, which an SSH server answers, refusing it or not, while the
-// connection is up, and which fails at once once it has ended, since
+// is still up. Then it is errListingSessionEnded, which does not say the
+// connection was lost, so the connection is kept instead of being dropped
+// and made again. A host's SFTP server may end its session on a request it
+// does not take, and the host closes that session alone. A session also
+// ends when the connection does, its channels closed with it; the mapping
+// to a lost connection is for that case. Both read as the end of the
+// session's output, so the connection is asked with a keepalive@openssh.com
+// request. An SSH server answers it while the connection is up, refusing it
+// or not. It fails at once after the connection has ended, since
 // x/crypto/ssh ends the connection's answers to requests right after its
 // channels when it ends. A connection that does not answer within
 // sftpConnectionCheckWait, or before the listing is abandoned, is taken for
@@ -557,10 +559,10 @@ func (c *sftpConversation) fail(err error) error {
 }
 
 // sftpSessionEnded is the error of a session that ended under the listing,
-// as pkg/sftp reports one: not io.EOF, which is the end of the directory,
-// and lost, so the read is tried once more on a new connection, as when
-// the connection's own session ends, unless the connection is still up
-// (sessionOnly).
+// as pkg/sftp reports one. It is not io.EOF, which is the end of the
+// directory, and it is lost, so the read is tried once more on a new
+// connection, as when the connection's own session ends, unless the
+// connection is still up (sessionOnly).
 func sftpSessionEnded(err error) error {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return fmt.Errorf("the SSH session listing the directory ended: %w", sftp.ErrSSHFxConnectionLost)

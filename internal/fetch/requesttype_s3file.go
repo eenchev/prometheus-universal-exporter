@@ -22,10 +22,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The s3file request type is localfile for an object store: it reads an
+// The s3file request type is localfile for an object store. It reads an
 // object, or every matching object under a prefix, from a bucket of Amazon
-// S3 or of a store that speaks its API — MinIO, Ceph's RADOS Gateway,
-// Cloudflare R2, Google Cloud Storage's XML API — and decodes, transforms
+// S3 or of a store that speaks its API (MinIO, Ceph's RADOS Gateway,
+// Cloudflare R2, Google Cloud Storage's XML API). It decodes, transforms
 // and checks it exactly as localfile does a file.
 //
 //	request:
@@ -36,32 +36,33 @@ import (
 //	  endpoint: https://minio.example  # optional: a store other than AWS
 //	  path_style: true                 # optional: the bucket in the URL's path
 //
-// The probe's target is the bucket, bucket or s3://bucket. Everything the
-// read shares with localfile — the path rules, a file read again when it
-// changes under the read, max_age, the response limit, the directory rules
-// — is the same code (filereads.go, localfile_directory.go), over the S3 API
-// instead of an os.Root (s3source.go).
+// The probe's target is the bucket, written bucket or s3://bucket.
+// Everything the read shares with localfile is the same code
+// (filereads.go, localfile_directory.go), over the S3 API instead of an
+// os.Root (s3source.go). This covers the path rules, a file read again
+// when it changes during the read, max_age, the response limit and the
+// directory rules.
 //
-//   - Credentials are the AWS SDK's default chain — the environment, a web
-//     identity token (IRSA), the shared files, the container's or the
-//     instance's role — unless access_key_id_file and secret_access_key_file
-//     name static ones, which are read at every request, as every other
-//     credential file is.
-//   - A request is signed with SigV4 for the region, and sent once: the
-//     SDK's retries are switched off, as file reads retry nothing, and the
-//     next scrape tries again.
+//   - Credentials come from the AWS SDK's default chain (the environment, a
+//     web identity token (IRSA), the shared files, the container's or the
+//     instance's role), unless access_key_id_file and
+//     secret_access_key_file name static ones. Like every other credential
+//     file, those are read at every request.
+//   - A request is signed with SigV4 for the region and sent once. The
+//     SDK's retries are switched off, since file reads retry nothing, and
+//     the next scrape tries again.
 //   - allowed_targets and denied_targets name buckets, by name or glob,
-//     since a target is a bucket: the store reached is the configuration's.
+//     since a target is a bucket. The store reached is the configuration's.
 //
-// The type is in the default build, with the AWS SDK it alone of the types
-// imports; a build of select_request_types without request_type_s3file
+// The type is in the default build. It is the only type that imports the
+// AWS SDK. A build of select_request_types without request_type_s3file
 // links none of the SDK's S3 client.
 
 // S3FileConfig is an s3file collector's own request keys: the region
-// requests are signed for, the URL of an S3-compatible store in place of
-// AWS's, and whether the bucket is named in the URL's path rather than its
-// host; and the files of static credentials, read at each request, without
-// which the AWS SDK's default chain finds credentials.
+// requests are signed for, the URL of an S3-compatible store instead of
+// AWS's, whether the bucket is named in the URL's path rather than its
+// host, and the static credential files, read at each request. Without
+// those files, the AWS SDK's default chain finds credentials.
 type S3FileConfig struct {
 	Region              string `yaml:"region,omitempty"`
 	Endpoint            string `yaml:"endpoint,omitempty"`
@@ -230,10 +231,10 @@ func checkS3Endpoint(raw string) error {
 	return nil
 }
 
-// checkS3CredentialKeys holds the static credential files to their rules:
-// the access key's two halves together, a session token only with them,
-// none written with blanks alone, and no placeholder in any, since a
-// credential file is named as it is.
+// checkS3CredentialKeys checks the static credential files against their
+// rules: both halves of the access key together, a session token only
+// with them, none written with blanks alone, and no placeholder in any,
+// since a credential file is named literally.
 func checkS3CredentialKeys(accessKeyIDFile, secretAccessKeyFile, sessionTokenFile string) error {
 	keys := []struct{ name, value string }{{"request.access_key_id_file", accessKeyIDFile}, {"request.secret_access_key_file", secretAccessKeyFile}, {"request.session_token_file", sessionTokenFile}}
 	for _, key := range keys {
@@ -311,8 +312,8 @@ func s3FileLabel(target string, c *model.Collector, overrides RequestOverrides) 
 // checkBucket applies the collector's allowed_targets and denied_targets to
 // a bucket, as names: the lists hold no address (validateS3FileRequest).
 // The cloud metadata addresses the other types refuse by default are not
-// checked, since the host a request reaches is the configuration's
-// endpoint, or AWS's, and never one a probe names.
+// checked. The host a request reaches is the configured endpoint, or
+// AWS's, and never one a probe names.
 func checkBucket(policy *targetPolicy, bucket string) error {
 	if policy == nil {
 		return nil
@@ -521,10 +522,11 @@ func (f s3FileCredentials) Retrieve(context.Context) (aws.Credentials, error) {
 }
 
 // checkS3Files reads a collector's static credential files as a request
-// reads them, for --dry-run: a file missing, unreadable or empty. Loading
-// the configuration reads none of them, since a file may be mounted after
-// the exporter starts. The default chain is not asked: what it finds
-// depends on where the exporter runs, which a dry run need not be.
+// reads them, for --dry-run, and reports a file that is missing,
+// unreadable or empty. Loading the configuration reads none of them, since
+// a file may be mounted after the exporter starts. The default chain is
+// not asked: what it finds depends on where the exporter runs, and a dry
+// run may run elsewhere.
 func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
 	if t != nil || s3FileRequest(c).AccessKeyIDFile == "" {
 		return nil
@@ -536,11 +538,12 @@ func checkS3Files(c *model.Collector, t *model.StaticTarget) []string {
 	return nil
 }
 
-// s3FileSchemaRule is what an s3file collector's request requires, as the
-// exporter does (validateS3FileRequest): root, written with something
-// other than ""; access_key_id_file and secret_access_key_file together, if
-// at all; and session_token_file only beside them. "" is a key left out to
-// the exporter, so each is "written" when it is something else (SchemaWrittenKey).
+// s3FileSchemaRule is what an s3file collector's request requires,
+// matching the exporter (validateS3FileRequest): root, written with
+// something other than ""; access_key_id_file and secret_access_key_file
+// together, if at all; and session_token_file only beside them. The
+// exporter treats "" as a key left out, so each key counts as "written"
+// when it is something else (SchemaWrittenKey).
 func s3FileSchemaRule() map[string]any {
 	rule := SchemaWrittenKey("root")
 	rule["allOf"] = []any{

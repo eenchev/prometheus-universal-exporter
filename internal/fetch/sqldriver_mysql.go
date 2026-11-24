@@ -21,13 +21,13 @@ import (
 // statement runs in a transaction started READ ONLY. multiStatements stays
 // off, so the server refuses two statements joined with ;, and the
 // arguments are sent bound, never written into the statement. The driver
-// closes the connection when the scrape's deadline comes, and the server
-// ends the statement only when it notices; so the server is also told to
-// end it at the scrape's time left, in the transaction before it, as
-// postgres's statement_timeout is: MySQL by max_execution_time, MariaDB by
-// max_statement_time, a server of neither kind, or one older than the
-// variable, by nothing (mysqlStatementTimeout). Which the server is, it
-// said when asked once on the connection (mysqlRun).
+// closes the connection when the scrape's deadline comes, but the server
+// ends the statement only when it notices. So the server is also told to end
+// it at the scrape's time left, in the transaction before it, as with
+// postgres's statement_timeout. MySQL uses max_execution_time, MariaDB uses
+// max_statement_time, and a server of neither kind, or one older than the
+// variable, uses nothing (mysqlStatementTimeout). Which kind the server is
+// comes from asking it once on the connection (mysqlRun).
 func init() {
 	registerSQLDriver(&sqlDriver{
 		name:      SQLDriverMySQL,
@@ -59,11 +59,11 @@ func mysqlServerError(err error) (string, bool) {
 	return code, true
 }
 
-// mysqlRun runs a statement in a read-only transaction, the server's own
-// time limit set first (mysqlStatementTimeout). The server's version is asked
-// once on a connection, the first time a statement runs on it, and kept
-// with it: SELECT VERSION(), outside the transaction, within the scrape's
-// deadline.
+// mysqlRun runs a statement in a read-only transaction, after setting the
+// server's own time limit (mysqlStatementTimeout). The server's version is
+// asked once on a connection, the first time a statement runs on it, and
+// kept with it. The query is SELECT VERSION(), outside the transaction,
+// within the scrape's deadline.
 func mysqlRun(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	var guarded *sqlGuardedConn
 	_ = conn.Raw(func(dc any) error {
@@ -90,10 +90,10 @@ func mysqlRun(ctx context.Context, conn *sql.Conn, statement string, args []any,
 		return mysqlStatementTimeout(version, left)
 	}
 	rows, done, err := sqlReadOnlyTx(setup)(ctx, conn, statement, args, timeout)
-	// A server that says it is a version that has the variable and does
-	// not know it — a proxy speaking for another server, as ProxySQL or
-	// Vitess may — is set it no more on the connection, and the statement
-	// runs without it, rather than every scrape of it failing.
+	// A server may say it is a version that has the variable and yet not know
+	// it, such as a proxy speaking for another server, as ProxySQL or Vitess
+	// may. The variable is then no longer set on the connection, and the
+	// statement runs without it, rather than every scrape of it failing.
 	var step *sqlStepError
 	if limited && err != nil && errors.As(err, &step) && strings.HasPrefix(step.step, "running SET SESSION ") && mysqlUnknownVariable(err) && ctx.Err() == nil {
 		if guarded != nil {
@@ -112,12 +112,12 @@ func mysqlUnknownVariable(err error) bool {
 	return errors.As(err, &myErr) && myErr.Number == 1193
 }
 
-// mysqlStatementTimeout is what sets the server's own time limit on the
-// statements of the session to the scrape's time left, a millisecond at
-// least, by the version the server gave: MariaDB's max_statement_time, in
-// seconds, from 10.1.1, and MySQL's max_execution_time, in milliseconds,
-// which bounds a SELECT, from 5.7.8. A server older than its variable, or
-// whose version reads as neither's, is set nothing, rather than refuse
+// mysqlStatementTimeout returns what sets the server's own time limit on the
+// session's statements to the scrape's time left, at least a millisecond. It
+// depends on the version the server gave. MariaDB from 10.1.1 uses
+// max_statement_time, in seconds. MySQL from 5.7.8 uses max_execution_time,
+// in milliseconds, which bounds a SELECT. A server older than its variable,
+// or whose version reads as neither's, is set nothing, rather than refuse
 // every scrape over a variable it does not know.
 func mysqlStatementTimeout(version string, timeout time.Duration) []string {
 	if timeout <= 0 {
@@ -197,10 +197,10 @@ func mysqlConfig(spec *sqlConnectSpec) *mysql.Config {
 	return config
 }
 
-// mysqlDial is the exporter's dialer, its TCP connections handed to the
-// driver as another type: the driver switches TCP keepalives on, at the
+// mysqlDial is the exporter's dialer, with its TCP connections handed to the
+// driver as another type. The driver switches TCP keepalives on, at the
 // operating system's period, on a connection that is a *net.TCPConn
-// (go-sql-driver/mysql connector.go, Connect), which would undo the
+// (go-sql-driver/mysql connector.go, Connect). That would undo the
 // keepalives the dialer set, or switched off. The connection still offers
 // its file descriptor (syscall.Conn), which the driver's check of an idle
 // connection reads.

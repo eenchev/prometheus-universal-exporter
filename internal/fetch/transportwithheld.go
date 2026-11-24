@@ -8,21 +8,26 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A failed fetch's error names addresses of the exporter's side of the
-// network as Go's packages write them: the address and port a connection was
-// made from (`read tcp 10.0.0.7:51234->10.1.2.3:443`), the proxy a request
-// went through (`proxyconnect tcp: dial tcp 10.0.0.5:3128`, everything a
-// connection to it failed with, a SOCKS proxy's failure, `socks connect tcp
-// 10.0.0.5:1080->...`, whole, and a proxy's words in refusing a tunnel,
-// ProxyRefusedError), the name
-// server a lookup asked (`lookup db on 10.96.0.10:53`), and, in the text of
-// a resolver's exchange or a gRPC status, the same source address. Those are
-// the operator's: the pod's address, the proxy's and the cluster's resolver
-// are no part of what a probe's caller asked for, and neither is the path of
-// the Unix socket a request went to (`dial unix /var/run/docker.sock`). So
-// the error is marked as the operator's (model.WithOperatorDetail), and the
-// caller is told it with each of them withheld (model.WithheldMark); the
-// address the connection went to, which the caller named, stays. The log, a debug report and, with
+// A failed fetch's error names addresses on the exporter's side of the
+// network, in the forms Go's packages write them:
+//   - the address and port a connection was made from
+//     (`read tcp 10.0.0.7:51234->10.1.2.3:443`);
+//   - the proxy a request went through
+//     (`proxyconnect tcp: dial tcp 10.0.0.5:3128`), including everything a
+//     connection to it failed with, a SOCKS proxy's failure in full
+//     (`socks connect tcp 10.0.0.5:1080->...`), and a proxy's words when
+//     refusing a tunnel (ProxyRefusedError);
+//   - the name server a lookup asked (`lookup db on 10.96.0.10:53`);
+//   - the same source address in the text of a resolver's exchange or a
+//     gRPC status.
+//
+// These belong to the operator. The pod's address, the proxy's and the
+// cluster's resolver are not part of what a probe's caller asked for, and
+// neither is the path of the Unix socket a request went to
+// (`dial unix /var/run/docker.sock`). So the error is marked as the
+// operator's (model.WithOperatorDetail), and the caller sees it with each
+// of them withheld (model.WithheldMark). The address the connection went
+// to, which the caller named, stays. The log, a debug report and, with
 // --web.debug=full, the status page have the whole text.
 //
 // The addresses are read from the errors' types, as sameFetchFailure reads
@@ -75,11 +80,11 @@ func appendTransportParts(parts []string, e error) []string {
 			break
 		}
 		// A SOCKS proxy's failure (socks connect) is written with the
-		// proxy's address where the source would be, and the handshake's
-		// own words after it: the whole of it is of the proxy, withheld as
-		// a proxyconnect failure is below, and, should the text have been
-		// rewritten past matching, the proxy's address at least, by the
-		// source's rule.
+		// proxy's address in place of the source and the handshake's own
+		// words after it. All of it belongs to the proxy, so it is withheld
+		// like a proxyconnect failure below. If the text was rewritten so it
+		// no longer matches, at least the proxy's address is withheld, by
+		// the source address rule.
 		if strings.HasPrefix(e.Op, "socks ") {
 			add(e.Error(), e.Op+" "+e.Net+": "+model.WithheldMark)
 		}
@@ -97,11 +102,11 @@ func appendTransportParts(parts []string, e error) []string {
 		if strings.HasPrefix(e.Net, "unix") && e.Addr != nil {
 			add(e.Addr.String(), model.WithheldMark)
 		}
-		// Everything a connection to the proxy failed with is of the
+		// Everything a connection to the proxy failed with belongs to the
 		// proxy: its address, the name it is reached by in a failed
-		// lookup, the names of an https proxy's certificate. So the
-		// whole of it is withheld, and, should the text have been
-		// rewritten past matching, the address of the dial at least.
+		// lookup, and the names in an https proxy's certificate. So all of
+		// it is withheld. If the text was rewritten so it no longer
+		// matches, at least the dial's address is withheld.
 		if e.Op == "proxyconnect" && e.Err != nil {
 			prefix := "proxyconnect " + e.Net + ": "
 			add(prefix+e.Err.Error(), prefix+model.WithheldMark)

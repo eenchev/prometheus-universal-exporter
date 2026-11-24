@@ -17,10 +17,10 @@ import (
 	"hash"
 )
 
-// SNMPv3's User-based Security Model (RFC 3414): a user's passwords made
-// keys for the agent they are sent to, the message signed with HMAC
-// (RFC 3414 § 6 and § 7, RFC 7860 for SHA-2) and its scoped PDU encrypted
-// with DES-CBC (RFC 3414 § 8) or AES-CFB (RFC 3826, and the AES-192 and
+// SNMPv3's User-based Security Model (RFC 3414). A user's passwords are made
+// into keys for the agent they are sent to. The message is signed with HMAC
+// (RFC 3414 § 6 and § 7, RFC 7860 for SHA-2). Its scoped PDU is encrypted
+// with DES-CBC (RFC 3414 § 8) or AES-CFB (RFC 3826, plus the AES-192 and
 // AES-256 that RFC 3826 leaves out, by the two ways agents extend the key).
 
 // snmpAuth is an authentication protocol: its hash, and how many bytes of
@@ -51,11 +51,10 @@ type snmpPriv struct {
 	extend func(auth snmpAuth, key, engineID []byte, want int) []byte
 }
 
-// snmpPrivs are the privacy protocols by their names in the
-// configuration: AES192 and AES256 extend a short key as
-// draft-blumenthal-aes-usm-04 does, AES192C and AES256C as
-// draft-reeder-snmpv3-usm-3desede does, which Cisco's agents and many
-// others follow.
+// snmpPrivs are the privacy protocols by their configuration names. AES192
+// and AES256 extend a short key as draft-blumenthal-aes-usm-04 does. AES192C
+// and AES256C extend it as draft-reeder-snmpv3-usm-3desede does, which
+// Cisco's agents and many others follow.
 var snmpPrivs = map[string]snmpPriv{
 	"DES":     {"DES", true, 16, nil},
 	"AES":     {"AES", false, 16, nil},
@@ -141,11 +140,11 @@ func snmpSign(auth snmpAuth, key, message []byte) []byte {
 	return mac.Sum(nil)[:auth.trunc]
 }
 
-// snmpEncrypt encrypts a scoped PDU, the privacy parameters with it:
-// DES-CBC under the first 8 bytes of the key, its IV the last 8 XOR the
-// salt, the plaintext padded to whole blocks (RFC 3414 § 8.1.1.1); or
-// AES-CFB-128, its IV the engine's boots and time and the salt
-// (RFC 3826 § 3.1.2.1). salt is 8 bytes, which the agent is sent.
+// snmpEncrypt encrypts a scoped PDU, with the privacy parameters. DES-CBC
+// uses the first 8 bytes of the key, with the last 8 XOR the salt as its IV,
+// and pads the plaintext to whole blocks (RFC 3414 § 8.1.1.1). AES-CFB-128
+// uses the engine's boots and time and the salt as its IV
+// (RFC 3826 § 3.1.2.1). salt is 8 bytes and is sent to the agent.
 func snmpEncrypt(priv snmpPriv, key []byte, boots, engineTime uint32, salt, plain []byte) ([]byte, error) {
 	if priv.des {
 		block, err := des.NewCipher(key[:8]) //nolint:gosec // G405: SNMPv3's DES privacy

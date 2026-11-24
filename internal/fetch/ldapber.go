@@ -16,11 +16,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The ldap request type speaks LDAPv3 (RFC 4511) itself, over the standard
-// library alone: the few operations a scrape needs, encoded and decoded in
-// BER, the Basic Encoding Rules LDAP's messages are written in, as RFC 4511
-// § 5.1 restricts them: definite lengths only, and strings primitive. An
-// element is a tag, a length and that many bytes of content:
+// The ldap request type implements LDAPv3 (RFC 4511) itself, using only
+// the standard library. It covers the few operations a scrape needs,
+// encoded and decoded in BER (the Basic Encoding Rules LDAP messages are
+// written in) with the restrictions of RFC 4511 § 5.1: definite lengths
+// only, and primitive strings. An element is a tag, a length and that many
+// bytes of content:
 //
 //	30 0c                 SEQUENCE of 12 bytes: an LDAPMessage
 //	   02 01 01           INTEGER 1: its messageID
@@ -29,16 +30,16 @@ import (
 //	      04 00 04 00     the matched DN and the diagnostic message, empty
 //
 // Everything the server sends is read against one budget, the collector's
-// response limit, counted in the bytes of its messages as they come off the
-// wire. A message's length is checked against what is left of the budget
-// before a byte of its content is read, and nothing is held for it beyond
-// what the server has actually sent, so a length of a gigabyte followed by
-// nothing costs the bytes that came and a failed scrape, never a gigabyte.
-// A message, once read whole, is decoded only as deep as the operations'
-// own structures go, each element's length checked against what encloses
-// it; a string that is constructed, an indefinite length, a length of more
-// than four bytes and a tag of more than one byte are refused, none of them
-// being LDAP.
+// response limit, counted in message bytes as they come off the wire. A
+// message's length is checked against the remaining budget before any of
+// its content is read. Nothing is held for it beyond what the server has
+// actually sent, so a declared length of a gigabyte followed by nothing
+// costs only the bytes that arrived and a failed scrape, never a gigabyte.
+// Once a message is read in full, it is decoded only as deep as the
+// operations' own structures go, and each element's length is checked
+// against its enclosing element. Constructed strings, indefinite lengths,
+// lengths of more than four bytes and tags of more than one byte are
+// refused, since none of them is LDAP.
 
 // ldapMaxLengthBytes is the most bytes a long-form length may take: four
 // say up to 4 GiB, far past any response limit.
@@ -329,10 +330,10 @@ func (s *ldapConn) readMessage() (*ldapMessage, error) {
 	return m, nil
 }
 
-// await reads the server's message to the request of the ID: a message of
-// ID 0, the server's notice that it is closing the connection, fails the
-// scrape with its reason, and a message of another ID is no answer this
-// client waits for.
+// await reads the server's message answering the request with the given
+// ID. A message with ID 0 is the server's notice that it is closing the
+// connection, and fails the scrape with its reason. A message with another
+// ID is not an answer this client waits for.
 func (s *ldapConn) await(id int64) (*ldapMessage, error) {
 	m, err := s.readMessage()
 	if err != nil {
@@ -462,10 +463,9 @@ type ldapEntry struct {
 	Attributes map[string][]string `json:"attributes"`
 }
 
-// errLDAPNotText is the failure of an entry holding bytes that are not
-// UTF-8: the document is JSON, whose strings are text, and a value put in
-// it would have each such byte replaced with U+FFFD, a different value,
-// with nothing to say so.
+// errLDAPNotText is the failure for an entry holding bytes that are not
+// UTF-8. The document is JSON, whose strings are text, so each such byte
+// would be replaced with U+FFFD, silently giving a different value.
 var errLDAPNotText = errors.New("holds bytes that are not UTF-8 text, which the JSON document cannot hold as they are; leave binary attributes, such as objectGUID, objectSid or jpegPhoto, out of attributes")
 
 // decodeLDAPEntry reads a SearchResultEntry. With keep false only its DN
@@ -528,10 +528,10 @@ func decodeLDAPEntry(content []byte, keep bool) (*ldapEntry, error) {
 // ldapPagedResultsOID is the Simple Paged Results control's (RFC 2696).
 const ldapPagedResultsOID = "1.2.840.113556.1.4.319"
 
-// ldapPagedControl writes the Simple Paged Results control asking for a
-// page of size entries after cookie, "" for the first. It is not critical,
-// so a server without it answers every entry in one go instead of
-// refusing the search.
+// ldapPagedControl writes the Simple Paged Results control that asks for a
+// page of size entries after cookie ("" for the first page). The control
+// is not critical, so a server that lacks it returns every entry at once
+// instead of refusing the search.
 func ldapPagedControl(size int, cookie string) []byte {
 	value := berElement(berSequence, berInt(berInteger, int64(size)), berString(berOctetString, cookie))
 	return berElement(berSequence, berString(berOctetString, ldapPagedResultsOID), berBool(false), berElement(berOctetString, value))

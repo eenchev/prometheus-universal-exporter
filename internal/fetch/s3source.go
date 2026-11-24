@@ -22,22 +22,22 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// An s3file read reads through the S3 API what localfile reads through an
-// os.Root (filereads.go): s3Source is the fileSource of request.root in a
-// bucket. A bucket has no directories, only keys, so root is a key prefix
-// read as a directory: root /exports/app is the keys that start with
-// exports/app/, and the file app.prom under it the key exports/app/app.prom.
-// Every name is checked lexically before it is joined onto the prefix, as
-// localfile's are, and there are no links to follow, so the lexical check
-// is the whole confinement.
+// An s3file read uses the S3 API the way localfile uses an os.Root
+// (filereads.go): s3Source is the fileSource of request.root in a bucket.
+// A bucket has no directories, only keys, so root is a key prefix treated
+// as a directory. Root /exports/app is the keys that start with
+// exports/app/, and the file app.prom under it is the key
+// exports/app/app.prom. Every name is checked lexically before it is
+// joined onto the prefix, as in localfile. There are no links to follow,
+// so the lexical check is the whole confinement.
 //
-// An object is a regular file: its size is its Content-Length, its
-// modification time its Last-Modified. Stat is a HeadObject, OpenFile a
-// GetObject and a directory's listing ListObjectsV2 with the delimiter /,
+// An object is a regular file. Its size is its Content-Length and its
+// modification time is its Last-Modified. Stat is a HeadObject, OpenFile a
+// GetObject, and a directory listing ListObjectsV2 with the delimiter /,
 // whose common prefixes are the directory's subdirectories. A listing
-// describes every object it lists, so the Stat that reading a directory
-// asks of each is answered from it, rather than with a HeadObject apiece,
-// until a GetObject finds the object changed since (OpenFile).
+// describes every object it lists. So the Stat that reading a directory
+// does on each entry is answered from the listing, not with one HeadObject
+// per entry, until a GetObject finds the object has changed (OpenFile).
 
 // s3Source is request.root in a bucket, through the S3 API.
 type s3Source struct {
@@ -249,15 +249,15 @@ func (d *s3Dir) ReadDir(n int) ([]fs.DirEntry, error) {
 
 func (d *s3Dir) Close() error { return nil }
 
-// s3Told is err, a failed request's error, marked as the operator's
+// s3Told returns err, a failed request's error, marked as the operator's
 // (model.WithOperatorDetail) when the store answered it or the SDK found no
-// credentials: the store's message names the account and the principal the
-// request was made as (`User: arn:aws:iam::123456789012:role/exporter is
-// not authorized ...`), and the SDK's credential chain the sources it tried,
-// their files and endpoints. A probe's caller is told the operation, the
-// status and the store's error code, or that no credentials were found,
-// and that the rest is in the exporter's log. A failure of the network is
-// left as it is.
+// credentials. The store's message names the account and the principal
+// the request was made as (`User: arn:aws:iam::123456789012:role/exporter
+// is not authorized ...`). The SDK's credential chain names the sources it
+// tried, with their files and endpoints. A probe's caller is told the
+// operation, the status and the store's error code, or that no credentials
+// were found, and that the rest is in the exporter's log. A network failure
+// is left unchanged.
 func s3Told(err error) error {
 	if err == nil {
 		return nil
@@ -283,10 +283,10 @@ func s3Told(err error) error {
 	return err
 }
 
-// s3Error is a failed request's error as the file reads word theirs
-// (localFileError): an object that is not there is fs.ErrNotExist, and an
-// answer of 403 says what the credentials lack. Anything else is the SDK's
-// error, which names the operation, the status and the store's own code.
+// s3Error returns a failed request's error in the form the file reads use
+// (localFileError). A missing object is fs.ErrNotExist, and a 403 answer
+// says what the credentials lack. Anything else is the SDK's error, which
+// names the operation, the status and the store's own code.
 func s3Error(err error) error {
 	err = s3Told(err)
 	var api smithy.APIError

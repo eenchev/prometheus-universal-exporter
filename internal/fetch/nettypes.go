@@ -18,11 +18,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the smtp, modbus, mqtt, websocket, ftp, imap, pop3, sip, amqp and nats request types share: each
-// reaches one server at host:port over TCP, or over TLS on it, through the
-// collector's target policy, within the scrape's deadline, on a connection
-// of the scrape's own. The types are opt-in, so this file is in no build
-// that has none of them.
+// Shared code of the smtp, modbus, mqtt, websocket, ftp, imap, pop3, sip,
+// amqp and nats request types. Each reaches one server at host:port over
+// TCP, or over TLS on it, through the collector's target policy, within the
+// scrape's deadline, on a connection of the scrape's own. The types are
+// opt-in, so a build that has none of them leaves this file out.
 
 // netAddress is a target of one of these types: its scheme, in lower case
 // and "" when the target has none, the host as the target policy judges it,
@@ -151,7 +151,7 @@ func (c *netConn) close() {
 	_ = c.Conn.Close() //nolint:staticcheck // the connection's own Close, by name beside close
 }
 
-// secure begins TLS on the connection, cfg's server name host unless the
+// secure starts TLS on the connection. cfg's server name is host unless the
 // tls block names one. Nothing may be buffered: bytes that came before the
 // handshake came in plaintext, where anyone on the way could have written
 // them, and would be read as the server's (CVE-2011-0411 is the server's
@@ -197,10 +197,10 @@ func netDial(ctx context.Context, address netAddress, cfg *tls.Config) (*netConn
 	return c, nil
 }
 
-// netFailure is the failure of a read, a write or a handshake: the scrape's
-// deadline or cancellation when that is what ended it, since the
-// connection's deadline is set to make it end, and its timer can fire
-// before the context's own.
+// netFailure returns the failure of a read, a write or a handshake. When the
+// scrape's deadline or cancellation ended it, that is the failure: the
+// connection's deadline is set to make it end, and its timer can fire before
+// the context's own.
 func netFailure(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
 		return fmt.Errorf("%w (%w)", ctxErr, err)

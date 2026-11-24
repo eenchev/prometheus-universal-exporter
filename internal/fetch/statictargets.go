@@ -11,20 +11,19 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A static target file in force is read by the scrapes while a reload checks
-// it against the configuration just read (CheckTargetRequest), so that check
-// never writes into it: the spellings a scrape compares — a class of
+// Scrapes read the active static target file while a reload checks it
+// against the newly read configuration (CheckTargetRequest), so the check
+// never writes into it. The spellings a scrape compares (a class of
 // accept_status and retry.statuses in lower case, accept_codes and
-// retry.codes in upper case — are written once,
-// by NormalizeTargetRequest, when the file is loaded and nothing reads it
-// yet, and the check only reads.
+// retry.codes in upper case) are written once by NormalizeTargetRequest,
+// when the file is loaded and nothing reads it yet. The check only reads.
 
 // NormalizeTargetRequest writes a static target's request.accept_status,
-// request.retry.statuses, request.accept_codes and request.retry.codes as a
-// scrape compares them: a class in lower case (canonicalStatus), and codes
-// trimmed and in upper case. It is called once,
-// when the target file is loaded; whether each entry is one the collector's
-// request type takes is CheckTargetRequest's to say.
+// request.retry.statuses, request.accept_codes and request.retry.codes in
+// the form a scrape compares: a class in lower case (canonicalStatus), and
+// codes trimmed and in upper case. It is called once, when the target file
+// is loaded. Whether each entry is valid for the collector's request type
+// is for CheckTargetRequest to decide.
 func NormalizeTargetRequest(t *model.StaticTarget) {
 	for i, entry := range t.Request.AcceptStatus {
 		t.Request.AcceptStatus[i] = canonicalStatus(entry)
@@ -49,10 +48,10 @@ func checkAcceptStatus(entries []string) error {
 }
 
 // checkTargetRetryStatuses checks a static target's request.retry.statuses
-// as the collector's are checked, and, where the target sets it or its own
-// accept_status, refuses an entry the accept_status in force for the target
-// accepts whole, which could never be retried (checkRetryStatuses). It
-// writes nothing into the target.
+// the same way the collector's are checked. Where the target sets it or its
+// own accept_status, it also refuses an entry that the target's effective
+// accept_status accepts entirely, since it could never be retried
+// (checkRetryStatuses). It writes nothing into the target.
 func checkTargetRetryStatuses(t *model.StaticTarget, c *model.Collector) error {
 	var own []string
 	if t.Request.Retry != nil {

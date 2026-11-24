@@ -23,9 +23,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The ldap request type searches an LDAP directory, OpenLDAP, Active
-// Directory, 389 Directory Server or any other server of LDAPv3, and hands
-// the transforms what its searches found as one JSON document.
+// The ldap request type searches an LDAP directory and hands the transforms
+// what its searches found as one JSON document. Any LDAPv3 server works:
+// OpenLDAP, Active Directory, 389 Directory Server and others.
 //
 //	request:
 //	  type: ldap
@@ -39,30 +39,34 @@ import (
 //	      count_only: true
 //
 // The document is {"searches": {name: {"count": N, "references": R,
-// "entries": [{"dn": ..., "attributes": {name: [value, ...]}}]}}}, entries
-// left out of a count_only search's, which holds none of them.
+// "entries": [{"dn": ..., "attributes": {name: [value, ...]}}]}}}. A
+// count_only search holds no entries, so its entries are left out.
 //
 // The probe's target is host, host:port, [v6]:port, or an ldap:// or
-// ldaps:// URL of one, port 389, or 636 for ldaps://, when it is left out;
-// ldaps://, or a tls block on a target that does not use start_tls, asks
-// for TLS from the start, start_tls for StartTLS on a plaintext
-// connection, and ldap:// with a tls block but no start_tls is refused, as
-// redis:// with one is. The exporter dials the target through the target
-// policy, as every type that reaches a server does, and makes one
-// connection for each scrape, which is closed when the scrape is over, for
-// redis's reasons (requesttype_redis.go): a scrape is a bind and a few
-// searches at most seconds apart.
+// ldaps:// URL of one. The port defaults to 389, or 636 for ldaps://.
+//
+//   - ldaps://, or a tls block on a target that does not use start_tls, asks
+//     for TLS from the start.
+//   - start_tls asks for StartTLS on a plaintext connection.
+//   - ldap:// with a tls block but no start_tls is refused, as redis:// with
+//     one is.
+//
+// The exporter dials the target through the target policy, as every type
+// that reaches a server does. It makes one connection for each scrape and
+// closes it when the scrape is over, for redis's reasons
+// (requesttype_redis.go): a scrape is a bind and a few searches at most
+// seconds apart.
 //
 // The password is read from password_file at every scrape, as every
 // credential file is, and never shown: a debug report shows BIND dn ***.
 //
-// The type imports nothing outside the standard library: the client is the BER of ldapber.go, and
-// the filters are parsed by ldapfilter.go.
+// The type imports nothing outside the standard library. The client is the
+// BER of ldapber.go, and the filters are parsed by ldapfilter.go.
 
-// LDAPConfig is an ldap collector's own request keys: the DN a simple
-// bind is made as, none for an anonymous bind, whether TLS is begun with
-// the StartTLS operation on a plaintext connection, and the searches whose
-// results the document holds.
+// LDAPConfig is an ldap collector's own request keys. They give the DN a
+// simple bind is made as (none for an anonymous bind), whether TLS is begun
+// with the StartTLS operation on a plaintext connection, and the searches
+// whose results the document holds.
 type LDAPConfig struct {
 	BindDN   string       `yaml:"bind_dn,omitempty"`
 	StartTLS bool         `yaml:"start_tls,omitempty"`
@@ -72,11 +76,11 @@ type LDAPConfig struct {
 	SASLExternal bool `yaml:"sasl_external,omitempty"`
 }
 
-// LDAPSearch is one entry of an ldap collector's request.searches: the name
-// its result is put under in the document, where it searches, which
-// entries it matches and what of them it reads. Scope "" is sub, Filter ""
-// is (objectClass=*), no Attributes asks for the entries' DNs alone, and
-// MaxEntries 0 is the default bound.
+// LDAPSearch is one entry of an ldap collector's request.searches. It gives
+// the name its result is put under in the document, where it searches,
+// which entries it matches and what it reads of them. Scope "" is sub and
+// Filter "" is (objectClass=*). No Attributes asks for the entries' DNs
+// alone. MaxEntries 0 is the default bound.
 type LDAPSearch struct {
 	Name       string   `yaml:"name"`
 	Base       string   `yaml:"base,omitempty"`
@@ -94,10 +98,11 @@ const ldapSearchNamePattern = `^[A-Za-z_][A-Za-z0-9_]*$`
 // ldapScopeNames are the values of request.searches[].scope.
 var ldapScopeNames = []string{"base", "one", "sub"}
 
-// ldapAttributePattern is what an entry of request.searches[].attributes
-// is written with: an attribute's name or OID, with options after ; as in
-// cn;lang-de, or * for every user attribute and + for every operational
-// one. The exporter and the schema hold them to it alike.
+// ldapAttributePattern is the form of an entry of
+// request.searches[].attributes: an attribute's name or OID, with options
+// after ; as in cn;lang-de. It may also be * for every user attribute, or +
+// for every operational one. The exporter and the schema both hold entries
+// to it.
 const ldapAttributePattern = `^(\*|\+|[A-Za-z][A-Za-z0-9-]*(;[A-Za-z0-9-]+)*|[0-9]+(\.[0-9]+)+(;[A-Za-z0-9-]+)*)$`
 
 // ldapRequest is an ldap collector's own request keys: the zero LDAPConfig
@@ -397,12 +402,12 @@ func parseLDAPTarget(raw string) (ldapAddress, error) {
 	return a, nil
 }
 
-// security says how a scrape of a is secured: ldaps://, or a tls block on
-// a target that does not use start_tls, is TLS from the start, an empty
-// block as much as one with keys (model.TLSConfig.Set), so tls: {} never
-// sends the bind's password in plaintext; start_tls
-// is StartTLS on ldap:// or a bare host. ldap:// with a tls block and no
-// start_tls, and ldaps:// with start_tls, contradict each other.
+// security says how a scrape of a is secured. ldaps://, or a tls block on a
+// target that does not use start_tls, is TLS from the start. An empty block
+// counts as much as one with keys (model.TLSConfig.Set), so tls: {} never
+// sends the bind's password in plaintext. start_tls is StartTLS on ldap://
+// or a bare host. ldap:// with a tls block and no start_tls contradict each
+// other, and so do ldaps:// and start_tls.
 func (a ldapAddress) security(c *model.Collector) (ldapSecurity, error) {
 	configured := c.Request.TLS != model.TLSConfig{}
 	switch {
@@ -444,15 +449,15 @@ func (a ldapAddress) url(security ldapSecurity) string {
 }
 
 // checkLDAPTargetRequest checks a static target's own account and tls
-// block, which replace its collector's for that target
-// (withTargetAccount), as the collector's are checked: a bind_dn with the
-// target's own password_file, since a DN without a password is an
-// unauthenticated bind and the collector's password is not another
-// account's, and a password_file alone only for a collector with a
-// bind_dn, the password being sent with the DN of its account. No value of
-// them takes a placeholder: a target's own values are used as written. An
-// ldap:// target, which asks for plaintext, with a tls block of its own and
-// no start_tls contradicts itself, as with the collector's.
+// block, which replace its collector's for that target (withTargetAccount).
+// They are checked as the collector's are. A bind_dn needs the target's own
+// password_file: a DN without a password is an unauthenticated bind, and
+// the collector's password is not another account's. A password_file alone
+// is allowed only for a collector with a bind_dn, since the password is sent
+// with the DN of its account. No value of them takes a placeholder: a
+// target's own values are used as written. An ldap:// target, which asks for
+// plaintext, with a tls block of its own and no start_tls contradicts
+// itself, as with the collector's.
 func checkLDAPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	r := &t.Request
 	for _, key := range []struct{ name, value string }{{"request.bind_dn", r.BindDN}, {"request.password_file", r.PasswordFile}} {
@@ -552,10 +557,10 @@ type ldapCall struct {
 	ber    []byte
 }
 
-// ldapCalls is what a scrape of c searches, each base and filter filled
-// from the probe's parameters, and the filter parsed again: a value
-// escaped as it is (ldapEscapeFilterValue) cannot change its structure,
-// which the load checked, and the parse is what encodes it.
+// ldapCalls is what a scrape of c searches. Each base and filter is filled
+// from the probe's parameters, and the filter is parsed again. A value
+// escaped as it is (ldapEscapeFilterValue) cannot change the filter's
+// structure, which the load checked. The parse is what encodes it.
 func ldapCalls(c *model.Collector, params map[string]string) ([]ldapCall, error) {
 	searches := ldapRequest(c).Searches
 	calls := make([]ldapCall, 0, len(searches))
@@ -916,11 +921,12 @@ func ldapSearch(ctx context.Context, session *ldapConn, label string, call ldapC
 // a half values, which the response limit stops long before.
 const ldapMaxRangeRounds = 1000
 
-// ldapRange reads an attribute's name with a range option, as Active
-// Directory answers an attribute of more values than it sends at once,
-// member;range=0-1499: the name without the option, the first and last
-// value it holds, and whether it holds the last of them, member;range=
-// 3000-*. ok is false of a name without the option.
+// ldapRange reads an attribute name with a range option, such as
+// member;range=0-1499. Active Directory answers this way for an attribute
+// with more values than it sends at once. It returns the name without the
+// option, the first and last value the range holds, and whether it holds
+// the last of them (member;range=3000-*). ok is false for a name without
+// the option.
 func ldapRange(name string) (attribute string, low, high int, last, ok bool) {
 	parts := strings.Split(name, ";")
 	kept := parts[:1]
@@ -944,11 +950,11 @@ func ldapRange(name string) (attribute string, low, high int, last, ok bool) {
 	return strings.Join(kept, ";"), low, high, last, ok
 }
 
-// ldapFollowRanges asks for the rest of each attribute of entry that a
-// server answered in a range, member;range=0-1499, with a search of the
-// entry alone for its next range, member;range=1500-*, until the range of
-// the last value, and puts every value under the attribute's name without
-// the option, member. Each search is a request of the trace.
+// ldapFollowRanges fetches the rest of each attribute of entry that a
+// server answered in a range, such as member;range=0-1499. It searches the
+// entry alone for each next range, such as member;range=1500-*, until the
+// range of the last value. It puts every value under the attribute's name
+// without the option (member). Each search is a request of the trace.
 func ldapFollowRanges(ctx context.Context, session *ldapConn, label string, call ldapCall, entry *ldapEntry, deadline time.Time) error {
 	for _, name := range slices.Sorted(maps.Keys(entry.Attributes)) {
 		attribute, _, high, last, ok := ldapRange(name)
@@ -1095,12 +1101,12 @@ func ldapSearchPage(session *ldapConn, op []byte, cookie string, s *LDAPSearch, 
 	}
 }
 
-// ldapFailure is the failure of a read, a write or a handshake: the
-// scrape's deadline or cancellation when that is what ended it, since the
-// connection's deadline is set to make it end. The connection's deadline is
-// the scrape's, and its timer can fire before the context's own, so a
-// connection that timed out is the deadline's failure whether or not the
-// context says so yet.
+// ldapFailure is the failure of a read, a write or a handshake. When the
+// scrape's deadline or cancellation ended it, the failure is that deadline
+// or cancellation, since the connection's deadline is set to make it end.
+// The connection's deadline is the scrape's, and its timer can fire before
+// the context's own. So a connection that timed out is the deadline's
+// failure, whether or not the context says so yet.
 func ldapFailure(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
 		return fmt.Errorf("%w (%w)", ctxErr, err)
@@ -1118,10 +1124,10 @@ func checkLDAPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
 }
 
-// ldapSchemaRule is what an ldap collector's request is held to beyond its keys,
-// as the exporter holds it (validateLDAPRequest): searches, and
-// bind_dn and password_file each only beside the other, since a simple
-// bind with a DN and no password is an unauthenticated one and a password
+// ldapSchemaRule is what an ldap collector's request is held to beyond its
+// keys, as the exporter holds it (validateLDAPRequest). It covers searches,
+// and allows bind_dn and password_file each only beside the other. A simple
+// bind with a DN and no password is an unauthenticated one, and a password
 // is sent with its account's DN.
 func ldapSchemaRule() map[string]any {
 	return map[string]any{

@@ -16,27 +16,28 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Every collector declares how it reaches its data with request.type: http
+// Every collector declares how it reaches its data with request.type. http
 // asks a URL, localfile reads a file from the exporter's own filesystem,
 // graphite asks a Graphite render API for series, grpc calls a unary gRPC
 // method, sshfile reads a file from another host over SFTP, sql runs a
 // statement on a database, dns resolves a name, tlscert reads the
 // certificates of a TLS handshake, ntp asks an NTP server for the time,
-// s3file reads an object from S3 or a
-// store that speaks its API, kubernetes lists objects from a Kubernetes API
-// server, redis reads INFO and read-only commands from a Redis or Valkey
-// server, tcp sends a line to a text-protocol service over TCP and reads
-// its answer, ldap searches an LDAP directory, sshexec runs a command on
-// another host over SSH, icmp pings a host, snmp reads an SNMP agent's
-// objects and tables; and of the opt-in types, smtp holds a mail server's
-// session without sending, modbus reads a device's registers, mqtt
-// subscribes to a broker's topics, websocket reads an endpoint's messages,
-// ftp reads a file from an FTP server, imap counts the mail of an
-// account's mailboxes, pop3 that of a mailbox over POP3, radius
-// authenticates an account against a RADIUS server, whois reads a
-// domain's registration, sip asks a SIP server whether it answers, amqp
-// asks an AMQP broker how deep its queues are and nats times a NATS server
-// and reads its JetStream. The type is required rather than defaulted so that no configuration means
+// s3file reads an object from S3 or a store that speaks its API, kubernetes
+// lists objects from a Kubernetes API server, redis reads INFO and read-only
+// commands from a Redis or Valkey server, tcp sends a line to a text-protocol
+// service over TCP and reads its answer, ldap searches an LDAP directory,
+// sshexec runs a command on another host over SSH, icmp pings a host, and
+// snmp reads an SNMP agent's objects and tables. Of the opt-in types, smtp
+// holds a mail server's session without sending, modbus reads a device's
+// registers, mqtt subscribes to a broker's topics, websocket reads an
+// endpoint's messages, ftp reads a file from an FTP server, imap counts the
+// mail of an account's mailboxes, pop3 counts that of a mailbox over POP3,
+// radius authenticates an account against a RADIUS server, whois reads a
+// domain's registration, sip asks a SIP server whether it answers, amqp asks
+// an AMQP broker how deep its queues are, and nats times a NATS server and
+// reads its JetStream.
+//
+// The type is required rather than defaulted, so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
 //   - Fields and Config: the request keys it accepts, those of the common
@@ -48,8 +49,8 @@ import (
 //   - TargetFields: the keys a static target's request block may set.
 //   - Requester: what every type does. Validate: the type's required
 //     fields, defaults and cross-field rules. Fetch: how a scrape actually
-//     gets its bytes; everything after it — decoding, transforms, limits,
-//     caching — is shared by every type. What a target is: how it is
+//     gets its bytes; everything after it (decoding, transforms, limits,
+//     caching) is shared by every type. What a target is: how it is
 //     checked, how it appears in logs, and the url and http_method labels
 //     of the verbose self-metrics.
 //   - The optional hooks and settings: what only some types have, such as
@@ -90,10 +91,10 @@ const (
 	RequestTypeNATS       = "nats"
 )
 
-// UnixSocketPattern is what request.unix_socket may be, an http or tcp
-// collector's (unixsocketpath.go), for the
-// configuration's JSON Schema: an absolute path, or "", which is the key
-// left out. What else it has to be is the exporter's to refuse.
+// UnixSocketPattern is the pattern that request.unix_socket of an http or tcp
+// collector (unixsocketpath.go) must match in the configuration's JSON
+// Schema: an absolute path, or "", which means the key is left out. Other
+// requirements are left to the exporter to refuse.
 const UnixSocketPattern = `^$|^/`
 
 // knownRequestTypes is every request type in the source tree, whether or not
@@ -103,11 +104,11 @@ const UnixSocketPattern = `^$|^/`
 var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
-// leaves out, as it leaves out the sql type's opt-in drivers. A type that
-// links what few deployments want in the binary may be one: a build carries
-// it only when asked, with its request_type_<name> tag, its file built
-// under that tag alone (make new-request-type OPT_IN=1). A test keeps the
-// list in step with the files' constraints.
+// leaves out, as it leaves out the sql type's opt-in drivers. A type may be
+// opt-in when it links into the binary what few deployments want. A build
+// carries it only when asked, with its request_type_<name> tag, and its file
+// is built under that tag alone (make new-request-type OPT_IN=1). A test
+// keeps the list in step with the files' constraints.
 var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS}
 
 // Requester is what every request type does: each type's registration
@@ -118,10 +119,10 @@ type Requester interface {
 	Validate(c *model.Collector) error
 	// Fetch performs one request of a collector.
 	Fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
-	// CheckTarget validates a target before anything is fetched: a probe's
-	// target, answered with 400 when it fails, and a static target's, at
-	// load. static tells the two apart. A target left out is refused before
-	// it is asked, unless the type has OptionalTarget.
+	// CheckTarget validates a target before anything is fetched. That is a
+	// probe's target, answered with 400 when it fails, or a static target's, at
+	// load; static tells the two apart. A target left out is refused before it
+	// is asked, unless the type has OptionalTarget.
 	CheckTarget(c *model.Collector, target string, static bool) error
 	// Label and Method give the url and http_method labels of the verbose
 	// self-metrics.
@@ -132,10 +133,10 @@ type Requester interface {
 	Display(target string) string
 }
 
-// URLTarget is the part of a Requester of a type whose target is a URL, as
-// http's and graphite's is: the url label is the URL the request is made
-// to, its placeholders kept (requestLabel), http_method its method, and the
-// target is displayed without credentials (safeTarget). A type embeds it
+// URLTarget is the part of a Requester for a type whose target is a URL, as
+// for http and graphite. The url label is the URL the request is made to,
+// with its placeholders kept (requestLabel), and http_method is its method.
+// The target is displayed without credentials (safeTarget). A type embeds it
 // and overrides what differs.
 type URLTarget struct{}
 
@@ -153,26 +154,26 @@ func (URLTarget) Method(c *model.Collector, overrides RequestOverrides) string {
 func (URLTarget) Display(target string) string { return safeTarget(target) }
 
 // RequestType is how one request.type reaches its data. Fields lists the
-// keys of the common part it accepts and Config holds its own, Overrides
-// the probe parameters that may change them and TargetFields the keys a
-// static target may set; its Requester validates a collector's request,
-// performs one, and says what a target is. Each type registers itself in
-// RequestTypes.
+// keys of the common part it accepts, and Config holds its own keys.
+// Overrides lists the probe parameters that may change them, and
+// TargetFields the keys a static target may set. Its Requester validates a
+// collector's request, performs one, and says what a target is. Each type
+// registers itself in RequestTypes.
 //
-// What only some types have stays a field of its own, a hook left nil or a
-// setting left zero by the types without it, rather than a method of
-// Requester every type would implement to say it has nothing: an optional
-// capability, which the core asks about only of a type that has it.
+// What only some types have stays a separate field: a hook left nil, or a
+// setting left zero, by the types without it. It is not a Requester method
+// that every type would implement just to say it has nothing. The core asks
+// about such an optional capability only of a type that has it.
 type RequestType struct {
 	Name string
 	// Fields are the keys of model.RequestConfig's common part the type
 	// accepts, those several types take; the keys only it takes are those
 	// of Config.
 	Fields []string
-	// Config is the zero value of the struct the keys only this type takes
-	// are read into, its own keys, each a field with its yaml key, which a
-	// collector's request holds in Own (requestkeys.go). Nil for a type
-	// whose keys are all of the common part.
+	// Config is the zero value of the struct that this type's own keys, the
+	// ones only it takes, are read into. Each key is a field with its yaml
+	// key, and a collector's request holds them in Own (requestkeys.go). Nil
+	// for a type whose keys all belong to the common part.
 	Config       any
 	Overrides    []string // a name ending in "_" is a prefix, such as header_
 	TargetFields []string
@@ -187,18 +188,18 @@ type RequestType struct {
 	// no use for, such as path for a localfile collector reading a directory.
 	// Unset, everything the type accepts is accepted.
 	CheckOverride func(c *model.Collector, key string) error
-	// Query adds the query parameters the type builds itself to the URL
-	// of a request made over HTTP, such as graphite's repeated target, which
-	// request.query, one value to a name, cannot hold. They are the type's
+	// Query adds the query parameters the type builds itself to the URL of a
+	// request made over HTTP, such as graphite's repeated target, which
+	// request.query (one value per name) cannot hold. They belong to the type
 	// alone: a pair of the target's own query that names one is dropped
 	// (withoutQueryKeys). Unset, it adds none.
 	Query func(c *model.Collector, overrides RequestOverrides) (url.Values, error)
-	// ShownQuery says, of a query pair the type sets itself on a request,
-	// its name and value as a server reads them, whether it was set from
-	// the collector's configuration as its file writes it (writtenAsSent),
-	// or is the exporter's own, such as graphite's format=json, so that a
-	// debug report shows its value (ConfiguredQuery). Unset, the type sets
-	// none, or none that is shown.
+	// ShownQuery is given a query pair the type sets itself on a request, with
+	// its name and value as a server reads them. It says whether the pair was
+	// set from the collector's configuration as its file writes it
+	// (writtenAsSent), or is the exporter's own, such as graphite's
+	// format=json, so that a debug report shows its value (ConfiguredQuery).
+	// Unset, the type sets none, or none that is shown.
 	ShownQuery func(c *model.Collector, name, value string) bool
 	// CheckTargetRequest checks the values of a static target's request
 	// block, where CheckOverride sees only its keys. Unset, any value of an
@@ -209,39 +210,37 @@ type RequestType struct {
 	// value is checked when the request is made.
 	CheckPath func(what, path string) error
 	// CheckFiles reads the files a collector's request names, or a static
-	// target's, when t is set, as a request would read them, and says what
-	// a request would find wrong with them, for --dry-run. It is the check
-	// of files read at a request, which the configuration's loading does not
-	// read. Unset, nothing is read.
+	// target's when t is set, as a request would read them. It says what a
+	// request would find wrong with them, for --dry-run. It checks the files
+	// read at a request, which loading the configuration does not read. Unset,
+	// nothing is read.
 	CheckFiles func(c *model.Collector, t *model.StaticTarget) []string
-	// DefaultApplies says whether a request key of a defaults block the
-	// type takes, by its top name, applies to c as its own keys leave it:
-	// dns takes tls for transport tls alone. Unset, every key it takes
+	// DefaultApplies says whether a request key of a defaults block that the
+	// type takes, by its top name, applies to c given c's own keys. For
+	// example, dns takes tls only for transport tls. Unset, every key it takes
 	// applies.
 	DefaultApplies func(c *model.Collector, key string) bool
 	// URLPath says the type's path is a URL path, joined onto the target,
 	// which can hold no query or fragment; localfile's is a file's.
 	URLPath bool
-	// StatusCodes says the type's answers carry gRPC status codes: it
-	// retries by them, so request.retry takes codes, and not
-	// non_idempotent, which is about HTTP methods, and its collectors
-	// report the last one (GRPCStatusCode). Unset, it is the other way
-	// round.
+	// StatusCodes says the type's answers carry gRPC status codes. The type
+	// retries by them, so request.retry takes codes and not non_idempotent,
+	// which is about HTTP methods. Its collectors report the last one
+	// (GRPCStatusCode). Unset, it is the other way round.
 	StatusCodes bool
-	// NamedFiles says which files a collector's request names that checking
-	// it reads when the configuration loads, such as grpc's descriptor
-	// files, for the watch of the configuration to stamp (NamedFiles).
-	// Unset, it names none.
+	// NamedFiles lists the files a collector's request names that checking it
+	// reads when the configuration loads, such as grpc's descriptor files. The
+	// configuration watch stamps them (NamedFiles). Unset, it names none.
 	NamedFiles func(c *model.Collector) []string
-	// ReadFiles says which paths checking a collector's request looked at on
-	// disk, the files the request names and those that reading them led to,
-	// and gives a mark of that reading (ReadFiles). Unset, checking a
+	// ReadFiles lists the paths on disk that checking a collector's request
+	// looked at: the files the request names and those that reading them led
+	// to. It also gives a mark of that reading (ReadFiles). Unset, checking a
 	// request reads no file but those it names.
 	ReadFiles func(c *model.Collector) (paths []string, read string)
-	// Follow is told the collectors and static targets in force whenever
-	// the per-collector state follows a configuration (FollowConfiguration),
-	// so a type that keeps connections across scrapes closes those nothing
-	// in force uses any more. Unset, the type keeps none.
+	// Follow is given the collectors and static targets in force whenever the
+	// per-collector state follows a configuration (FollowConfiguration). A
+	// type that keeps connections across scrapes then closes those that
+	// nothing in force uses any more. Unset, the type keeps none.
 	Follow func(collectors []model.Collector, targets []model.StaticTarget)
 	// CloseConnections closes every connection the type keeps, at shutdown.
 	// Unset, it keeps none.
@@ -261,11 +260,11 @@ type RequestType struct {
 	// pages, that only some types have, as --dry-run shows it beside what
 	// every type's does (RequestPolicy). Unset, nothing.
 	Policy func(c *model.Collector) RequestPolicy
-	// MethodBody gives the method and the body of a collector's request
-	// made over HTTP, as its configuration writes them, which the shared
-	// request of http and graphite sends (fetch). Unset, none: the method
-	// is the one the overrides carry, GET when they carry none, and there
-	// is no body.
+	// MethodBody gives the method and body of a collector's request made over
+	// HTTP, as its configuration writes them. The shared request of http and
+	// graphite sends them (fetch). Unset, there are none: the method is the
+	// one the overrides carry, or GET when they carry none, and there is no
+	// body.
 	MethodBody func(c *model.Collector) (method, body string)
 	// Logins reports how many logins a collector's request.login made and
 	// how many of them failed (login.go). Unset, the type does not log in.
@@ -278,24 +277,25 @@ type RequestType struct {
 	// here rather than naming the type, so a new type says it in its own
 	// registration and nothing outside its files lists it.
 
-	// Families are the per-collector self-metric families only the
-	// collectors of this type have, beyond those its other settings give
-	// it: http_exporter_targets_refused_total with the target lists
-	// (Takes("allowed_targets")), the pagination families with
-	// request.pagination, the login families with Logins, the rate limit
-	// families with request.rate_limit and
-	// http_exporter_scrape_grpc_status_code with StatusCodes.
+	// Families are the per-collector self-metric families that only this
+	// type's collectors have, beyond those its other settings give it:
+	//   - http_exporter_targets_refused_total with the target lists
+	//     (Takes("allowed_targets"));
+	//   - the pagination families with request.pagination;
+	//   - the login families with Logins;
+	//   - the rate limit families with request.rate_limit;
+	//   - http_exporter_scrape_grpc_status_code with StatusCodes.
 	Families []string
 	// Revalidates says an expired cached response of the type may be
 	// revalidated with a conditional request (Revalidable).
 	Revalidates bool
-	// TargetHint names what a target of a collector of the type is, and
-	// shows the forms it takes, as the collectors page and the debug page
-	// ask for one: "URL" and "https://host:port", "Name to resolve" and
-	// "the name to resolve, such as example.com". Each type says its own,
-	// so a form never asks another type for an http target, and a type a
-	// build leaves out takes its words with it. Required unless NoTarget
-	// is set (registerRequestType).
+	// TargetHint names what a target of the type's collectors is and shows the
+	// forms it takes, for the collectors page and the debug page to ask for
+	// one. Examples: "URL" and "https://host:port", or "Name to resolve" and
+	// "the name to resolve, such as example.com". Each type gives its own, so a
+	// form never asks another type for an http target, and a type left out of a
+	// build takes its words with it. Required unless NoTarget is set
+	// (registerRequestType).
 	TargetHint func(c *model.Collector) (label, hint string)
 	// NoTarget says the type takes no target at all: it reads what its
 	// configuration names, and the collectors page and the debug page say
@@ -308,12 +308,12 @@ type RequestType struct {
 	// JSONAnswer says the exporter makes the type's answer, a JSON document,
 	// so its decoder is json and its transform one that reads JSON.
 	JSONAnswer bool
-	// JSONDocument says, for a type whose answer is a JSON document the
-	// exporter makes on some collectors alone, what that document is when
-	// a collector's answer is one, as a refusal of another decoder or
-	// transform names it, and "" when it is not: a tcp collector with
-	// request.document or request.connect_only. Such a collector is held to json and to the
-	// transforms that read it, as one of a JSONAnswer type is.
+	// JSONDocument is for a type whose answer is a JSON document the exporter
+	// makes only for some collectors. When a collector's answer is one, it says
+	// what that document is, as named when another decoder or transform is
+	// refused; otherwise it returns "". An example is a tcp collector with
+	// request.document or request.connect_only. Such a collector is held to
+	// json and to the transforms that read it, like one of a JSONAnswer type.
 	JSONDocument func(c *model.Collector) string
 	// Decoder is the decoder a collector of the type uses when its
 	// decoder.type is left out, rather than one chosen for each response.
@@ -327,30 +327,30 @@ type RequestType struct {
 	// Article is the article the type's name is read with in messages.
 	// Unset, "an" before a vowel and "a" otherwise.
 	Article string
-	// KeyRules is what the configuration schema says of the type's own
-	// keys beyond their Go types, by the path of each under the request
-	// block, such as send or commands[].name: their descriptions, and any
-	// pattern, bound or required key, as the rules of the configuration
-	// schema are written. Unset, nothing.
+	// KeyRules is what the configuration schema says of the type's own keys
+	// beyond their Go types, keyed by each key's path under the request block,
+	// such as send or commands[].name. It holds their descriptions and any
+	// pattern, bound or required key, written as the configuration schema's
+	// rules are. Unset, nothing.
 	KeyRules func() map[string]map[string]any
 	// SchemaRule is what the configuration schema holds a collector of the
 	// type to beyond its keys: its required keys and the rules between
 	// them, as Validate holds them. Unset, nothing more.
 	SchemaRule func() map[string]any
 	// UnusedParams words the refusal of probe parameters that nothing of a
-	// collector uses (CheckPathParams), naming the places a placeholder of
-	// the type can stand in (unusedParamsIn). Unset, they are http's: the
-	// path, the body and the header and query values.
+	// collector uses (CheckPathParams). It names the places where a
+	// placeholder of the type can stand (unusedParamsIn). Unset, they are
+	// http's: the path, the body, and the header and query values.
 	UnusedParams func(c *model.Collector, overrides RequestOverrides, unused string) error
 	// Templates lists the templated parts of a collector's request that are
 	// the type's own, beyond the body, header and query values every type
 	// may hold (requestTemplates). Unset, it has none.
 	Templates func(c *model.Collector, overrides RequestOverrides) []templateField
-	// KeyAdvice says, of a key of another type that a collector of this
-	// type sets, which of the type's own keys does what the collector meant
-	// it for, said after the refusal: ldap's start_tls for the starttls of
-	// tcp and tlscert, which names a protocol ldap does not speak. Unset,
-	// the refusal says nothing more.
+	// KeyAdvice maps a key of another type, set on a collector of this type, to
+	// the type's own key that does what the collector meant it for. It is said
+	// after the refusal. For example, ldap's start_tls for the starttls of tcp
+	// and tlscert, which names a protocol ldap does not speak. Unset, the
+	// refusal says nothing more.
 	KeyAdvice map[string]string
 }
 
@@ -391,11 +391,12 @@ func CollectorLogins(requestType, collector string) (made, failed uint64) {
 	return 0, 0
 }
 
-// RequestPolicy is what a collector's request lets through, how it pages
-// and where it is sent, that only some request types have
-// (RequestType.Policy): the gRPC status codes, other than OK, whose calls
-// are answers, the pagination of a paginated answer, its defaults filled in
-// once validated, and the Unix socket an http collector's requests go to.
+// RequestPolicy is what a collector's request lets through, how it pages and
+// where it is sent, for the settings only some request types have
+// (RequestType.Policy). It holds the gRPC status codes, other than OK, whose
+// calls are answers; the pagination of a paginated answer, with its defaults
+// filled in once validated; and the Unix socket an http collector's requests
+// go to.
 type RequestPolicy struct {
 	AcceptCodes []string
 	Pagination  *model.PaginationConfig
@@ -423,18 +424,18 @@ func methodBody(c *model.Collector) (method, body string) {
 }
 
 // ConfiguredMethod is the method of a collector's request as its
-// configuration writes it, its default filled in once validated, which a
-// static target or a probe may replace; "" for a type whose request has
-// none of its own (RequestType.MethodBody).
+// configuration writes it, with its default filled in once validated. A
+// static target or a probe may replace it. It is "" for a type whose request
+// has no method of its own (RequestType.MethodBody).
 func ConfiguredMethod(c *model.Collector) string {
 	method, _ := methodBody(c)
 	return method
 }
 
-// PoolStats is what a collector's pools of connections hold: the
-// connections idle in them, how many targets they are open to, how
-// many keepalive checks of a connection failed, and the rows the last
-// statement returned, Rows being set only once one has (a sql collector's,
+// PoolStats is what a collector's connection pools hold: the connections
+// idle in them, how many targets they are open to, how many keepalive checks
+// of a connection failed, and the rows the last statement returned. Rows is
+// set only once a statement has returned rows (a sql collector's,
 // requesttype_sql.go).
 type PoolStats struct {
 	Idle              int
@@ -463,9 +464,9 @@ func DefaultKeyApplies(c *model.Collector, key string) bool {
 }
 
 // FileWarnings reads the files the request of c names, or of the static
-// target t when it is set, as a request would, and says what a request
-// would find wrong with them (RequestType.CheckFiles); none for a type that
-// reads no file at a request.
+// target t when it is set, as a request would. It says what a request would
+// find wrong with them (RequestType.CheckFiles). It returns none for a type
+// that reads no file at a request.
 func FileWarnings(c *model.Collector, t *model.StaticTarget) []string {
 	if rt := requestTypeOf(c); rt != nil && rt.CheckFiles != nil {
 		return rt.CheckFiles(c, t)
@@ -519,13 +520,13 @@ func CollectorConnectionLimit(requestType, collector string) (waited, failed uin
 }
 
 // NamedFiles returns the files a collector's request names that checking it
-// reads when the configuration loads (RequestType.NamedFiles): for a grpc
-// collector, its request.protoset_file and request.proto_files, which its
-// method and message are checked against. The collector need not have been
-// validated, its request.type being taken as ReadFiles takes it.
+// reads when the configuration loads (RequestType.NamedFiles). For a grpc
+// collector, these are its request.protoset_file and request.proto_files,
+// which its method and message are checked against. The collector need not
+// have been validated: its request.type is taken as ReadFiles takes it.
 //
 // The files of a protobuf decoder, its response.protobuf.protoset_file and
-// proto_files, are named as well: its message is looked up in them.
+// proto_files, are named as well, since its message is looked up in them.
 func NamedFiles(c *model.Collector) []string {
 	var files []string
 	if rt := RequestTypes[c.Request.Type]; rt != nil && rt.NamedFiles != nil {
@@ -535,24 +536,24 @@ func NamedFiles(c *model.Collector) []string {
 }
 
 // ReadFiles returns the paths that checking a collector's request looked at
-// on disk when the files the request names lead to others: for a grpc
-// collector with descriptors: proto, its .proto files, the files those
-// import, and the places an imported file was looked for at and not found.
-// The watch of the configuration stamps them while a reload is refused, so
-// a reload refused for an imported file is tried again when that file
-// changes or appears, as one refused for a file the configuration names is,
-// and while the configuration is in force, so one changing is checked
+// on disk when the files the request names lead to others. For a grpc
+// collector with descriptors: proto, these are its .proto files, the files
+// those import, and the places an imported file was looked for and not found.
+// The configuration watch stamps them in two cases. While a reload is
+// refused, a reload refused for an imported file is retried when that file
+// changes or appears, just like one refused for a file the configuration
+// names. While the configuration is in force, a change to one is checked
 // against the configuration at the next tick.
 //
-// The files are read now when they were never read, or changed since they
-// were. read is a mark of the reading the paths are of: the same mark from a
-// later call says nothing the reading looked at has changed between the
-// reading and that call.
+// The files are read now if they were never read or have changed since. read
+// is a mark of the reading the paths come from: the same mark from a later
+// call means nothing the reading looked at changed between the reading and
+// that call.
 //
 // The collector need not have been validated: the watch asks before the
-// configuration is, to stamp the files before the validation reads them. Its
-// request.type is taken as written, as ValidateRequest takes it, so a
-// collector written `type: GRPC`, which the validation refuses, has none.
+// configuration is validated, to stamp the files before the validation reads
+// them. Its request.type is taken as written, as ValidateRequest takes it, so
+// a collector written `type: GRPC`, which the validation refuses, has none.
 //
 // The .proto files of a protobuf decoder are read the same way, and what
 // compiling them looked at is returned with the request's.
@@ -730,11 +731,12 @@ func ValidateRequest(c *model.Collector) error {
 	return nil
 }
 
-// checkRetryKeys refuses the retry key that does not apply to the type,
-// of those set, by their paths (retryKeysSet), the first in the file by
-// order, the request block's Order: codes, the gRPC status codes a grpc
-// request retries, for the others, and statuses, non_idempotent and
-// retry_after, about HTTP answers and methods, for grpc.
+// checkRetryKeys refuses a retry key, among those set (retryKeysSet, by
+// their paths), that does not apply to the type. It names the first such key
+// in file order, the request block's Order. codes, the gRPC status codes a
+// grpc request retries, does not apply to the other types. statuses,
+// non_idempotent and retry_after, about HTTP answers and methods, do not
+// apply to grpc.
 func checkRetryKeys(rt *RequestType, set, order []string) error {
 	for _, key := range model.InFileOrder(set, order) {
 		if err := retryKeyRefusal(rt, strings.TrimPrefix(key, "retry.")); err != nil {
@@ -790,14 +792,14 @@ func requestTypeOf(c *model.Collector) *RequestType {
 
 // overriddenBySomeType reports whether key is a /probe parameter some request
 // type accepts. A parameter no type accepts is not an override at all and is
-// ignored, as it always was — a monitor may carry parameters of its own — but
-// one some type accepts that the collector's type does not is a mistake worth
-// a 400.
+// ignored, as it always was, since a monitor may carry parameters of its own.
+// But one that some type accepts and the collector's type does not is a
+// mistake worth a 400.
 //
-// The types are looked through themselves, rather than a list of every
-// type's parameters, which was made afresh on every probe for this one
-// question: nothing is allocated, and a type a test registers, or takes out,
-// is seen as soon as it is.
+// The types are searched directly instead of a list of every type's
+// parameters, which used to be built afresh on every probe just for this
+// question. So nothing is allocated, and a type a test registers, or takes
+// out, is seen as soon as it is.
 func overriddenBySomeType(key string) bool {
 	for _, rt := range RequestTypes {
 		if matchesOverride(rt.Overrides, key) {
@@ -948,10 +950,10 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	// A panic of a goroutine the fetch started comes back as its error, and
 	// is the trip's own from here (goroutinepanic.go).
 	raiseGoroutinePanic(err)
-	// However a type's fetch failed, the error goes to logs, probe answers
-	// and debug reports without the credentials a URL in it carries, with
-	// a URL as long as a scraper or a redirect made it shown by its start
-	// (shortURLErrors), and is the same failure to the log whichever
+	// However a type's fetch failed, the error goes to logs, probe answers and
+	// debug reports without the credentials a URL in it carries. A URL as long
+	// as a scraper or a redirect made it is shown by its start
+	// (shortURLErrors). The error is the same failure to the log whichever
 	// connection it happened on. A probe's caller is told it without the
 	// addresses of the exporter's side of the network (transportwithheld.go).
 	return response, withTransportWithheld(sameFetchFailure(shortURLErrors(RedactURLErrors(err))))
@@ -1038,10 +1040,10 @@ func AnswerHintOf(c *model.Collector) string {
 	return ""
 }
 
-// AnswersHTTP reports whether the answers of c are HTTP responses, with a
-// status and headers of their own: those of a type whose stage is http's
-// (FetchStage), http's and graphite's. Another type's answer, a file, rows
-// or a document the exporter makes, has neither.
+// AnswersHTTP reports whether the answers of c are HTTP responses with their
+// own status and headers. That holds for a type whose stage is http's
+// (FetchStage): http and graphite. Another type's answer, such as a file,
+// rows or a document the exporter makes, has neither.
 func AnswersHTTP(c *model.Collector) bool {
 	rt := requestTypeOf(c)
 	return rt != nil && rt.Stage == ""
@@ -1063,12 +1065,12 @@ func setKeys(v reflect.Value, skip ...string) []string {
 	return keys
 }
 
-// Which field of a struct has which yaml key depends on the struct's type
-// alone, while reading it out of the fields' tags cost more than half the
-// check of a static target file against the configuration, which asks for
-// every target (CheckTargetRequest). So the keys of a type are read once,
-// the first time it is asked about, and kept by the type; what is set is
-// still looked at in each value.
+// Which field of a struct has which yaml key depends only on the struct's
+// type. Reading it from the fields' tags cost more than half of checking a
+// static target file against the configuration, which asks for every target
+// (CheckTargetRequest). So a type's keys are read once, the first time the
+// type is asked about, and kept for the type. What is set is still looked at
+// in each value.
 
 // yamlField is a struct field read from YAML: its index and its yaml key.
 type yamlField struct {

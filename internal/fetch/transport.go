@@ -22,26 +22,26 @@ import (
 )
 
 // Target requests and OTLP exports reuse their connections. An http.Transport
-// is a connection pool, and one per request would never reuse a connection:
-// every HTTPS scrape would pay a full TLS handshake, and the keep-alive
-// connection each left idle would stay open, with its goroutines, until the
-// other end closed it.
+// is a connection pool, and one per request would never reuse a connection.
+// Every HTTPS scrape would pay a full TLS handshake, and each idle keep-alive
+// connection would stay open, with its goroutines, until the other end
+// closed it.
 //
-// So transports are cached by what configures them: the TLS settings — the CA,
-// client certificate and key files, each with its modification time and size,
-// and insecure_skip_verify — and whether HTTP/2 is attempted. Collectors that
-// agree on these share a pool; a reload that changes them, or a scrape
-// overriding insecure_skip_verify or enable_http2, gets a pool of its own; and
-// a certificate file that is rotated on disk gets a new pool at the next
-// request, with the old one's idle connections closed. A pool nothing has used
-// for transportIdleTTL is closed and forgotten, so settings a reload dropped
-// do not keep connections open. Idle connections inside a pool close after
-// transportIdleConnTimeout.
+// So transports are cached by the settings that configure them: the TLS
+// settings (the CA, client certificate and key files, each with its
+// modification time and size, and insecure_skip_verify) and whether HTTP/2
+// is attempted. Collectors with the same settings share a pool. A reload
+// that changes them, or a scrape that overrides insecure_skip_verify or
+// enable_http2, gets its own pool. A certificate file rotated on disk gets a
+// new pool at the next request, and the old pool's idle connections are
+// closed. A pool unused for transportIdleTTL is closed and forgotten, so
+// settings dropped by a reload do not keep connections open. Idle
+// connections inside a pool close after transportIdleConnTimeout.
 //
-// Every transport sends its requests through the proxy the environment names,
-// unless an http or graphite collector names its own (proxy.go), as curl
-// and most Go programs do: HTTP_PROXY for http URLs, HTTPS_PROXY for
-// https ones, and NO_PROXY for the hosts, domains and networks to reach
+// Like curl and most Go programs, every transport sends its requests through
+// the proxy the environment names, unless an http or graphite collector
+// names its own (proxy.go). HTTP_PROXY is for http URLs, HTTPS_PROXY for
+// https ones, and NO_PROXY lists the hosts, domains and networks to reach
 // directly. The lower-case spellings work too. Requests to localhost and
 // loopback addresses always go direct. The environment is read when a
 // transport is built, which in practice is once, at the first request. An
@@ -54,10 +54,10 @@ const (
 	transportMaxIdlePerHost  = 8
 )
 
-// maxResponseHeaderBytes is the most a response's status line and headers
-// may take. max_response_bytes bounds the body only, and Go's own bound on
-// the headers is 10 MiB, all of it kept in memory for as long as the answer
-// is, whatever the collector's limit; no API's headers come near 1 MiB.
+// maxResponseHeaderBytes is the maximum size of a response's status line and
+// headers. max_response_bytes bounds only the body. Go's own bound on the
+// headers is 10 MiB, all kept in memory as long as the response is, whatever
+// the collector's limit. No API's headers come near 1 MiB.
 const maxResponseHeaderBytes = 1 << 20
 
 // tlsHandshakeTimeout is how long the TLS handshake of a connection to a
@@ -69,35 +69,36 @@ const tlsHandshakeTimeout = 10 * time.Second
 // tlsHandshakeTimeout (SetTLSHandshakeTimeout); zero is the exporter's own.
 var tlsHandshakeLimit atomic.Int64
 
-// SetTLSHandshakeTimeout is how long the TLS handshake of a connection may
-// take in the pools built from now on, which is ten seconds in the exporter.
-// It is for tests. A handshake of a few milliseconds takes far longer on a
-// machine with every CPU busy elsewhere, and a test that is not about the
-// limit then fails by it; such a test runs with a limit of half a minute,
-// the bound of a hang. A test of the limit itself sets a short one, and
-// connects to something that never answers the handshake. A pool built
-// before keeps the limit it was built with.
+// SetTLSHandshakeTimeout sets how long a connection's TLS handshake may take
+// in pools built from now on. In the exporter it is ten seconds. It is for
+// tests. A handshake of a few milliseconds takes far longer on a machine
+// whose CPUs are all busy elsewhere, and a test not about the limit then
+// fails because of it. Such a test runs with a limit of half a minute, the
+// bound of a hang. A test of the limit itself sets a short one and connects
+// to something that never answers the handshake. A pool built earlier keeps
+// the limit it was built with.
 func SetTLSHandshakeTimeout(limit time.Duration) {
 	tlsHandshakeLimit.Store(int64(limit))
 }
 
-// grpcConnectLimit is what a test gave an attempt to connect to a grpc
-// target in place of grpcConnectTimeout (SetGRPCConnectTimeout); zero is the
-// exporter's own. It stands here, beside the handshake's, and not with the
-// grpc connections, which a build without the grpc request type leaves out:
-// the tests are set up by the same code whatever was built.
+// grpcConnectLimit is the value a test set in place of grpcConnectTimeout
+// for an attempt to connect to a grpc target (SetGRPCConnectTimeout). Zero
+// means the exporter's own. It is defined here, next to the handshake limit,
+// and not with the grpc connections, because a build without the grpc
+// request type leaves those out. The tests use the same setup code whatever
+// was built.
 var grpcConnectLimit atomic.Int64
 
-// SetGRPCConnectTimeout is how long an attempt to connect to a grpc target
-// may take, on the connections made from now on, which is twenty seconds in
-// the exporter: until the server has answered the HTTP/2 preface, after the
-// TCP connection and the TLS handshake. It is for tests. A connection of a
-// few milliseconds takes far longer on a machine with every CPU busy
-// elsewhere, and a test that is not about the limit then fails by it; such a
-// test runs with a limit of half a minute, the bound of a hang. A test of
-// the limit itself sets a short one, and connects to something that never
-// answers the preface. A connection made before keeps the limit it was made
-// with.
+// SetGRPCConnectTimeout sets how long an attempt to connect to a grpc target
+// may take, for connections made from now on. In the exporter it is twenty
+// seconds. The attempt lasts until the server has answered the HTTP/2
+// preface, after the TCP connection and the TLS handshake. It is for tests.
+// A connection of a few milliseconds takes far longer on a machine whose
+// CPUs are all busy elsewhere, and a test not about the limit then fails
+// because of it. Such a test runs with a limit of half a minute, the bound
+// of a hang. A test of the limit itself sets a short one and connects to
+// something that never answers the preface. A connection made earlier keeps
+// the limit it was made with.
 func SetGRPCConnectTimeout(limit time.Duration) {
 	grpcConnectLimit.Store(int64(limit))
 }
@@ -116,47 +117,47 @@ type TransportSettings struct {
 	TLS         model.TLSConfig
 	EnableHTTP2 bool
 	// policy is the collector's allowed_targets and denied_targets
-	// (targetpolicy.go). A connection is checked against them once, when it
-	// is made, so collectors with different policies must not share one: an
-	// idle connection another collector opened would otherwise take a
-	// request to an address its own policy refuses. Policies are interned,
-	// so collectors with the same lists still share a pool.
+	// (targetpolicy.go). A connection is checked against them only once,
+	// when it is made, so collectors with different policies must not share
+	// one. Otherwise an idle connection opened by another collector could
+	// carry a request to an address its own policy refuses. Policies are
+	// interned, so collectors with the same lists still share a pool.
 	policy *targetPolicy
-	// proxy is the collector's request.proxy_url, "" for the proxy the
-	// environment names and model.ProxyDirect for none, and proxyAuth the
+	// proxy is the collector's request.proxy_url: "" for the proxy the
+	// environment names, and model.ProxyDirect for none. proxyAuth holds the
 	// files of the credentials sent to it (proxy.go). A connection made
 	// through one proxy, or with one proxy credential, must not carry a
 	// request meant for another.
 	proxy     string
 	proxyAuth model.ProxyBasicAuthFile
 	// socket is the http collector's request.unix_socket, "" for none
-	// (unixsocket.go): every connection of the pool is made to it, so a
-	// connection to one socket must not carry a request meant for another,
-	// or for a host reached over TCP.
+	// (unixsocket.go). Every connection of the pool goes to it, so a
+	// connection to one socket must not carry a request meant for another
+	// socket or for a host reached over TCP.
 	socket string
-	// newConnections is the collector's request.new_connection: a pool
-	// that keeps no connection, so every request it sends, each attempt
-	// and each redirect's, is sent on a connection made for it and closed
-	// after its answer. An uptime check is then of the site as a new
-	// client finds it, its name looked up, its certificate presented and
-	// verified again on every probe, where a kept connection would answer
-	// with the certificate and the address of the probe that made it.
+	// newConnections is the collector's request.new_connection: a pool that
+	// keeps no connection. Every request it sends, including each attempt
+	// and each redirect, uses a new connection that is closed after the
+	// response. An uptime check then sees the site as a new client does: its
+	// name is looked up and its certificate presented and verified again on
+	// every probe. A kept connection would instead answer with the
+	// certificate and address seen by the probe that opened it.
 	newConnections bool
-	// fastcgi is the http collector's request.fastcgi, written as one value
-	// (fastcgiKey), "" for none: the pool's http requests are FastCGI
-	// requests (fastcgi.go), which a pool of HTTP connections must not
-	// carry, nor one of another document root or other parameters.
+	// fastcgi is the http collector's request.fastcgi written as one value
+	// (fastcgiKey), "" for none. The pool's http requests are then FastCGI
+	// requests (fastcgi.go), which must not go on a pool of HTTP connections
+	// or on one with another document root or other parameters.
 	fastcgi string
 	// ipFamily is the collector's request.ip_family (ipfamily.go): the
-	// family every connection of the pool is made over, "" for Go's own
-	// choice. A connection made over one family must not carry a request
-	// that asked for the other.
+	// family every connection of the pool uses, "" to let Go choose. A
+	// connection made over one family must not carry a request that asked
+	// for the other.
 	ipFamily string
 }
 
-// collectorFastCGI is a collector's request.fastcgi as the transport's
-// settings hold it, and registerFastCGI makes a transport send its http
-// requests as FastCGI requests, dialing with dial; both nil in a build
+// collectorFastCGI is a collector's request.fastcgi in the form the
+// transport's settings hold. registerFastCGI makes a transport send its http
+// requests as FastCGI requests, dialing with dial. Both are nil in a build
 // without the http type, whose file sets them (fastcgi.go).
 var (
 	collectorFastCGI func(*model.Collector) string
@@ -208,9 +209,9 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 	dialTo := familyDialer(dialer.DialContext, settings.ipFamily)
 	if settings.socket != "" {
 		// Every connection goes to the socket, whatever host and port the
-		// URL names, and never through a proxy, the environment's
-		// included (unixsocket.go). The address the transport asks for
-		// stays the URL's, which the policy checked.
+		// URL names, and never through a proxy, including the
+		// environment's (unixsocket.go). The address the transport asks
+		// for stays the URL's, which the policy checked.
 		socket := settings.socket
 		proxy, proxyURL = nil, nil
 		dialTo = func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -252,13 +253,13 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 	return transport, nil
 }
 
-// responseHeadersTooLarge says whether err is Go's for a response whose
-// headers are over the transport's MaxResponseHeaderBytes. Go has no error
-// value for it, only these two texts. The first is HTTP/1's. The second is
-// HTTP/2's for a header list it decoded to the end and found over the limit
-// it had advertised; that is the rarer of HTTP/2's two ends, since a list
-// that is over the limit before its last frame has the connection closed
-// instead, with an error that says nothing of headers (http2ProtocolError).
+// responseHeadersTooLarge reports whether err is Go's error for a response
+// whose headers exceed the transport's MaxResponseHeaderBytes. Go has no
+// error value for it, only these two texts. The first is HTTP/1's. The
+// second is HTTP/2's for a header list it decoded fully and found over its
+// advertised limit. That is the rarer HTTP/2 case: a list over the limit
+// before its last frame instead has the connection closed, with an error
+// that says nothing about headers (http2ProtocolError).
 func responseHeadersTooLarge(err error) bool {
 	if err == nil {
 		return false
@@ -267,15 +268,15 @@ func responseHeadersTooLarge(err error) bool {
 	return strings.Contains(text, "server response headers exceeded") || strings.Contains(text, "response header list larger than advertised limit")
 }
 
-// http2ProtocolError says whether err is the HTTP/2 client ending its
-// connection for what the target sent: a connection error whose code is
-// PROTOCOL_ERROR. That is how Go ends an answer whose headers pass
-// MaxResponseHeaderBytes while more of them are still to come — it stops
-// reading them, closes the connection and reports this, with no word of the
-// headers — and how it ends one that broke the protocol in any other way,
-// which nothing here can tell from the first. The error's type is internal
-// to net/http, so it is told by what it is: an error code, 1 being
-// PROTOCOL_ERROR, of a type named for a connection error.
+// http2ProtocolError reports whether err is the HTTP/2 client closing its
+// connection because of what the target sent: a connection error with code
+// PROTOCOL_ERROR. Go ends a response this way when its headers exceed
+// MaxResponseHeaderBytes while more are still to come: it stops reading
+// them, closes the connection and reports this, without mentioning headers.
+// It also ends any other protocol violation this way, and nothing here can
+// tell the two apart. The error's type is internal to net/http, so it is
+// recognized by its shape: an error code, 1 being PROTOCOL_ERROR, of a type
+// named for a connection error.
 func http2ProtocolError(err error) bool {
 	found := false
 	walkErrors(err, func(e error) {
@@ -348,13 +349,13 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 	}
 	client := &http.Client{Transport: transport, Timeout: timeout}
 	if followRedirects {
-		// Go's own limit, and the collector's allowed_schemes, and
-		// allowed_targets and denied_targets, for the URL each redirect
-		// leads to. What the redirected request carries is settled first
-		// (redirecttrust.go), so a debug report shows its headers as they
-		// are sent. Everything is taken from the request and its context:
-		// the client, and this function with it, is copied for a request
-		// sent on a connection of its own (onOwnConnection).
+		// This applies Go's own limit, and the collector's allowed_schemes,
+		// allowed_targets and denied_targets, to the URL each redirect leads
+		// to. What the redirected request carries is decided first
+		// (redirecttrust.go), so a debug report shows its headers as sent.
+		// Everything is taken from the request and its context, because the
+		// client, and this function with it, is copied for a request sent
+		// on its own connection (onOwnConnection).
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			ctx := req.Context()
 			if req.Response != nil {
@@ -391,12 +392,12 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 	return client, nil
 }
 
-// onOwnConnection is client with a pool of its own that keeps nothing: its
-// request is sent on a connection made for it, which no other request can be
-// put on and which is closed when the answer has been read. The retry after
-// an HTTP/2 protocol error is sent this way (fetch says why). The
-// connection is made as the client's others are, through the same proxy,
-// with the same TLS settings and checked against the same target policy.
+// onOwnConnection returns client with its own pool that keeps nothing. Its
+// request is sent on a connection made for it, which no other request can
+// use and which is closed once the response has been read. The retry after
+// an HTTP/2 protocol error is sent this way (fetch explains why). The
+// connection is made like the client's others: through the same proxy, with
+// the same TLS settings, and checked against the same target policy.
 func onOwnConnection(client *http.Client) *http.Client {
 	shared, ok := client.Transport.(*http.Transport)
 	if !ok {

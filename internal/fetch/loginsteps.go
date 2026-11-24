@@ -34,14 +34,14 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-// A steps login is a login no one request makes: a sign-in page whose form
-// carries a token against cross-site requests, a form posted with the
-// user's password, a ticket read from the page it answers with and traded
-// for a token, perhaps signed with OAuth 1.0a. Each step is one request,
-// made in order with one cookie jar, and reads values from its answer —
-// with a regular expression, a jq expression, a field of a form, a header
-// or a cookie — which the steps after it send as {{login.<name>}}, and of
-// which one is the token:
+// A steps login is a login that no single request makes. Examples: a
+// sign-in page whose form carries a token against cross-site requests, a
+// form posted with the user's password, or a ticket read from the answer
+// page and traded for a token, perhaps signed with OAuth 1.0a. Each step is
+// one request. Steps run in order with one cookie jar. Each step reads
+// values from its answer (with a regular expression, a jq expression, a
+// form field, a header or a cookie). Later steps send them as
+// {{login.<name>}}, and one of them is the token:
 //
 //	login:
 //	  type: steps
@@ -56,18 +56,19 @@ import (
 //	  token: access_token
 //	  expires_in: expires_in
 //
-// A token's lifetime is, of the first that says one: the value expires_in
-// names, in seconds, or expires_at, a time; the cookie's Max-Age or
-// Expires, when the token is a cookie's; the token's own exp claim, when
-// it is a JSON Web Token; and ttl.
+// A token's lifetime comes from the first of these that gives one:
+//   - the value expires_in names, in seconds, or expires_at, a time;
+//   - the cookie's Max-Age or Expires, when the token is a cookie's;
+//   - the token's own exp claim, when it is a JSON Web Token;
+//   - ttl.
 //
-// A login whose whole run is costly, or is held to few runs a day, keeps
-// values of it (keep), each for how long, and makes later tokens with
-// refresh_steps, which send the values kept: a long-lived token traded for
-// short-lived ones. When the values kept have expired, or the refresh
-// fails, the whole login is made again. keep_file writes the token and the
-// values kept to a file, read when the exporter starts, so that a restart
-// makes no login while they last.
+// A login whose full run is costly, or is limited to a few runs a day, can
+// keep some of its values (keep), each for a set time. It then makes later
+// tokens with refresh_steps, which send the kept values: a long-lived
+// token traded for short-lived ones. When the kept values have expired, or
+// the refresh fails, the whole login runs again. keep_file writes the token
+// and the kept values to a file, read when the exporter starts, so a
+// restart makes no login while they last.
 
 // maxLoginSteps bounds the steps of each list: a login is a few requests.
 const maxLoginSteps = 16
@@ -329,10 +330,11 @@ type loginValue struct {
 	written bool
 }
 
-// stepsLogin makes the login l, for a request of c to target, whose token
-// is kept under key: the token the keep file holds, when it is not the
-// last one this exporter's logins gave and lasts; else refresh_steps with
-// the values kept, while they last; else, or when those fail, the steps.
+// stepsLogin makes the login l for a request of c to target, and keeps its
+// token under key. It uses the keep file's token when that token lasts and
+// is not the last one this exporter's logins gave. Else it runs
+// refresh_steps with the kept values while they last. Else, or when those
+// fail, it runs the steps.
 func stepsLogin(ctx context.Context, client *http.Client, c *model.Collector, l *model.LoginConfig, target, host, key string, start time.Time) (loginToken, error) {
 	state := stepsStates.of(key)
 	state.load(l)
@@ -405,10 +407,10 @@ func stepsGiven(l *model.LoginConfig) (map[string]loginValue, error) {
 	return out, nil
 }
 
-// stepsToken is the token of a steps login's values: the value token names,
-// and its lifetime, of the first that says one — expires_in or expires_at,
-// the token's own expiry as its cookie or its JWT exp claim says it, and
-// ttl.
+// stepsToken returns the token from a steps login's values: the value
+// token names. Its lifetime comes from the first that gives one:
+// expires_in or expires_at, the token's own expiry from its cookie or its
+// JWT exp claim, and ttl.
 func stepsToken(l *model.LoginConfig, values map[string]loginValue, start time.Time) (loginToken, error) {
 	value, ok := values[l.Token]
 	if !ok || value.Text == "" {
@@ -430,10 +432,10 @@ func stepsToken(l *model.LoginConfig, values map[string]loginValue, start time.T
 			if !ok {
 				return loginToken{}, fmt.Errorf("login.expires_at %s is no time: seconds or milliseconds since 1970, RFC 3339 or an HTTP date", l.ExpiresAt)
 			}
-			// A token that expired before the login began is no token:
-			// kept, it would be fetched again at every request. A
-			// lifetime in seconds read as a time is one, 3600 being an
-			// hour after 1970 began.
+			// A token that expired before the login began is not a token.
+			// If kept, it would be fetched again at every request. A
+			// lifetime in seconds read as a time is such a token: 3600 is
+			// an hour after the start of 1970.
 			if !at.After(start) {
 				return loginToken{}, fmt.Errorf("login.expires_at %s is a time before the login, %s; if it is the token's lifetime in seconds, name it with expires_in", l.ExpiresAt, at.UTC().Format(time.RFC3339))
 			}
@@ -461,10 +463,10 @@ func defaultExpiry(token *loginToken, l *model.LoginConfig, start time.Time) {
 	}
 }
 
-// jwtExpiry is the exp claim of a JSON Web Token (RFC 7519 § 4.1.4), zero
-// for a token that is none, or says no expiry. The signature is not
-// checked: the claim says when the target will refuse the token, which the
-// target checks.
+// jwtExpiry returns the exp claim of a JSON Web Token (RFC 7519 § 4.1.4).
+// It is zero for a value that is not a JWT or has no expiry. The signature
+// is not checked: the claim says when the target will refuse the token,
+// and the target does that check.
 func jwtExpiry(token string) time.Time {
 	token = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(token, "Bearer "), "bearer "))
 	parts := strings.Split(token, ".")
@@ -599,8 +601,8 @@ func runLoginStep(ctx context.Context, client *http.Client, c *model.Collector, 
 		return fmt.Errorf("%s: %w", at, err)
 	}
 	// u is the step's url from the configuration, resolved against the
-	// target's scheme, host and port (loginURL), and held to the
-	// collector's target policy just above; a probe cannot set or change
+	// target's scheme, host and port (loginURL), and checked against the
+	// collector's target policy just above. A probe cannot set or change
 	// it.
 	req, err := http.NewRequestWithContext(stepCtx, method, u.String(), bytes.NewReader(body)) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
@@ -808,8 +810,8 @@ func (o oauth1Signer) authorization(method string, u *url.URL, form url.Values, 
 }
 
 // stepsState is what a steps login keeps under one key: the values kept
-// for refresh_steps; with keep_file, the token the file holds, when it is
-// another than the last one this exporter's logins gave; and that last
+// for refresh_steps; with keep_file, the token the file holds, when it
+// differs from the last one this exporter's logins gave; and that last
 // token.
 type stepsState struct {
 	mu        sync.Mutex
@@ -843,13 +845,13 @@ func (c *stepsStateCache) of(key string) *stepsState {
 	return s
 }
 
-// load reads what l's keep file holds of the login, at each login: after
-// the exporter starts, and whenever another exporter sharing the file, as
-// the target allocator's replicas do on a volume they share, logged in
-// since. The values kept are the file's, which this exporter's logins
-// write too; its token is used when it is another than the last token a
-// login of this exporter gave, which a login is made because it is due or
-// was refused.
+// load reads what l's keep file holds about the login. It runs at each
+// login: after the exporter starts, and whenever another exporter sharing
+// the file has logged in since (as the target allocator's replicas do on a
+// shared volume). The kept values are the file's; this exporter's logins
+// write them too. The file's token is used when it differs from the last
+// token a login of this exporter gave. A login is made because that token
+// is due or was refused.
 func (s *stepsState) load(l *model.LoginConfig) {
 	if l.KeepFile == "" {
 		return
@@ -906,10 +908,10 @@ func (s *stepsState) keptValues(l *model.LoginConfig, now time.Time) (map[string
 	return out, true
 }
 
-// update keeps what a login read of the values l keeps — every one after
-// the whole login, and those refresh_steps read again after a refresh —
-// each expiring at the first of its keep, its cookie's and its JWT's
-// expiry, and writes the token and them to the keep file.
+// update keeps the values l keeps that a login read: all of them after a
+// whole login, and those refresh_steps read again after a refresh. Each
+// expires at the earliest of its keep, its cookie's and its JWT's expiry.
+// It then writes the token and the values to the keep file.
 func (s *stepsState) update(l *model.LoginConfig, token loginToken, read map[string]loginValue, start time.Time, whole bool) {
 	s.mu.Lock()
 	if whole || s.kept == nil {
@@ -1028,10 +1030,11 @@ var keepFileWarning = func(path string, err error) {
 	slog.Default().Warn("a login's keep_file could not be written; the login succeeded, and the exporter's next start makes it again", "keep_file", path, "error", err)
 }
 
-// write puts the login key's state in path, replacing the file whole: a
-// file of its own beside it, renamed over it, readable by the exporter's
-// user alone. Logins that wrote to the file before are kept, but for those
-// whose token and values kept have all expired, which no login would use.
+// write stores the login key's state in path and replaces the whole file:
+// it writes a separate file beside it, readable only by the exporter's
+// user, and renames it over path. Logins written to the file before are
+// kept, except those whose token and kept values have all expired, which
+// no login would use.
 func (k *keepFileStore) write(path, key string, saved keptLogin) {
 	k.mu.Lock()
 	defer k.mu.Unlock()

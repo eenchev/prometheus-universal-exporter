@@ -21,17 +21,17 @@ import (
 	"github.com/vertica/vertica-sql-go/parse"
 )
 
-// The vertica driver is vertica/vertica-sql-go: built in only with the
+// The vertica driver is vertica/vertica-sql-go. It is built in only with the
 // sql_driver_vertica tag (SQL_DRIVERS=vertica). A statement runs in a
-// transaction started READ ONLY. The driver dials by itself, taking neither
-// a dialer nor a context: the target's host and every address it resolves
-// to are held to the policy before a connection is made, a host that could
-// not be looked up failing, the connection's TCP keepalives are the
-// driver's own, and a connection that is not made by the scrape's deadline
+// transaction started READ ONLY. The driver dials by itself and takes
+// neither a dialer nor a context. The target's host and every address it
+// resolves to are held to the policy before a connection is made, and a
+// host that cannot be looked up fails. The connection's TCP keepalives are
+// the driver's own. A connection that is not made by the scrape's deadline
 // is left to finish and then closed. Every call on a connection is bounded
-// by its context here (verticaConn), the driver never seeing a context that
-// ends, so that it makes no cancel request of its own. tlsmode is none,
-// server (TLS, the certificate not verified) or server-strict.
+// by its context here (verticaConn). The driver never sees a context that
+// ends, so it makes no cancel request of its own. tlsmode is none, server
+// (TLS, the certificate not verified) or server-strict.
 func init() {
 	verticalog.SetLogger(verticaLog{})
 	registerSQLDriver(&sqlDriver{
@@ -60,12 +60,12 @@ func verticaServerError(err error) (string, bool) {
 	return "SQLSTATE " + vErr.SQLState, true
 }
 
-// verticaLog hands the driver's log to the exporter's logger, slog's
-// default, which main makes the JSON lines every other line is: the driver
-// writes its own (warnings and errors, unless VERTICA_SQL_GO_LOG_LEVEL asks
-// for more) to stdout in a format of its own, or to the file
-// VERTICA_SQL_GO_LOG_FILE names, which this replaces. A warning is a
-// warning, an error or fatal message an error, and the rest debug.
+// verticaLog sends the driver's log to the exporter's logger (slog's
+// default), which main sets up to write the same JSON lines as every other
+// line. It replaces the driver's own output: warnings and errors (more if
+// VERTICA_SQL_GO_LOG_LEVEL asks) to stdout in its own format, or to the
+// file VERTICA_SQL_GO_LOG_FILE names. A warning maps to a warning, an error
+// or fatal message to an error, and the rest to debug.
 type verticaLog struct{}
 
 func (verticaLog) Write(prefix, name, msg string) {
@@ -81,10 +81,10 @@ func (verticaLog) Write(prefix, name, msg string) {
 
 func (verticaLog) Close() {}
 
-// verticaStatement refuses a statement the vertica driver would not run as
-// one statement prepared on the server, its args bound to it: one that
-// holds more than one (verticaSingleStatement), and one the driver sends
-// unprepared, as text (verticaUnprepared).
+// verticaStatement refuses a statement that the vertica driver would not run
+// as one statement prepared on the server with its args bound. That is a
+// statement that holds more than one (verticaSingleStatement), or one the
+// driver sends unprepared, as text (verticaUnprepared).
 func verticaStatement(statement string) error {
 	if err := verticaSingleStatement(statement); err != nil {
 		return err
@@ -92,24 +92,26 @@ func verticaStatement(statement string) error {
 	return verticaUnprepared(statement)
 }
 
-// verticaUnprepared refuses a statement the driver sends with the simple
-// query protocol rather than preparing it (connection.go PrepareContext,
-// stmt.go QueryContextRaw): a COPY ... FROM LOCAL, which the driver finds
-// by its own reading of the text as the lexer rewrote it (stmt.go
-// isLocalCopyStatement, analyzeLocalCopyStatement, topLevelSQLTokens), and
-// a function's DDL or an EXECUTE grant on one, which it finds by its
-// UDSFAnalyzer in the text as written (newStmt). The driver writes the args
-// of such a statement into its text (stmt.go interpolate, formatArg),
-// doubling a ' and leaving a \ as it is, which, in an E'...' or with
-// standard_conforming_strings off, escapes the closing quote, so that a
-// probe's value ending in a \ ends the string at the next quote and what
-// follows is SQL. Every other statement, a single one (the URL sets
-// use_prepared_statements=1, which no option overrides), is prepared, and
-// its args are bound to it as values (stmt.go bindAndExecute). A COPY is
-// refused however the driver or the server reads it, since a COPY loads
-// rows into a table, which no metrics query does and the read-only
-// transaction is there to refuse, and a COPY ... FROM LOCAL would read a
-// file of the exporter's host into the database at every scrape.
+// verticaUnprepared refuses a statement that the driver sends with the
+// simple query protocol instead of preparing it (connection.go
+// PrepareContext, stmt.go QueryContextRaw). There are two kinds:
+//   - a COPY ... FROM LOCAL, which the driver finds by its own reading of
+//     the text as the lexer rewrote it (stmt.go isLocalCopyStatement,
+//     analyzeLocalCopyStatement, topLevelSQLTokens);
+//   - a function's DDL or an EXECUTE grant on one, which its UDSFAnalyzer
+//     finds in the text as written (newStmt).
+//
+// The driver writes the args of such a statement into its text (stmt.go
+// interpolate, formatArg). It doubles a ' but leaves a \ as it is. In an
+// E'...', or with standard_conforming_strings off, that \ escapes the
+// closing quote. So a probe's value ending in a \ ends the string at the
+// next quote, and what follows is SQL. Every other statement is a single
+// one (the URL sets use_prepared_statements=1, which no option overrides).
+// It is prepared, and its args are bound to it as values (stmt.go
+// bindAndExecute). A COPY is refused however the driver or the server reads
+// it. A COPY loads rows into a table, which no metrics query does and the
+// read-only transaction is there to refuse. A COPY ... FROM LOCAL would
+// read a file of the exporter's host into the database at every scrape.
 func verticaUnprepared(statement string) error {
 	lexed, _ := verticaLex(statement)
 	isCopy, local := false, false
@@ -142,14 +144,15 @@ func verticaUnprepared(statement string) error {
 
 // verticaDriverWords are the words of statement, in upper case, as the
 // driver reads them to find a COPY ... FROM LOCAL (stmt.go
-// topLevelSQLTokens): runs of ASCII letters, digits and _ outside '...'
-// and "..." (a doubled quote inside), -- to the end of the line, /* ... */
-// (not nested) and $tag$ ... $tag$, a tag's bytes taken for runes, as the
-// driver takes them (readDollarTag, isDollarTagRune). A word after a quote
-// or a comment counts as much as one before it, as it does to the driver,
-// whose first word decides the protocol whatever the server makes of the
-// text: "/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?" is a SELECT to a
-// server that nests comments, and a COPY ... FROM LOCAL to the driver.
+// topLevelSQLTokens). A word is a run of ASCII letters, digits and _ outside
+// '...' and "..." (with a doubled quote inside), -- to the end of the line,
+// /* ... */ (not nested) and $tag$ ... $tag$. A tag's bytes are taken as
+// runes, as the driver takes them (readDollarTag, isDollarTagRune). A word
+// after a quote or a comment counts as much as one before it, as it does to
+// the driver. The driver's first word decides the protocol, whatever the
+// server makes of the text: "/* /* */ COPY t FROM LOCAL 'f' */ SELECT ?" is
+// a SELECT to a server that nests comments, and a COPY ... FROM LOCAL to the
+// driver.
 func verticaDriverWords(statement string) []string {
 	var words []string
 	start := -1
@@ -260,19 +263,21 @@ func verticaFirstWord(statement string, nested bool) string {
 
 // verticaSingleStatement refuses a statement that holds more than one. The
 // driver splits what it is given (vertica-sql-go stmt.go, newStmt and
-// QueryContext, by parse.SplitStatements) and runs each part on its own, so
-// a COMMIT among them would end the read-only transaction and the
-// statements after it would run outside it. Since vertica-sql-go 1.3.9 the
-// driver no longer splits at a ; inside what it takes for a BEGIN ... END,
-// CASE, IF, LOOP or WHILE block, and sends such text to the server whole,
-// which runs every statement in it: "BEGIN; COMMIT; DROP TABLE t" and even
+// QueryContext, by parse.SplitStatements) and runs each part on its own. A
+// COMMIT among them would end the read-only transaction, and the statements
+// after it would run outside it. Since vertica-sql-go 1.3.9 the driver no
+// longer splits at a ; inside what it takes for a BEGIN ... END, CASE, IF,
+// LOOP or WHILE block. It sends such text to the server whole, and the server
+// runs every statement in it: "BEGIN; COMMIT; DROP TABLE t" and even
 // "SELECT 1 AS begin; COMMIT" reach the server as one query. So the
-// driver's splitting is not enough to go by: a statement is refused when
-// the driver would split it, as written or as its lexer rewrites the
-// placeholders of, or when verticaParts finds a ; followed by anything but
-// blanks and comments outside quotes, quoted identifiers, comments and
-// dollar quotes, whatever block it seems to stand in. A statement the
-// driver's lexer fails on is refused too (verticaLex).
+// driver's splitting is not enough. A statement is refused when:
+//   - the driver would split it, as written or with its placeholders
+//     rewritten by its lexer; or
+//   - verticaParts finds a ; followed by anything but blanks and comments,
+//     outside quotes, quoted identifiers, comments and dollar quotes,
+//     whatever block it seems to stand in.
+//
+// A statement the driver's lexer fails on is refused too (verticaLex).
 func verticaSingleStatement(statement string) error {
 	lexed, ok := verticaLex(statement)
 	if !ok {
@@ -287,13 +292,14 @@ func verticaSingleStatement(statement string) error {
 	return nil
 }
 
-// verticaLex is statement as the driver's lexer rewrites its placeholders
-// (parse.Lex), which it does to every statement it prepares (stmt.go,
-// newStmt), and false where the lexer panics: on a ? right after a ' it
-// begins a string state at, as at the start of the text or of a line after a
-// -- comment ("'?"), it slices before what it wrote. The driver would panic
-// on such a statement at every scrape, and the check, made where a
-// configuration is loaded, would take the exporter down with it.
+// verticaLex is statement with its placeholders rewritten by the driver's
+// lexer (parse.Lex), as the driver does to every statement it prepares
+// (stmt.go, newStmt). It is false where the lexer panics: on a ? right
+// after a ' at which it begins a string state, such as at the start of the
+// text or of a line after a -- comment ("'?"). There it slices before what
+// it wrote. The driver would panic on such a statement at every scrape, and
+// the check, made where a configuration is loaded, would take the exporter
+// down with it.
 func verticaLex(statement string) (lexed string, ok bool) {
 	defer func() {
 		if recover() != nil {
@@ -304,24 +310,25 @@ func verticaLex(statement string) (lexed string, ok bool) {
 }
 
 // verticaParts counts the statements in statement as Vertica's SQL has
-// them, every ; outside a quote ending one: 'text' with a doubled quote
-// inside, "name" with "" inside, -- to the end of the line, /* ... */, and
-// $tag$ ... $tag$. A part of nothing but blanks (ASCII white space) and
-// comments is no statement. It knows no blocks, so a ; never stands inside
-// one, and a // is not taken for a comment, as the driver since 1.3.9 does
-// not take it for one either: a statement that is one only if those were
-// honoured is refused, which costs a metrics query nothing.
+// them: every ; outside a quote ends one. Quotes are 'text' (with a doubled
+// quote inside), "name" (with "" inside), -- to the end of the line,
+// /* ... */, and $tag$ ... $tag$. A part of nothing but blanks (ASCII white
+// space) and comments is not a statement. It knows no blocks, so a ; never
+// stands inside one. A // is not taken for a comment; since 1.3.9 the
+// driver does not take it for one either. A statement that is one only if
+// those were honoured is refused, which costs a metrics query nothing.
 //
-// Where the server's reading is not the driver's, or not one, the text is
-// read every way the server may read it, and the most statements any
-// reading finds are counted (verticaReadings): the driver, and the first
-// reading, take a $ anywhere for the start of a dollar quote and a \ for
-// nothing; the server, like PostgreSQL, whose SQL Vertica's follows, takes
-// a $ inside a word for part of it ("SELECT a$b$; COMMIT; SELECT $b$x$b$"
-// is three statements), a \ in an E'...' to escape the next character, a
-// quote among them, so that the string ends at a quote the driver takes for
-// half of a doubled one, and in every '...' with
-// standard_conforming_strings off, and may nest block comments.
+// Where the server's reading is not the driver's, or not a single one, the
+// text is read every way the server may read it, and the most statements
+// any reading finds are counted (verticaReadings). The driver, and the
+// first reading, take a $ anywhere for the start of a dollar quote and a \
+// for nothing. The server, like PostgreSQL (whose SQL Vertica's follows):
+//   - takes a $ inside a word for part of it ("SELECT a$b$; COMMIT;
+//     SELECT $b$x$b$" is three statements);
+//   - takes a \ to escape the next character, a quote among them, in an
+//     E'...' and, with standard_conforming_strings off, in every '...'. The
+//     string then ends at a quote the driver takes for half of a doubled one;
+//   - may nest block comments.
 func verticaParts(statement string) int {
 	most := 0
 	for _, reading := range verticaReadings {
@@ -439,17 +446,17 @@ func verticaDollarTag(s string) (string, bool) {
 	return "", false
 }
 
-// verticaTLS hands out the names TLS configurations are registered with
-// the driver by. The driver keeps what is registered in a map for good, a
-// name registered again taking the new configuration (connection.go
-// RegisterTLSConfig, _tlsConfigs.add), and looks the configuration up by
-// the URL's tlsmode only while it opens a connection (connection.go
-// newConnection, initializeSSL). So each connection is made with a name of
-// its own, registered with the configuration made for it, from the files
-// as they are read for it, and the name is given back once the connection
-// is open or has failed, for the next connection to register its own
-// under: there are never more names than connections ever opened at once,
-// however often the files change, and a connection never takes another's
+// verticaTLS hands out the names under which TLS configurations are
+// registered with the driver. The driver keeps registered configurations in
+// a map for good, and registering a name again replaces its configuration
+// (connection.go RegisterTLSConfig, _tlsConfigs.add). It looks the
+// configuration up by the URL's tlsmode only while it opens a connection
+// (connection.go newConnection, initializeSSL). So each connection gets a
+// name of its own, registered with the configuration made for it from the
+// files as read for it. The name is given back once the connection is open
+// or has failed, so the next connection can register its own under it.
+// There are never more names than connections ever opened at once, however
+// often the files change, and a connection never takes another's
 // configuration.
 var verticaTLS struct {
 	mu sync.Mutex
@@ -512,10 +519,10 @@ func connectVertica(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, err
 	return newVerticaConn(conn)
 }
 
-// connectWithin runs open, a driver's connect that takes no context, and
-// returns what it made, or the context's error when it ends first: the
-// connection open makes after that is closed. A panic of the driver, in the
-// goroutine open runs in, is its error.
+// connectWithin runs open, a driver's connect that takes no context. It
+// returns what open made, or the context's error if the context ends first;
+// in that case the connection open makes later is closed. A panic of the
+// driver, in the goroutine open runs in, is returned as its error.
 func connectWithin(ctx context.Context, open func() (driver.Conn, error)) (driver.Conn, error) {
 	type made struct {
 		conn driver.Conn
@@ -563,19 +570,19 @@ type verticaDriverStmt interface {
 }
 
 // verticaConn is a vertica connection whose every call returns by the end
-// of its context, or, for one that takes none (a transaction's commit and
-// rollback, a statement's close), of the context it was begun or prepared
-// with. The driver reads with no deadline (connection.go readAll), and
-// stops a statement only by a cancel request it sends when the statement's
-// context ends, over a connection it dials itself with no timeout, after a
-// lookup of its own, past the exporter's dialer and the target lists, and
-// unencrypted whatever tlsmode says (stmt.go QueryContextRaw,
-// connection.go establishSocketConnection and sendMessageTo). So the driver
-// is given contexts that never end, and makes no cancel request; each call
-// runs in a goroutine of its own, and one still running at its context's
-// end is left to finish there, the connection given up: it is invalid to
-// database/sql from then on, which closes it, and its driver connection is
-// closed when that call returns.
+// of its context. A call that takes no context (a transaction's commit and
+// rollback, a statement's close) returns by the end of the context it was
+// begun or prepared with. The driver reads with no deadline (connection.go
+// readAll). It stops a statement only by a cancel request, sent when the
+// statement's context ends, over a connection it dials itself: with no
+// timeout, after a lookup of its own, past the exporter's dialer and the
+// target lists, and unencrypted whatever tlsmode says (stmt.go
+// QueryContextRaw, connection.go establishSocketConnection and
+// sendMessageTo). So the driver is given contexts that never end, and makes
+// no cancel request. Each call runs in a goroutine of its own. A call still
+// running when its context ends is left to finish there, and the connection
+// is given up: it is invalid to database/sql from then on, which closes it,
+// and its driver connection is closed when that call returns.
 type verticaConn struct {
 	conn verticaDriverConn
 	// slot is held while the driver runs on the connection: by a call, and,
@@ -729,10 +736,10 @@ func (t *verticaTx) Rollback() error {
 	return t.conn.within(t.ctx, func(context.Context) error { return t.tx.Rollback() })
 }
 
-// verticaStmt is a statement of a verticaConn, each call bounded by its
-// context, or, for one that takes none, by the one it was prepared with.
-// Its rows are read whole by the driver before they are returned
-// (stmt.go collectResults), so reading them waits for nothing.
+// verticaStmt is a statement of a verticaConn. Each call is bounded by its
+// context or, for one that takes none, by the one it was prepared with. The
+// driver reads its rows whole before returning them (stmt.go
+// collectResults), so reading them waits for nothing.
 type verticaStmt struct {
 	conn *verticaConn
 	stmt verticaDriverStmt

@@ -18,15 +18,15 @@ import (
 	oranetwork "github.com/sijms/go-ora/v2/network"
 )
 
-// The oracle driver is sijms/go-ora, pure Go: built in only with the
-// sql_driver_oracle tag (SQL_DRIVERS=oracle). The database is named by
-// request.service_name. go-ora refuses database/sql's read-only
-// transaction, so a statement runs after SET TRANSACTION READ ONLY, the
-// first statement of the transaction it opens, which is rolled back. The
-// driver breaks off the statement when the scrape's deadline comes. ssl
-// switches TLS on, for every connection go-ora makes (oracleTLSOnly); the
-// certificate is checked against the target's host, which go-ora sets
-// itself, so tls.server_name is refused.
+// The oracle driver is sijms/go-ora, in pure Go. It is built in only with
+// the sql_driver_oracle tag (SQL_DRIVERS=oracle). request.service_name
+// names the database. go-ora refuses database/sql's read-only transaction,
+// so the statement runs after SET TRANSACTION READ ONLY, as the first
+// statement of the transaction it opens, which is then rolled back. The
+// driver aborts the statement at the scrape's deadline. ssl turns on TLS
+// for every connection go-ora makes (oracleTLSOnly). go-ora sets the host
+// the certificate is checked against to the target's host itself, so
+// tls.server_name is refused.
 func init() {
 	registerSQLDriver(&sqlDriver{
 		name:        SQLDriverOracle,
@@ -54,13 +54,12 @@ func oracleServerError(err error) (string, bool) {
 }
 
 // oracleURL is the go-ora URL of a connection made with spec. It is built
-// here rather than by goora.BuildUrl, which escapes the account with
-// url.PathEscape (connection_string.go BuildUrl), leaving a ':' in it as it
-// is, so that go-ora, which reads the URL with url.Parse and takes the
-// account and password from its user information
-// (configurations/connect_config.go ParseConfig), would end the account at
-// that ':' and take the rest for the password: url.UserPassword escapes
-// what would end either of them.
+// here rather than by goora.BuildUrl. BuildUrl escapes the account with
+// url.PathEscape (connection_string.go BuildUrl), which leaves a ':'
+// unescaped. go-ora reads the URL with url.Parse and takes the account and
+// password from its user information (configurations/connect_config.go
+// ParseConfig). It would end the account at that ':' and take the rest as
+// the password. url.UserPassword escapes anything that would end either.
 func oracleURL(spec *sqlConnectSpec) string {
 	port, _ := strconv.Atoi(spec.port)
 	query := url.Values{"PROGRAM": {spec.appName}}
@@ -102,17 +101,17 @@ func (d oracleDialer) DialContext(ctx context.Context, network, address string) 
 	return d(ctx, network, address)
 }
 
-// oracleTLSOnly is dial for a connection with ssl true: each connection it
-// makes must begin with a TLS handshake, and is closed, nothing written,
-// when the driver begins it otherwise. go-ora follows a listener's REDIRECT
-// to the address it names (network/session.go Connect,
-// UpdateDatabaseInfoForRedirect) and takes TLS on or off from that
-// address's PROTOCOL (configurations/session_info.go UpdateSSL), so a
+// oracleTLSOnly is the dial for a connection with ssl true. Each connection
+// it makes must begin with a TLS handshake. If the driver begins it any
+// other way, it is closed with nothing written. The reason: go-ora follows
+// a listener's REDIRECT to the address it names (network/session.go
+// Connect, UpdateDatabaseInfoForRedirect) and turns TLS on or off from
+// that address's PROTOCOL (configurations/session_info.go UpdateSSL). A
 // redirect naming PROTOCOL=TCP for the target's own host, which the dialer
-// lets through, would have the next connection, and the login on it, go
-// unencrypted. go-ora's own TLS stays on, rather than the handshake being
-// made here, since go-ora makes it again on that connection when the
-// server asks it to (session.go readPacket, negotiate on RESEND and DATA).
+// allows, would make the next connection, and the login on it,
+// unencrypted. go-ora's own TLS stays on, rather than doing the handshake
+// here, because go-ora repeats it on that connection when the server asks
+// (session.go readPacket, negotiate on RESEND and DATA).
 func oracleTLSOnly(dial func(ctx context.Context, network, address string) (net.Conn, error)) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := dial(ctx, network, address)
@@ -129,10 +128,9 @@ var errOracleNoTLS = errors.New("request.options.ssl is true, and the oracle dri
 	"with PROTOCOL=TCP has it do, and nothing was sent on it; have the listener redirect to a TCPS address")
 
 // oracleTLSConn is a connection whose first write must be a TLS handshake
-// record: content type 22, then the major version 3. A TNS packet begins
-// with its length, which would have to be 5,635 bytes or so to look the
-// same, and the CONNECT packet go-ora writes first is a few hundred bytes
-// at most.
+// record: content type 22, then major version 3. A TNS packet begins with
+// its length, which would need to be about 5,635 bytes to look the same.
+// The CONNECT packet go-ora writes first is at most a few hundred bytes.
 type oracleTLSConn struct {
 	net.Conn
 	once sync.Once

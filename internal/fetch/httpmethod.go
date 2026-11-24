@@ -11,10 +11,10 @@ import (
 // send.
 var httpMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead}
 
-// HTTPMethodSpellings are the ways request.method may be written, a
-// collector's and a static target's: each of httpMethods in upper case, as
-// HTTP names them, or in lower case. The schemas take these alone, and so
-// does the exporter, rather than any case, which no schema enum can list.
+// HTTPMethodSpellings are the ways request.method may be written, for a
+// collector and a static target: each of httpMethods in upper case, as HTTP
+// names them, or in lower case. The schemas take only these, and so does
+// the exporter, rather than any case, which no schema enum can list.
 func HTTPMethodSpellings() []string {
 	spellings := slices.Clone(httpMethods)
 	for _, method := range httpMethods {

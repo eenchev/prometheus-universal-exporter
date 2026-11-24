@@ -27,9 +27,9 @@ import (
 )
 
 // The kubernetes request type lists Kubernetes objects of one resource,
-// built in or custom, and hands them to the transforms as a JSON document,
-// so that metrics of the kind kube-state-metrics gives, and of custom
-// resources it knows nothing of, come from configuration alone:
+// built in or custom, and passes them to the transforms as a JSON document.
+// This gives metrics like those of kube-state-metrics, and of custom
+// resources it does not know, from configuration alone:
 //
 //	request:
 //	  type: kubernetes
@@ -39,41 +39,43 @@ import (
 //	  namespaces: [shop, billing] # the exporter's own namespace when left out
 //	  label_selector: app.kubernetes.io/part-of=shop
 //
-// The objects are those the API server lists: of the namespaces named, of
-// the exporter's own namespace when none is, or, with all_namespaces, of
-// the whole cluster, which is how a cluster-scoped resource such as nodes
-// is listed. The listing is the API's REST one over HTTPS, a page of 100
-// objects at a time with the continue token of each, a page over the
-// response limit asked for again with half as many, made with the
-// standard library alone (internal/kubeapi), as the target allocator lists
-// EndpointSlices: there is no client library behind it.
+// The objects are those the API server lists: from the namespaces named, or
+// from the exporter's own namespace when none is named, or, with
+// all_namespaces, from the whole cluster. all_namespaces is how a
+// cluster-scoped resource such as nodes is listed. The listing uses the
+// API's REST interface over HTTPS, 100 objects per page, following each
+// page's continue token. A page over the response limit is asked for again
+// with half as many. It uses only the standard library (internal/kubeapi),
+// as the target allocator does to list EndpointSlices. No client library is
+// behind it.
 //
-// The API server is the one of the cluster the exporter runs in, reached
-// with its pod's service account: the address Kubernetes gives every pod,
-// the token, read again at every scrape so a rotated one is used, and the
-// cluster's CA, which the server's certificate must be signed by. Outside
-// a cluster, api_server names it, with tls.ca_file and bearer_token_file,
-// or a client certificate, for the credentials, each read again at every
-// scrape too.
+// By default the API server is the one of the cluster the exporter runs in,
+// reached with its pod's service account. That means the address Kubernetes
+// gives every pod, the token (read again at every scrape, so a rotated one
+// is used) and the cluster's CA, which must sign the server's certificate.
+// Outside a cluster, api_server names the server, and tls.ca_file with
+// bearer_token_file, or a client certificate, gives the credentials. Each is
+// also read again at every scrape.
 //
-// A collector reads what its configuration names and nothing else: a probe
-// takes no target, and a static target names none, so whoever can reach
-// /probe cannot have the exporter list what its service account may read
-// beyond that. The core group's secrets are refused at load: a metrics
-// exporter has no business holding them, and a transform's errors and a
-// debug report could show them. Every object's metadata.managedFields,
-// large and of no use to a metric, is taken out of the document.
+// A collector reads only what its configuration names. A probe takes no
+// target and a static target names none, so whoever can reach /probe cannot
+// make the exporter list anything else its service account may read. The
+// core group's secrets are refused at load: a metrics exporter should not
+// hold them, and a transform's errors and a debug report could show them.
+// Every object's metadata.managedFields is removed from the document, since
+// it is large and of no use to a metric.
 //
 // This file imports nothing outside the standard library and the
 // repository's own packages.
 
-// KubernetesConfig is a kubernetes collector's own request keys: the
-// objects listed, by the plural name of their resource, its API group, ""
-// for the core group, and its version, v1 when left out; which of them are
-// listed, by namespace and by selector; how many a listing may hold, 0 for
-// the default; and the API server's URL when the exporter does not list
-// its own cluster's; whether it lists the objects' metadata alone; and
-// what each node's kubelet is asked for, of a listing of nodes.
+// KubernetesConfig is a kubernetes collector's own request keys:
+//   - the objects listed: the plural name of their resource, its API group
+//     ("" for the core group) and its version (v1 when left out);
+//   - which objects are listed, by namespace and by selector;
+//   - how many a listing may hold, 0 for the default;
+//   - the API server's URL, when the exporter does not list its own cluster;
+//   - whether it lists only the objects' metadata;
+//   - what each node's kubelet is asked for, in a listing of nodes.
 type KubernetesConfig struct {
 	Resource      string   `yaml:"resource,omitempty"`
 	Group         string   `yaml:"group,omitempty"`
@@ -87,11 +89,11 @@ type KubernetesConfig struct {
 	// MetadataOnly lists the objects' metadata alone, a
 	// PartialObjectMetadataList (docs/KUBERNETES.md#metadata-alone).
 	MetadataOnly bool `yaml:"metadata_only,omitempty"`
-	// Kubelet is what each node's kubelet is asked for, stats/summary, of a
-	// listing of nodes (docs/KUBERNETES.md#kubelet-statistics);
-	// KubeletViaAPIServer asks it through the API server's proxy of the
-	// node, and KubeletCAFile is the CA the kubelets' certificates are
-	// verified against when they are asked directly.
+	// Kubelet is what each node's kubelet is asked for (stats/summary) in a
+	// listing of nodes (docs/KUBERNETES.md#kubelet-statistics).
+	// KubeletViaAPIServer asks through the API server's proxy of the node.
+	// KubeletCAFile is the CA that verifies the kubelets' certificates when
+	// they are asked directly.
 	Kubelet             string `yaml:"kubelet,omitempty"`
 	KubeletViaAPIServer bool   `yaml:"kubelet_via_api_server,omitempty"`
 	KubeletCAFile       string `yaml:"kubelet_ca_file,omitempty"`
@@ -107,7 +109,7 @@ func kubernetesRequest(c *model.Collector) KubernetesConfig {
 
 // kubernetesShownQuery says which pairs of a listing's request a debug
 // report shows the values of (ConfiguredQuery): limit, the page size the
-// exporter asks for, and the selectors as the collector's file writes them.
+// exporter asks for, and the selectors as written in the collector's file.
 // continue, the API server's token for the next page, stays masked.
 func kubernetesShownQuery(c *model.Collector, name, value string) bool {
 	own := kubernetesRequest(c)
@@ -200,10 +202,10 @@ const DefaultKubernetesMaxObjects = 10000
 // mounted. Tests point it at a directory of their own.
 var kubernetesServiceAccountDir = kubeapi.ServiceAccountDir
 
-// kubernetesNamePattern is what a kubernetes collector's request.resource,
-// request.version and each of its request.namespaces are made of: a DNS
-// label, lower case (RFC 1123), of at most 63 characters, as Kubernetes
-// names them. The exporter and the schema hold them to it alike.
+// kubernetesNamePattern is the format of a kubernetes collector's
+// request.resource, request.version and each of its request.namespaces: a
+// lower-case DNS label (RFC 1123) of at most 63 characters, as Kubernetes
+// names them. The exporter and the schema both enforce it.
 const kubernetesNamePattern = `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 
 // kubernetesGroupPattern is what a kubernetes collector's request.group is
@@ -372,10 +374,10 @@ func kubernetesPath(c *model.Collector, namespace string) string {
 	return prefix + "/" + kubernetesRequest(c).Resource
 }
 
-// kubernetesLabel is the url label of a listing: the API server and the
-// path of the listing across the cluster, kubernetes: standing for the
-// server of the exporter's own cluster. Which namespaces are listed is the
-// collector's, as its record type is a dns collector's.
+// kubernetesLabel is the url label of a listing: the API server and the path
+// of the cluster-wide listing, where kubernetes: stands for the server of
+// the exporter's own cluster. The namespaces listed belong to the
+// collector, as a dns collector's record type does.
 func kubernetesLabel(c *model.Collector) string {
 	if kubernetesRequest(c).APIServer == "" {
 		return "kubernetes:" + kubernetesPath(c, "")
@@ -463,12 +465,11 @@ type kubernetesList struct {
 	Items []json.RawMessage `json:"items"`
 }
 
-// kubernetesConcurrency is how many of a scrape's requests are sent at
-// once: the listings of its namespaces, and with kubelet, the requests of
-// its nodes' kubelets. A collector of many namespaces takes about as long
-// as its slowest few rather than as all of them added up, and no API
-// server or kubelet is asked more of at once than a handful of clients
-// would ask.
+// kubernetesConcurrency is how many of a scrape's requests are sent at once:
+// the listings of its namespaces and, with kubelet, the requests to its
+// nodes' kubelets. A collector of many namespaces takes about as long as its
+// slowest few, not the sum of all. No API server or kubelet gets more
+// requests at once than a handful of clients would send.
 const kubernetesConcurrency = 4
 
 // kubernetesThrottleRetries is how many times a page the API server's
@@ -604,10 +605,10 @@ func kubernetesEach(ctx context.Context, n int, do func(ctx context.Context, i i
 	return first
 }
 
-// kubernetesListing is what a scrape's listings gather, from each
-// namespace at once: the objects of each, in the order request.namespaces
-// names the namespaces, and, across them, the count and the bytes, which
-// max_objects and the response limit bound.
+// kubernetesListing is what a scrape's listings collect, from all namespaces
+// at once: the objects of each, in the order of request.namespaces, and the
+// total count and bytes across them, which max_objects and the response
+// limit bound.
 type kubernetesListing struct {
 	c                *model.Collector
 	conn             kubernetesConnection
@@ -701,18 +702,18 @@ func (l *kubernetesListing) document() ([]byte, error) {
 	return json.Marshal(doc)
 }
 
-// kubernetesPrepare records each request of a scrape in its trace, when it
-// has one, at its own place (tracedAt), since the requests of a scrape are
-// sent at once; sends the trace context with it under
-// otlp.traces.propagate; and, of an exported trace, times its phases for
-// its span (TracedRequest.Phases).
+// kubernetesPrepare records each request of a scrape in its trace, if it has
+// one, at its own place (tracedAt), since a scrape's requests are sent at
+// once. Under otlp.traces.propagate it sends the trace context with the
+// request. For an exported trace it times the request's phases for its span
+// (TracedRequest.Phases).
 func kubernetesPrepare(ctx context.Context) func(req *http.Request) (*http.Request, kubeapi.Sent) {
 	return func(req *http.Request) (*http.Request, kubeapi.Sent) {
-		// With otlp.traces.propagate, each request carries the trace
-		// context as an HTTP target's does: the API server takes a
-		// traceparent (its APIServerTracing), and its spans are then
-		// children of the request's. No header of the request is the
-		// operator's, so there is none to leave as it is.
+		// With otlp.traces.propagate, each request carries the trace context
+		// like an HTTP target's request does. The API server accepts a
+		// traceparent (its APIServerTracing), so its spans become children
+		// of the request's. No header of the request comes from the
+		// operator, so there is none to leave unchanged.
 		span := propagateTrace(ctx, req.Header, false)
 		at := traceRequestAt(ctx, req.Method, req.URL.String(), req.Header, "", false)
 		at.spanID(span)
@@ -739,9 +740,9 @@ func kubernetesPrepare(ctx context.Context) func(req *http.Request) (*http.Reque
 	}
 }
 
-// kubernetesRetry asks again for a page the API server's priority and
-// fairness refused with 429 Too Many Requests: after the wait its
-// Retry-After asks for, a second when it has none the exporter can read,
+// kubernetesRetry asks again for a page that the API server's priority and
+// fairness refused with 429 Too Many Requests. It waits as long as
+// Retry-After asks, or a second when the exporter cannot read one. It tries
 // at most kubernetesThrottleRetries times, and not when the wait would end
 // after the scrape's deadline.
 func kubernetesRetry(ctx context.Context, answer *kubeapi.StatusError, header http.Header, retried int) (time.Duration, bool) {
@@ -760,12 +761,12 @@ func kubernetesRetry(ctx context.Context, answer *kubeapi.StatusError, header ht
 	return wait, true
 }
 
-// trimObject is an object without its metadata.managedFields, which say
-// which client set which field: often the largest part of an object, and
-// of no use to a metric; and, of a listing of metadata alone, with its
-// kind, apiVersion and metadata alone, whatever else an answer carried,
-// and without kubectl apply's copy of what it applied, which of a Secret
-// holds its values. The rest is kept as it was sent.
+// trimObject returns an object without its metadata.managedFields, which
+// record which client set which field. They are often the largest part of an
+// object and of no use to a metric. For a metadata-only listing it keeps
+// only kind, apiVersion and metadata, whatever else the response held, and
+// drops kubectl apply's copy of what it applied, which for a Secret holds
+// its values. The rest is kept as sent.
 func trimObject(item json.RawMessage, metadataOnly bool) (json.RawMessage, error) {
 	if !metadataOnly && !bytes.Contains(item, []byte(`"managedFields"`)) {
 		return item, nil
@@ -815,19 +816,21 @@ func trimObject(item json.RawMessage, metadataOnly bool) (json.RawMessage, error
 	return json.Marshal(object)
 }
 
-// The kubelet of each node of a collector with request.kubelet answers what
-// no object of the API holds: what each pod, container and volume uses of
-// the node's CPU, memory and file systems, ephemeral storage among them, as
-// its Summary API, /stats/summary, has it. The collector lists the nodes,
-// as its keys name them, and asks each node's kubelet, kubernetesConcurrency
-// at a time: at the address of its Node, InternalIP first, and the port
-// the Node says its kubelet serves on, with the token the listing is made
-// with, the kubelet's certificate verified against kubelet_ca_file, the
-// cluster's CA when it is left out; or, with kubelet_via_api_server,
-// through the API server's proxy of the node, for a cluster whose kubelets'
-// certificates no CA the exporter has signs. The first needs get on
-// nodes/stats, the second get on nodes/proxy, which lets its holder do
-// all a kubelet does, so the first is the one to choose where it works.
+// With request.kubelet, the kubelet of each node answers what no API object
+// holds: how much of the node's CPU, memory and file systems (ephemeral
+// storage included) each pod, container and volume uses, from its Summary
+// API, /stats/summary. The collector lists the nodes its keys name and asks
+// each node's kubelet, kubernetesConcurrency at a time, in one of two ways:
+//   - directly, at the address of its Node (InternalIP first) and the port
+//     the Node says its kubelet serves on, with the listing's token. The
+//     kubelet's certificate is verified against kubelet_ca_file, or the
+//     cluster's CA when that is left out.
+//   - with kubelet_via_api_server, through the API server's proxy of the
+//     node, for a cluster whose kubelet certificates are signed by no CA the
+//     exporter has.
+// The first needs get on nodes/stats. The second needs get on nodes/proxy,
+// which lets its holder do anything a kubelet does, so prefer the first
+// where it works.
 
 // kubeletSummaryVersion is the version of the kubelet's Summary API, as the
 // document of a collector with request.kubelet names it.
@@ -894,10 +897,10 @@ func (n kubeletNode) address() string {
 	return ""
 }
 
-// kubeletDocument asks the kubelet of every node listed for its summary.
-// The nodes whose kubelet answered none are in the document's failed, so
-// one node down leaves the others' metrics; when every kubelet fails, the
-// scrape fails as the first did.
+// kubeletDocument asks the kubelet of every listed node for its summary.
+// Nodes whose kubelet returned none are listed in the document's failed, so
+// one node down leaves the others' metrics. When every kubelet fails, the
+// scrape fails with the first error.
 func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error) {
 	own := kubernetesRequest(l.c)
 	objects := l.objects()
@@ -914,10 +917,10 @@ func (l *kubernetesListing) kubeletDocument(ctx context.Context) ([]byte, error)
 			return nil, fmt.Errorf("the kubelets' CA or the client certificate: %w", err)
 		}
 	}
-	// A kubelet that does not answer, a node gone dark, is given up on a
-	// little before the scrape's deadline, so the others' summaries are
-	// answered with it among the failed, rather than the scrape failing
-	// at its deadline for one node.
+	// A kubelet that does not answer (a node gone dark) is given up on a
+	// little before the scrape's deadline. The other summaries are then
+	// returned with it among the failed, instead of the whole scrape
+	// failing at its deadline because of one node.
 	asking, stop := context.WithDeadline(ctx, kubeletDeadline(ctx))
 	defer stop()
 	summaries := make([]json.RawMessage, len(nodes))
@@ -1012,10 +1015,10 @@ func kubeletTLS(c *model.Collector, conn kubernetesConnection) model.TLSConfig {
 	return settings
 }
 
-// kubeletShown is why a node's kubelet answered no summary, as the document
-// shows it: its status, or that the request failed and, when it did,
-// that the scrape's time ran out; never the address, which is the
-// operator's.
+// kubeletShown is the reason, as shown in the document, why a node's kubelet
+// returned no summary: its status, or that the request failed and, if so,
+// whether the scrape's time ran out. It never shows the address, which is
+// for the operator only.
 func kubeletShown(err error) string {
 	var status *kubeapi.StatusError
 	switch {
@@ -1058,20 +1061,20 @@ func kubeletFailed(ctx context.Context, own KubernetesConfig, err error) error {
 	return model.WithOperatorDetail(failure, "no node's kubelet answered its "+own.Kubelet+"; the first: "+shown+hint)
 }
 
-// kubernetesFailure words a failed listing: an API server's refusal with
-// what to do about it, the commonest being a permission the exporter's
-// service account lacks; a listing cut short by the scrape's deadline
-// wraps the context's error.
+// kubernetesFailure describes a failed listing. An API server's refusal gets
+// advice on what to do, the most common cause being a permission the
+// exporter's service account lacks. A listing cut short by the scrape's
+// deadline wraps the context's error.
 func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string, err error) error {
 	var status *kubeapi.StatusError
 	if !errors.As(err, &status) {
 		if errors.Is(err, kubeapi.ErrPageTooLarge) {
 			return model.MarkError(fmt.Errorf("%w, the response limit; narrow the listing, or raise max_response_bytes", err), model.ErrLimitExceeded)
 		}
-		// A request that failed names the API server's URL, which is the
-		// operator's — the cluster's own address, or api_server's — as is
-		// the address the exporter connected from: a probe's caller is told
-		// the request failed, and whether the scrape's deadline ended it.
+		// A failed request names the API server's URL, which is for the
+		// operator only (the cluster's own address, or api_server's), as is
+		// the address the exporter connected from. A probe's caller is told
+		// that the request failed, and whether the scrape's deadline ended it.
 		var request *url.Error
 		if errors.As(err, &request) {
 			ended := ""
@@ -1099,10 +1102,10 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 	if json.Unmarshal([]byte(status.Body), &apiStatus) == nil && apiStatus.Message != "" {
 		message = apiStatus.Message
 	}
-	// What the API server said is the operator's: it names the service
-	// account, the namespaces and the resources it may not list, and of a
-	// body that is no Status, anything a proxy before it answered. A probe's
-	// caller is told the listing, the status and what to do about it.
+	// The API server's response is for the operator only. It names the
+	// service account, the namespaces and the resources it may not list, and,
+	// for a body that is not a Status, anything a proxy in front of it sent.
+	// A probe's caller is told the listing, the status and what to do.
 	listing := fmt.Sprintf("listing %s (%s) %s answered %s", kubernetesRequest(c).Resource, kubernetesAPIVersion(c), where, status.Status)
 	what, told := listing+": "+message, listing+"; what it said is in the exporter's log"
 	var hint string
@@ -1126,10 +1129,11 @@ func kubernetesFailure(ctx context.Context, c *model.Collector, namespace string
 	return model.WithOperatorDetail(errors.New(what+hint), told+hint)
 }
 
-// checkKubernetesFiles reads the files a collector reaches what it asks
-// with, as a scrape reads them, for --dry-run: kubelet_ca_file, and of a
-// collector naming api_server, the token file and the tls block's. Those of the exporter's own service account are its
-// pod's, which a check run elsewhere does not have, and are not read.
+// checkKubernetesFiles reads, for --dry-run, the files a collector uses to
+// make its requests, as a scrape reads them: kubelet_ca_file and, for a
+// collector naming api_server, the token file and the tls block's files.
+// The files of the exporter's own service account belong to its pod. A
+// check run elsewhere does not have them, so they are not read.
 func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 	if t != nil {
 		return nil
@@ -1154,17 +1158,19 @@ func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return warnings
 }
 
-// kubernetesSchemaRule is what a kubernetes collector's request is held to, as
-// the exporter holds it (validateKubernetesRequest): resource,
-// written with something other than "", and not the core group's secrets
-// but with metadata_only; kubelet only of the core group's nodes, with
-// all_namespaces and without metadata_only, and kubelet_via_api_server and
-// kubelet_ca_file only beside it, not both;
-// namespaces or all_namespaces, not both; bearer_token_file only beside
-// api_server, and beside api_server a credential, bearer_token_file or
-// tls.cert_file, and no insecure_skip_verify true. "" is a key left out
-// to the exporter, so each is "written" when it is something else
-// (SchemaWrittenKey).
+// kubernetesSchemaRule is the schema rule for a kubernetes collector's
+// request, matching what the exporter enforces (validateKubernetesRequest):
+//   - resource is written with something other than "", and is not the core
+//     group's secrets unless metadata_only is set;
+//   - kubelet only for the core group's nodes, with all_namespaces and
+//     without metadata_only; kubelet_via_api_server and kubelet_ca_file only
+//     with it, and not both;
+//   - namespaces or all_namespaces, not both;
+//   - bearer_token_file only with api_server; with api_server, a credential
+//     (bearer_token_file or tls.cert_file) and no insecure_skip_verify true.
+//
+// "" counts as a key left to the exporter, so each key is "written" when it
+// is something else (SchemaWrittenKey).
 func kubernetesSchemaRule() map[string]any {
 	rule := SchemaWrittenKey("resource")
 	coreGroup := map[string]any{"anyOf": []any{map[string]any{"not": map[string]any{"required": []string{"group"}}}, map[string]any{"properties": map[string]any{"group": map[string]any{"const": ""}}}}}

@@ -24,10 +24,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Some APIs take no token: each request is signed with a secret the two
-// sides share, and the server works out the same signature to know the
-// request is the account's and was not changed on its way. request.signature
-// signs an http collector's requests so, with an HMAC:
+// Some APIs take no token. Instead each request is signed with a secret
+// both sides share. The server computes the same signature to verify that
+// the request is from the account and was not changed in transit.
+// request.signature signs an http collector's requests this way, with an
+// HMAC:
 //
 //	request:
 //	  query:
@@ -38,16 +39,16 @@ import (
 //	    payload: "{{query}}"
 //	    query_param: signature
 //
-// payload says what is signed, of the request as it is sent: its text, with
-// {{method}}, {{path}}, {{query}}, {{body}}, {{host}}, {{url}} and
-// {{header:Name}} in it for those parts. The signature is put in a header
-// or in a query parameter, which is added last, so it signs the query
-// before it. A timestamp an API wants signed is a clock placeholder in a
-// header or the query, which the payload then holds as part of them.
+// payload says what part of the request, as sent, is signed. It is text
+// with {{method}}, {{path}}, {{query}}, {{body}}, {{host}}, {{url}} and
+// {{header:Name}} standing for those parts. The signature goes in a header
+// or in a query parameter. A query parameter is added last, so it signs
+// the query before it. A timestamp an API wants signed is a clock
+// placeholder in a header or the query, which the payload then includes.
 //
 // request.aws_sigv4 signs with AWS Signature Version 4 instead
-// (httpsigv4.go). Either signs every request of a trip, a retry and each
-// page of a paginated answer its own.
+// (httpsigv4.go). Either one signs every request of a trip separately,
+// including a retry and each page of a paginated answer.
 
 // SignatureConfig is request.signature.
 type SignatureConfig struct {

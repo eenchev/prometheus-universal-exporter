@@ -11,26 +11,28 @@ import (
 )
 
 // Path parameters let one collector serve targets whose paths differ by a
-// value only the scrape knows — a tenant, a region, an API version:
+// value that only the scrape knows, such as a tenant, a region or an API
+// version:
 //
 //	request:
 //	  path: /api/{{param_tenant}}/v{{param_version:2}}/status
 //
-// probed with /probe?target=...&collector=...&param_tenant=acme requests
-// /api/acme/v2/status. The placeholder is named exactly like the probe
-// parameter that fills it, so a configuration and the monitor that scrapes it
-// can be read side by side.
+// Probed with /probe?target=...&collector=...&param_tenant=acme, this
+// requests /api/acme/v2/status. A placeholder has exactly the name of the
+// probe parameter that fills it. This way a configuration and the monitor
+// that scrapes it can be read side by side.
 //
-// The syntax is chosen not to meet ${NAME}, the environment reference
-// --config.expand-env substitutes. Environment references are expanded once,
-// textually, when the file is read; path parameters are bound on every probe.
-// The two compose: {{param_tenant:${DEFAULT_TENANT}}} takes its default from the
-// environment and its value from the probe.
+// The syntax is chosen so that it never clashes with ${NAME}, the
+// environment reference that --config.expand-env substitutes. Environment
+// references are expanded once, as text, when the file is read. Path
+// parameters are bound on every probe. The two compose:
+// {{param_tenant:${DEFAULT_TENANT}}} takes its default from the environment
+// and its value from the probe.
 //
-// `{{` always opens a placeholder in request.path. A path never needs literal
-// double braces, and treating them as text would send an unfilled placeholder
-// to the target — so anything after `{{` that is not a well-formed placeholder
-// is rejected when the configuration is loaded.
+// `{{` always opens a placeholder in request.path. A path never needs
+// literal double braces, and treating them as text would send an unfilled
+// placeholder to the target. So anything after `{{` that is not a
+// well-formed placeholder is rejected when the configuration is loaded.
 
 // PathParamPrefix is shared by placeholders and the probe parameters that fill
 // them. A probe parameter without it can never be a path parameter, so the two
@@ -94,13 +96,14 @@ func pathParamValues(values url.Values) (map[string]string, error) {
 }
 
 // bindPathParams resolves the placeholders in a path against the probe's
-// parameters. It returns the path with each placeholder replaced by an opaque
-// token, and the value for each token in order. The tokens survive path.Join,
-// which would otherwise clean a value of ".." into a different path, and let
-// applyPathParams escape each value as a single segment afterwards.
+// parameters. It returns the path with each placeholder replaced by an
+// opaque token, and the value for each token in order. The tokens survive
+// path.Join, which would otherwise clean a value of ".." into a different
+// path. They also let applyPathParams escape each value as a single segment
+// afterwards.
 //
-// A value comes from the probe, else from the default, else it is an error: a
-// request sent with a placeholder left unfilled would reach a path nobody
+// A value comes from the probe, else from the default, else it is an error.
+// A request sent with an unfilled placeholder would reach a path nobody
 // configured. An empty probe value counts as not given, so an empty monitor
 // parameter falls back to the default instead of producing "//".
 func bindPathParams(path string, params map[string]string) (string, []string, error) {
@@ -134,9 +137,9 @@ func bindParsedPathParams(path string, placeholders []pathPlaceholder, params ma
 	return b.String(), values, nil
 }
 
-// checkPathParamValue is what every path parameter's value is held to,
-// whoever gave it. "." and ".." are the two values escaping cannot make
-// safe: both are legal in a path segment, and a server resolving them would
+// checkPathParamValue checks the value of every path parameter, whoever
+// gave it. "." and ".." are the two values that escaping cannot make safe.
+// Both are legal in a path segment, and a server that resolves them would
 // serve a different path than the one configured.
 func checkPathParamValue(name, value string) error {
 	if value == "." || value == ".." {
@@ -152,9 +155,9 @@ func pathToken(i int) string {
 }
 
 // applyPathParams substitutes the bound values into an escaped path that
-// still carries the tokens. Each value is escaped as one path segment — a "/"
-// in it becomes %2F rather than a new segment — whatever it holds: a % in a
-// value is a percent sign, never the start of an escape.
+// still carries the tokens. Each value is escaped as one path segment,
+// whatever it holds. A "/" in it becomes %2F rather than a new segment, and
+// a % in a value is a percent sign, never the start of an escape.
 func applyPathParams(raw string, values []string) string {
 	for i, value := range values {
 		raw = strings.Replace(raw, pathToken(i), url.PathEscape(value), 1)
@@ -163,19 +166,21 @@ func applyPathParams(raw string, values []string) string {
 }
 
 // CheckPathParams validates a probe's path parameters against the collector
-// before anything is fetched, so a missing value is the caller's 400 rather
-// than a failed scrape of the target.
+// before anything is fetched. A missing value is then the caller's 400
+// rather than a failed scrape of the target.
 //
-// A parameter the path does not use is rejected too. It is almost always a
-// misspelling — param_tenat for param_tenant — and when the placeholder has a
-// default, the misspelled scrape would otherwise succeed against the default
-// tenant and report its numbers as the intended one's. A parameter that
-// fills a label value of the collector is used (labelparams.go).
+// A parameter that the path does not use is rejected too. It is almost
+// always a misspelling, such as param_tenat for param_tenant. When the
+// placeholder has a default, the misspelled scrape would otherwise succeed
+// against the default tenant and report its numbers as the intended one's.
+// A parameter that fills a label value of the collector counts as used
+// (labelparams.go).
 //
-// The refusal names the places a placeholder of the collector can stand in,
-// which are those of its request type (requestTemplates): an operator sent
-// to look at the body of a graphite collector, which has none, or past the
-// expressions that hold its placeholders, looks in the wrong place.
+// The error names the places where a placeholder of the collector can
+// stand. These are the places of its request type (requestTemplates).
+// Otherwise an operator might look in the wrong place: in the body of a
+// graphite collector, which has none, or past the expressions that hold its
+// placeholders.
 func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 	unused, err := CheckRequestParams(c, overrides)
 	if err != nil || len(unused) == 0 {
@@ -207,10 +212,10 @@ func unusedParamsIn(c *model.Collector, unused, places string) error {
 	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in %s names them%s", unused, c.Name, places, expressions)
 }
 
-// requestLabel is the URL a verbose self-metric carries for a request. Path
-// parameters stay as their placeholders: the value is exactly the kind of thing
-// requestLabelURL keeps out of labels already — a tenant, an account — and one
-// series per value would be unbounded besides.
+// requestLabel is the URL that a verbose self-metric carries for a request.
+// Path parameters stay as their placeholders. A value such as a tenant or an
+// account is exactly what requestLabelURL already keeps out of labels, and
+// one series per value would also be unbounded.
 func requestLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
 	u, err := buildRequestURL(target, c, overrides, false)
 	if err != nil {

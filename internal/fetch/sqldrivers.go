@@ -34,7 +34,7 @@ func BuiltSQLDrivers() []string {
 }
 
 // SQLNamedResults reports whether a sql collector runs several statements
-// (request.statements), whose document is an object of each one's rows by
+// (request.statements). Its document is then an object of each one's rows by
 // its name, which only jq, yq and python read, not the list of rows a csv
 // transform reads by column. False in a build without the sql type.
 func SQLNamedResults(c *model.Collector) bool {

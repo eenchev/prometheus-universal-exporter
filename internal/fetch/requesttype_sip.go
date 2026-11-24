@@ -27,33 +27,35 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The sip request type asks a SIP server (RFC 3261), a proxy, a registrar
-// or a PBX, whether it answers: a scrape sends one OPTIONS request, the
-// ping of SIP, over UDP, TCP or TLS, and reads the response. Its target is
-// the server, host or host:port, port 5060 when it names none and 5061
-// over TLS.
+// The sip request type checks whether a SIP server (RFC 3261), such as a
+// proxy, a registrar or a PBX, answers. A scrape sends one OPTIONS request,
+// the SIP ping, over UDP, TCP or TLS, and reads the response. Its target is
+// the server, as host or host:port. The port defaults to 5060, or 5061 over
+// TLS.
 //
 //	request:
 //	  type: sip
 //	  # sip_transport: tcp
 //
-// The answer is one JSON document: the response's status code and reason,
-// how long it took, how many times the request was sent, and what the
-// server says of itself, its Server header and the methods it allows. A
-// response is an answer whatever its status: a 404 or a 405 is a server
-// that is up and does not like the question, which a rule reads from
-// status_code, so the scrape fails only when no response comes.
+// The answer is one JSON document with the response's status code and
+// reason, how long it took, how many times the request was sent, and what
+// the server says of itself: its Server header and the methods it allows.
+// A response counts as an answer whatever its status. A 404 or a 405 comes
+// from a server that is up and does not like the question, which a rule
+// reads from status_code. So the scrape fails only when no response comes.
 //
 // Over UDP the request is sent again while no response comes, as RFC 3261
-// has a client do: after half a second, then twice as long each time up to
-// four seconds, until the scrape's deadline. A datagram is the response
-// only when it answers this request, by the branch of its Via, its Call-ID
-// and its CSeq; any other is ignored, and so is a provisional response.
+// tells a client to do: after half a second, then twice as long each time
+// up to four seconds, until the scrape's deadline. A datagram is the
+// response only when it answers this request, by the branch of its Via, its
+// Call-ID and its CSeq. Any other datagram is ignored, and so is a
+// provisional response.
 //
-// A server that asks who is asking, with a 401 or a 407 and a Digest
-// challenge, is answered once with the account of request.username and
-// request.password_file, when the collector has one: MD5 and SHA-256, with
-// qop auth or without (RFC 8760). Without an account the 401 is the answer.
+// A server may ask who is asking, with a 401 or a 407 and a Digest
+// challenge. If the collector has an account, the challenge is answered
+// once with request.username and request.password_file. MD5 and SHA-256
+// are supported, with or without qop auth (RFC 8760). Without an account
+// the 401 is the answer.
 //
 // No call is placed and nothing is registered: INVITE, REGISTER and media
 // are not spoken.
@@ -573,9 +575,9 @@ func sipHostPart(host string) string {
 	return host
 }
 
-// sipWriteRequest is the OPTIONS of exchange as it goes over link: its Via
-// names the transport and the address it is sent from, with rport, so a
-// server behind address translation answers where the request came from
+// sipWriteRequest builds the OPTIONS request of exchange as it goes over
+// link. Its Via names the transport and the source address, with rport, so
+// a server behind address translation answers where the request came from
 // (RFC 3581).
 func sipWriteRequest(link *sipLink, r SIPConfig, requestURI, from string, exchange sipExchange, authorization string) []byte {
 	local := link.conn.LocalAddr().String()
@@ -655,12 +657,14 @@ func (l *sipLink) exchange(ctx context.Context, address netAddress, message []by
 	}
 }
 
-// sipReadFailure words a read that ended without the response: the
-// deadline, which wraps context.DeadlineExceeded, or the scrape's
-// cancellation, saying how many times the request was sent and how many
-// messages were ignored and why the last was; or a failure of the
-// connection, such as the refusal an ICMP port unreachable brings, a
-// response that is no SIP message over a stream, or one past the limit.
+// sipReadFailure describes a read that ended without the response. It is
+// either:
+//   - the deadline (which wraps context.DeadlineExceeded) or the scrape's
+//     cancellation, saying how many times the request was sent, how many
+//     messages were ignored, and why the last one was;
+//   - or a connection failure, such as the refusal an ICMP port unreachable
+//     brings, a response over a stream that is no SIP message, or one past
+//     the limit.
 func sipReadFailure(ctx context.Context, address netAddress, err error, sent, ignored int, lastIgnored string) error {
 	if ctx.Err() == nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 		if errors.Is(err, model.ErrLimitExceeded) || errors.Is(err, errSIPMalformed) {
@@ -710,11 +714,11 @@ var sipCompact = map[string]string{
 	"f": "from", "s": "subject", "k": "supported", "t": "to", "v": "via",
 }
 
-// readSIPMessage reads one response from r: the status line, the headers
-// up to the blank line, a header continued on the lines that start with a
-// blank, and the body its Content-Length says, held to limit. whole says r
-// holds one datagram, whose body is what follows the headers when no
-// Content-Length says how much of it is.
+// readSIPMessage reads one response from r: the status line, the headers up
+// to the blank line (a header continues on lines that start with a blank),
+// and the body of the size Content-Length gives, held to limit. whole says
+// that r holds one datagram. Then, when no Content-Length gives the size,
+// the body is whatever follows the headers.
 func readSIPMessage(r *bufio.Reader, limit int64, whole bool) (*sipMessage, error) {
 	read := 0
 	line := func() (string, error) {
@@ -826,10 +830,10 @@ func (m *sipMessage) first(name string) string {
 	return ""
 }
 
-// answers says why the message is not the final response to exchange, ""
-// when it is: it answers another request, by the branch of its topmost
-// Via, its Call-ID or its CSeq, or it is provisional, with the final one
-// still to come.
+// answers says why the message is not the final response to exchange, or
+// returns "" when it is. Either it answers another request, by the branch
+// of its topmost Via, its Call-ID or its CSeq, or it is provisional and the
+// final one is still to come.
 func (m *sipMessage) answers(exchange sipExchange) string {
 	via, _, _ := strings.Cut(m.first("via"), ",")
 	branch := ""
@@ -976,11 +980,11 @@ var sipDigests = []struct {
 	{"MD5", md5.New}, {"MD5-SESS", md5.New},
 }
 
-// sipDigest is the credentials that answer the strongest challenge that is
-// spoken, the value of an Authorization header (RFC 7616, as RFC 8760 has
-// SIP use it): the response is the hash of the account's, the nonce and
-// the request's, with a client nonce and a count when the server asks for
-// qop auth.
+// sipDigest returns the credentials that answer the strongest supported
+// challenge, as the value of an Authorization header (RFC 7616, as RFC 8760
+// applies it to SIP). The response is the hash of the account's part, the
+// nonce and the request's part. A client nonce and a count are added when
+// the server asks for qop auth.
 func sipDigest(challenges []sipChallenge, username, password, uri string) (string, error) {
 	for _, digest := range sipDigests {
 		for _, c := range challenges {

@@ -21,13 +21,13 @@ import (
 )
 
 // The postgres driver is pgx, through its database/sql adapter. A statement
-// is always sent with the extended protocol, bound even when it takes no
+// is always sent with the extended protocol and bound even when it takes no
 // argument, so the server refuses two statements joined with ;. It runs in
-// a transaction begun READ ONLY, with the statement timeout set to the
-// scrape's time left by SET LOCAL statement_timeout, so the server stops a
+// a transaction begun READ ONLY. SET LOCAL statement_timeout sets the
+// statement timeout to the scrape's time left, so the server stops a
 // statement the scrape no longer waits for. The connection is configured
-// from the collector alone: pgx's PG* environment variables and its
-// .pgpass file, which it would otherwise read, change nothing, but for
+// from the collector alone. pgx's PG* environment variables and its .pgpass
+// file, which it would otherwise read, change nothing. The exception is
 // PGSERVICE, which no connection string unsets and which is refused.
 func init() {
 	registerSQLDriver(&sqlDriver{
@@ -51,11 +51,11 @@ func init() {
 const postgresMaxMessage = 0x3fffffff - 1
 
 // postgresFrontend is pgx's reader of the server's messages, bounded to the
-// response limit and sqlMessageSlack beside it: pgx reads a message whole,
-// a row with every value in it, before handing any of it on, so without the
-// bound a row of up to a gigabyte would be read before the limit applied.
-// A message over the bound fails the read from its length alone, and the
-// connection with it.
+// response limit plus sqlMessageSlack. pgx reads a message whole (a row with
+// every value in it) before handing any of it on. Without the bound, a row
+// of up to a gigabyte would be read before the limit applied. A message
+// over the bound fails the read from its length alone, and the connection
+// with it.
 func postgresFrontend(limit int64) pgconn.BuildFrontendFunc {
 	return func(r io.Reader, w io.Writer) *pgproto3.Frontend {
 		frontend := pgproto3.NewFrontend(r, w)
@@ -100,14 +100,17 @@ func postgresServerError(err error) (string, bool) {
 	return "SQLSTATE " + pgErr.Code, true
 }
 
-// postgresPinned is the connection string postgresConfig parses: every
-// key of pgconn's parseEnvSettings, PGSERVICE's service aside, which a
-// connection string cannot unset and postgresConfig refuses, named with the
-// value pgx gives it when neither the connection string nor the environment
-// does, but sslmode, which is disable, and user, which is a placeholder
-// replaced as host, port and password are, so that pgx does not look up the
-// system's account for it. A variable pgx comes to read later is caught by
-// the test of the configuration's fields.
+// postgresPinned is the connection string postgresConfig parses. It names
+// every key of pgconn's parseEnvSettings, except PGSERVICE's service, which
+// a connection string cannot unset and postgresConfig refuses. Each key has
+// the value pgx gives it when neither the connection string nor the
+// environment does, except:
+//   - sslmode, which is disable;
+//   - user, which is a placeholder replaced as host, port and password are,
+//     so that pgx does not look up the system's account for it.
+//
+// A variable that pgx comes to read later is caught by the test of the
+// configuration's fields.
 const postgresPinned = "host=localhost port=5432 dbname='' user=exporter password='' passfile='' application_name='' connect_timeout=0 " +
 	"sslmode=disable sslkey='' sslcert='' sslcertmode=allow sslsni=1 sslrootcert='' sslpassword='' sslnegotiation='' target_session_attrs=any " +
 	"servicefile='' timezone='' options='' min_protocol_version=3.0 max_protocol_version=3.0 channel_binding=prefer require_auth=''"
@@ -118,10 +121,11 @@ func postgresConfig(spec *sqlConnectSpec) (*pgx.ConnConfig, error) {
 		return nil, errors.New("the exporter's environment sets PGSERVICE, which the postgres driver reads whatever the collector says, and would take settings from; unset it")
 	}
 	// Parsed from a connection string that names every setting pgx would
-	// otherwise take from a PG* variable (pgconn parseEnvSettings), each as
-	// pgx takes it when nothing names it, but for plaintext, so that no
-	// fallback to another host or to TLS is made and no variable changes the
-	// configuration, or fails the parse; everything else is set here.
+	// otherwise take from a PG* variable (pgconn parseEnvSettings). Each
+	// has the value pgx takes when nothing names it, except for plaintext.
+	// So no fallback to another host or to TLS is made, and no variable
+	// changes the configuration or fails the parse. Everything else is set
+	// here.
 	config, err := pgx.ParseConfig(postgresPinned)
 	if err != nil {
 		return nil, err
@@ -151,15 +155,17 @@ func postgresConfig(spec *sqlConnectSpec) (*pgx.ConnConfig, error) {
 	return config, nil
 }
 
-// postgresDial is the exporter's dialer as pgx is given it. pgx dials the
-// target's host for a connection and, for the cancel request it sends when
-// a statement's context ends (pgconn asyncClose, after the read the
-// context's deadline broke off), the address its connection reached
-// (PgConn.CancelRequest), which the dialer would refuse, under a policy, as
-// a host the request did not check: for that one the target's host is
-// dialed again, held to the policy as every connection is, and the
-// connection kept only when it reached that very address, so the cancel
-// request goes to the server running the statement or to none.
+// postgresDial is the exporter's dialer as pgx is given it. pgx dials:
+//   - the target's host, for a connection;
+//   - the address its connection reached (PgConn.CancelRequest), for the
+//     cancel request it sends when a statement's context ends (pgconn
+//     asyncClose, after the read that the context's deadline broke off).
+//
+// Under a policy, the dialer would refuse that address as a host the
+// request did not check. So for the cancel request the target's host is
+// dialed again, held to the policy like every connection. The connection is
+// kept only when it reached that very address, so the cancel request goes
+// to the server running the statement or to none.
 func postgresDial(spec *sqlConnectSpec) func(ctx context.Context, network, address string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)

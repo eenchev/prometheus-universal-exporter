@@ -16,35 +16,36 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The rows a statement returns are handed to the transforms as JSON values
-// are, a list of objects, one a row, of its columns' values by name, so a jq
-// rule reads them as it reads a JSON answer's and a csv rule reads a column
-// by name, one series a row:
+// The rows a statement returns are handed to the transforms like JSON
+// values: a list of objects, one per row, holding its columns' values by
+// name. So a jq rule reads them as it reads a JSON answer, and a csv rule
+// reads a column by name, one series per row:
 //
-//   - integers and floating-point numbers are numbers; a decimal, which
-//     drivers give as text, is the number it writes, or its text when it
-//     writes none a float can hold;
-//   - a boolean is 1 or 0;
-//   - a date or a timestamp is its Unix time in seconds, with the fraction;
-//     a time of day, of a TIME column (TIMETZ, ClickHouse's Time and
-//     Time64), the seconds since midnight, with the fraction, as its clock
-//     reads where it was written: sqlserver, vertica and snowflake give it
-//     as a time.Time of the year 1 or 0, postgres and mysql as text such as
-//     12:30:00 (mysql's, a duration, may be negative or past 24 hours), and
-//     clickhouse as a time.Duration, which is its seconds whatever the
-//     column;
-//   - text is text, and binary data is the text it holds when it is UTF-8,
-//     and refused, naming its column, when it is not;
+//   - Integers and floating-point numbers are numbers. A decimal, which
+//     drivers give as text, is the number it writes, or its text when the
+//     number does not fit a float.
+//   - A boolean is 1 or 0.
+//   - A date or a timestamp is its Unix time in seconds, with the fraction.
+//   - A time of day, of a TIME column (TIMETZ, ClickHouse's Time and
+//     Time64), is the seconds since midnight, with the fraction, as its
+//     clock reads where it was written. Drivers give it differently:
+//     sqlserver, vertica and snowflake as a time.Time of the year 1 or 0;
+//     postgres and mysql as text such as 12:30:00 (mysql's is a duration
+//     and may be negative or past 24 hours); clickhouse as a time.Duration,
+//     which is its seconds whatever the column.
+//   - Text is text. Binary data is the text it holds when it is UTF-8, and
+//     is refused, naming its column, when it is not.
 //   - NULL leaves the column out of the row: a jq rule finds no key, and a
 //     csv rule reading the column has no value in that row.
 //
-// A column without a name, or with the name of another, is refused: its
-// values could not be read by name.
+// A column without a name, or with the name of another column, is refused,
+// because its values could not be read by name.
 
-// readSQLRows reads the rows of rs, at most maxRows of them and, of their
-// values with their columns' names, at most maxBytes with the used bytes of
-// the statements before them in one scrape (request.statements): each
-// value its size (sqlValue) and its column's name's length, a NULL nothing.
+// readSQLRows reads the rows of rs: at most maxRows rows, and at most
+// maxBytes of values with their columns' names, counting the used bytes of
+// the statements before them in one scrape (request.statements). Each value
+// counts its size (sqlValue) plus its column name's length; a NULL counts
+// nothing.
 func readSQLRows(rs *sql.Rows, maxRows int, maxBytes, used int64) (*sqlResult, error) {
 	columns, err := rs.Columns()
 	if err != nil {
@@ -112,11 +113,11 @@ func readSQLRows(rs *sql.Rows, maxRows int, maxBytes, used int64) (*sqlResult, e
 	return &sqlResult{rows: rows, columns: columns, shown: shown, size: size}, nil
 }
 
-// sqlValue is a value a driver read as the transforms read it, whether the
-// column has one (it is not NULL), and its size towards the response limit:
-// the length of text and binary data, and eight bytes for anything else.
-// dbType is the column's type as the driver names it, which says whether
-// text is a decimal.
+// sqlValue returns a value a driver read, as the transforms read it,
+// whether the column has one (it is not NULL), and its size towards the
+// response limit. The size is the length of text and binary data, and
+// eight bytes for anything else. dbType is the column's type as the driver
+// names it, which says whether text is a decimal.
 func sqlValue(v any, dbType string) (value any, present bool, size int64, err error) {
 	switch x := v.(type) {
 	case nil:
@@ -176,10 +177,10 @@ func sqlValue(v any, dbType string) (value any, present bool, size int64, err er
 	return nil, false, 0, fmt.Errorf("holds a value of the Go type %T, of the column type %s, which the exporter does not read; convert it in the statement to a number or text", v, sqlTypeName(dbType))
 }
 
-// sqlPostgresTypes are the types pgx has no name for, and names by their
-// OID in the server's catalogue: a TIMETZ column's type was "1266" to every
-// rule that reads a type, so its time of day stayed text, and a message
-// about a MONEY column named the type 790.
+// sqlPostgresTypes are the types pgx has no name for and names by their
+// OID in the server's catalogue. Without it, a TIMETZ column's type was
+// "1266" to every rule that reads a type, so its time of day stayed text,
+// and a message about a MONEY column named the type 790.
 var sqlPostgresTypes = map[string]string{"790": "MONEY", "1266": "TIMETZ"}
 
 // sqlColumnType is a column's type as its driver names it, or, for a type

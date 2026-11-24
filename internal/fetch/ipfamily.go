@@ -11,35 +11,34 @@ import (
 )
 
 // An http or graphite collector's request.ip_family is the address family
-// its requests connect to the target over, as blackbox_exporter's
-// preferred_ip_protocol and ip_protocol_fallback choose it:
+// its requests use to connect to the target. It chooses the family the way
+// blackbox_exporter's preferred_ip_protocol and ip_protocol_fallback do:
 //
-//   - ip4 and ip6 dial that family alone, Go's "tcp4" and "tcp6": a name
-//     is looked up for addresses of that family only, and a target that has
-//     none fails, saying so, as an address of the other family written as
-//     the target does. An uptime check of a site's IPv6 is then of its IPv6
-//     alone, and not answered over IPv4 by the race below.
-//   - prefer_ip4 and prefer_ip6 dial that family first, and the other when
-//     the first has no address, or none of its addresses takes the
-//     connection: a site whose IPv6 is broken is still reached, over IPv4.
-//     Under a deadline the first family is given half of the time left, so
-//     an address that never answers leaves the other its half. The deadline
-//     is the request's (withDialDeadline): net/http dials with a context
-//     detached from the request's, which keeps its values and loses its
-//     deadline, so a dial's own context has none.
+//   - ip4 and ip6 dial only that family (Go's "tcp4" and "tcp6"). A name is
+//     looked up for addresses of that family only. A target that has none
+//     fails with an error saying so, as does a target written as an address
+//     of the other family. An uptime check of a site's IPv6 then checks only
+//     its IPv6, and is not answered over IPv4 by the race below.
+//   - prefer_ip4 and prefer_ip6 dial that family first. They dial the other
+//     when the first has no address, or none of its addresses takes the
+//     connection, so a site whose IPv6 is broken is still reached over IPv4.
+//     Under a deadline the first family gets half of the time left, so an
+//     address that never answers leaves the other family its half. The
+//     deadline is the request's (withDialDeadline). net/http dials with a
+//     context detached from the request's, which keeps its values and loses
+//     its deadline, so a dial's own context has none.
 //   - Left out, Go dials as it always has: the addresses of both families,
 //     the first one's family raced against the other's a moment later
 //     (RFC 6555's "happy eyeballs").
 //
-// The family is of the connection to the target. A request through a proxy
-// is connected to the target by the proxy, which looks the name up and
-// chooses the family itself, so a request with ip_family is refused rather
-// than sent through one (policyGuard.check), and the key is refused beside
-// a proxy_url when the configuration loads, and beside a unix_socket, whose
-// connection has no address family. The family is part of the transport's
-// settings, so a connection made over one family never carries a request
-// that asked for another. A login's request is made as before, over either
-// family.
+// The family applies to the connection to the target. Through a proxy, the
+// proxy connects to the target, looks the name up and chooses the family
+// itself. So a request with ip_family is refused rather than sent through
+// one (policyGuard.check). When the configuration loads, the key is refused
+// together with a proxy_url, and with a unix_socket, whose connection has no
+// address family. The family is part of the transport's settings, so a
+// connection made over one family never carries a request that asked for
+// another. A login's request is made as before, over either family.
 
 // IPFamilies are the values request.ip_family may take.
 var IPFamilies = []string{"ip4", "ip6", "prefer_ip4", "prefer_ip6"}
@@ -120,14 +119,14 @@ func familyDialer(dial func(ctx context.Context, network, address string) (net.C
 
 type dialDeadlineKey struct{}
 
-// withDialDeadline is ctx carrying its deadline as a value too, for the
-// dials of the requests made with it (dialDeadline). net/http dials a
+// withDialDeadline returns ctx carrying its deadline as a value too, for
+// the dials of the requests made with it (dialDeadline). net/http dials a
 // request's connection with context.WithoutCancel of the request's context,
-// so that a connection a cancelled request began can still serve the next:
-// the dial keeps the values and loses the deadline, and a prefer_ip4 or
-// prefer_ip6 dial would give its first family the Dialer's whole timeout,
-// failing the request at its deadline over an address that never answers
-// without trying the other family.
+// so that a connection a cancelled request began can still serve the next.
+// The dial keeps the values and loses the deadline. Without this, a
+// prefer_ip4 or prefer_ip6 dial would give its first family the Dialer's
+// whole timeout. It would then fail the request at its deadline over an
+// address that never answers, without trying the other family.
 func withDialDeadline(ctx context.Context) context.Context {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -146,10 +145,10 @@ func dialDeadline(ctx context.Context) (time.Time, bool) {
 	return deadline, ok
 }
 
-// noAddressOf says whether err is a dial's over one family to a host that
-// has no address of it: an address of the other family written as the host
-// (net's "no suitable address"), or a name whose lookup for the family found
-// nothing.
+// noAddressOf says whether err comes from a dial over one family to a host
+// that has no address of that family. The host is either an address of the
+// other family (net's "no suitable address"), or a name whose lookup for
+// the family found nothing.
 func noAddressOf(err error) bool {
 	var addrErr *net.AddrError
 	if errors.As(err, &addrErr) && strings.Contains(addrErr.Err, "no suitable address") {

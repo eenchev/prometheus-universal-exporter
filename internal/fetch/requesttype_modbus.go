@@ -34,19 +34,19 @@ import (
 //	      count: 3                 # how many values; 1 when left out
 //	      order: cdab              # abcd (default), badc, cdab or dcba
 //
-// Each read is one request of the function its table has (1 coils, 2
-// discrete inputs, 3 holding registers, 4 input registers), sent one after
-// another on one connection the scrape opens and closes. The answer handed
-// to the transforms is one JSON document, each read's value under its
-// name: a number, true or false for a bit, text for a string, and a list of
-// them when count is more than 1.
+// Each read is one request with the function of its table (1 coils, 2
+// discrete inputs, 3 holding registers, 4 input registers). The requests
+// are sent one after another on one connection that the scrape opens and
+// closes. The answer handed to the transforms is one JSON document with
+// each read's value under its name: a number, true or false for a bit, text
+// for a string, or a list of them when count is more than 1.
 //
-// The type only reads: no function that writes is in the code. A device's
+// The type only reads: the code has no function that writes. A device's
 // exception fails the scrape, naming the read and the exception.
 //
-// The target is host, host:port or modbus://host:port, port 502, and
-// modbus://host:port/<unit> for a unit other than the collector's, as the
-// devices behind one gateway are told apart.
+// The target is host, host:port or modbus://host:port, with port 502. Use
+// modbus://host:port/<unit> for a unit other than the collector's, which is
+// how the devices behind one gateway are told apart.
 //
 // The type imports nothing outside the standard library.
 
@@ -317,10 +317,10 @@ func modbusQuantity(read ModbusRead) int {
 	return read.Count * modbusWidths[read.Type]
 }
 
-// modbusExchange sends one read and returns the data bytes of its answer:
-// the MBAP header (transaction, protocol 0, length, unit), then the
-// function, the address and the quantity; the answer has the same header,
-// the function, a count of bytes and the bytes.
+// modbusExchange sends one read and returns the data bytes of its answer.
+// The read is the MBAP header (transaction, protocol 0, length, unit), then
+// the function, the address and the quantity. The answer has the same
+// header, then the function, a count of bytes and the bytes.
 func modbusExchange(ctx context.Context, conn *netConn, transaction uint16, unit byte, read ModbusRead) ([]byte, error) {
 	table := modbusTables[read.Table]
 	quantity := modbusQuantity(read)
@@ -405,12 +405,12 @@ func modbusValues(read ModbusRead, data []byte) any {
 	return values
 }
 
-// modbusOrdered is the bytes of a value of words registers in big-endian
-// order: order names where the bytes of a 32-bit value ABCD are on the
-// wire, and wider and narrower values follow the same two swaps, of the
-// bytes in each register (badc, dcba) and of the registers (cdab, dcba).
-// A string's registers are never reversed, only their bytes swapped:
-// words is 0 for one.
+// modbusOrdered returns the bytes of a value of words registers in
+// big-endian order. order names where the bytes of a 32-bit value ABCD are
+// on the wire. Wider and narrower values follow the same two swaps: of the
+// bytes in each register (badc, dcba) and of the registers (cdab, dcba). A
+// string's registers are never reversed, only their bytes swapped: words
+// is 0 for one.
 func modbusOrdered(data []byte, order string, words int) []byte {
 	out := make([]byte, len(data))
 	swapBytes := order == "badc" || order == "dcba"

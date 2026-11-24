@@ -22,12 +22,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A tcp collector of request.connect_only checks that a port takes a
-// connection: the scrape dials the target, through the target policy, makes
-// the TLS handshake when the collector has a tls block, and closes, writing
-// and reading nothing. Its answer is a JSON document of whether the port was
-// open, how long the connection and the handshake took and the address the
-// connection reached:
+// A tcp collector with request.connect_only checks that a port takes a
+// connection. The scrape dials the target through the target policy, makes
+// the TLS handshake when the collector has a tls block, and closes. It
+// writes and reads nothing. Its answer is a JSON document: whether the port
+// was open, how long the connection and the handshake took, and the address
+// the connection reached:
 //
 //	request:
 //	  type: tcp
@@ -35,16 +35,16 @@ import (
 //	  ports: [22, 443, 5432]  # optional: these ports of the target's host, at once
 //
 // A port that refuses the connection, does not answer within
-// connect_timeout or whose handshake fails is "open": false with the reason,
-// an answer rather than a failed scrape, so that a rule reads a 0 or a 1 of
-// every scrape, as dns answers a SERVFAIL. What fails the scrape is being
-// unable to ask: a target the target lists refuse, a name that does not
-// resolve, and a scrape cut short.
+// connect_timeout, or whose handshake fails is "open": false with the
+// reason. This is an answer rather than a failed scrape, so a rule reads a
+// 0 or a 1 from every scrape, as dns answers a SERVFAIL. The scrape fails
+// only when it cannot ask: a target the target lists refuse, a name that
+// does not resolve, or a scrape cut short.
 //
-// With request.ports the target is a host alone, and each port of the list
-// is dialed at once, each its own request of the debug report and the
-// trace: the document has each in ports, keyed by its number, and open
-// says whether every one was.
+// With request.ports the target is a host alone, and every port in the list
+// is dialed at once. Each is its own request in the debug report and the
+// trace. The document holds each in ports, keyed by its number, and open
+// says whether every one was open.
 
 // The defaults and bounds of connect_only (validateTCPConnect).
 const (
@@ -71,11 +71,12 @@ const (
 )
 
 // validateTCPConnect checks connect_only, connect_timeout and ports:
-// connect_only sends and reads nothing, so no key of what is sent, read or
-// spoken goes with it, nor udp, which has no connection to make, nor
-// unix_socket, which has no port; connect_timeout is at least
-// tcpMinConnectTimeout, and ports, which only connect_only dials, are at
-// most tcpMaxPorts distinct numbers from 1 to 65535.
+//   - connect_only sends and reads nothing, so no key about what is sent,
+//     read or spoken goes with it. Neither does udp, which has no connection
+//     to make, nor unix_socket, which has no port.
+//   - connect_timeout is at least tcpMinConnectTimeout.
+//   - ports, which only connect_only dials, are at most tcpMaxPorts distinct
+//     numbers from 1 to 65535.
 func validateTCPConnect(x *model.Collector, r TCPConfig) error {
 	if !r.ConnectOnly {
 		switch {
@@ -161,10 +162,10 @@ type tcpPort struct {
 	TLSVersion     string   `json:"tls_version,omitempty"`
 }
 
-// tcpConnectDocument is a scrape of connect_only as the transforms read
-// it: the port's fields, or, with request.ports, open, whether every port
-// was, open_ports, how many were, and ports, each port's, keyed by its
-// number.
+// tcpConnectDocument is a connect_only scrape as the transforms read it.
+// It holds the port's fields, or, with request.ports: open (whether every
+// port was), open_ports (how many were), and ports (each port's fields,
+// keyed by its number).
 type tcpConnectDocument struct {
 	tcpPort
 	OpenPorts       *int               `json:"open_ports,omitempty"`
@@ -193,10 +194,10 @@ func (p tcpPort) facts() []TraceFact {
 	return facts
 }
 
-// tcpConnectDeadline is when a scrape's connections, and their handshakes,
-// end: connect_timeout from now, and within the scrape's deadline nine
-// tenths of the time left to it, so that a port that never answers is
-// counted closed with the time left to answer the document.
+// tcpConnectDeadline is when a scrape's connections and their handshakes
+// end: connect_timeout from now, but within nine tenths of the time left
+// to the scrape's deadline. So a port that never answers is counted closed
+// with time left to answer with the document.
 func tcpConnectDeadline(ctx context.Context, r TCPConfig) time.Time {
 	timeout := time.Duration(r.ConnectTimeout)
 	if timeout == 0 {
@@ -290,11 +291,11 @@ func fetchTCPConnect(ctx context.Context, start time.Time, target string, addres
 	}, nil
 }
 
-// tcpConnect connects to hostPort, through the target policy, makes the TLS
-// handshake when cfg is set, and closes the connection, both ending at
+// tcpConnect connects to hostPort through the target policy, makes the TLS
+// handshake when cfg is set, and closes the connection. Both end at
 // deadline. A port that refuses, does not answer by deadline, or whose
-// handshake fails is not open, with the reason; the error is what fails the
-// scrape: a refusal of the target lists, a name that does not resolve, and
+// handshake fails is not open, with the reason. The error is what fails the
+// scrape: a refusal by the target lists, a name that does not resolve, or
 // ctx ended before the deadline.
 func tcpConnect(ctx context.Context, hostPort string, cfg *tls.Config, deadline time.Time) (tcpPort, error) {
 	dialCtx, cancel := context.WithDeadline(ctx, deadline)
@@ -331,10 +332,11 @@ func tcpConnect(ctx context.Context, hostPort string, cfg *tls.Config, deadline 
 	return port, nil
 }
 
-// tcpConnectFailed is the error a failed dial fails the scrape with, nil
-// when it is an answer, a port not open: a refusal of the target lists, a
-// name that does not resolve, and the scrape's ctx ended, cut short or past
-// its deadline before connect_timeout's.
+// tcpConnectFailed is the error a failed dial fails the scrape with. It is
+// nil when the failure is an answer (a port not open). The errors are: a
+// refusal by the target lists, a name that does not resolve, or the
+// scrape's ctx ended, cut short or past its deadline before
+// connect_timeout's.
 func tcpConnectFailed(ctx context.Context, hostPort string, err error) error {
 	if errors.Is(err, ErrTargetRefused) {
 		return err

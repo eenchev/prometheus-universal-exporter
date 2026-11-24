@@ -22,9 +22,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The redis request type reads a Redis or Valkey server, which speak the
-// same protocol: its INFO, and the replies of read-only commands the
-// configuration lists, handed to the transforms as one JSON document.
+// The redis request type reads a Redis or Valkey server (both speak the
+// same protocol). It hands the server's INFO, and the replies of read-only
+// commands the configuration lists, to the transforms as one JSON document.
 //
 //	request:
 //	  type: redis
@@ -37,27 +37,27 @@ import (
 //	      command: [LLEN, "jobs:{{param_queue}}"]
 //
 // The document is {"info": {section: {name: value}}, "commands": {name:
-// reply}}: info when INFO was sent, which it is unless commands are listed
-// and info_sections is not, commands when commands are listed. A value of
-// INFO that is a number is a JSON number, written as the server wrote it,
-// and one made of name=value pairs, as a keyspace line is, an object
-// (redisresp.go).
+// reply}}. info is there when INFO was sent, which it is unless commands are
+// listed and info_sections is not. commands is there when commands are
+// listed. A value of INFO that is a number is a JSON number, written as the
+// server wrote it. One made of name=value pairs, as a keyspace line is, is
+// an object (redisresp.go).
 //
 // The probe's target is host, host:port, [v6]:port, or a redis:// or
-// rediss:// URL of one, port 6379 when it is left out; rediss://, or a tls
-// block, asks for TLS, and redis:// with a tls block is refused. The
+// rediss:// URL of one, with port 6379 when it is left out. rediss://, or a
+// tls block, asks for TLS, and redis:// with a tls block is refused. The
 // exporter dials the target through the target policy, as every type that
-// reaches a server does, and makes one connection for each scrape, which is
-// closed when the scrape is over: a scrape sends a few commands at most
-// seconds apart, a connection costs a TCP handshake and AUTH, TLS's
-// handshake besides, and a connection kept between scrapes would need its
-// own keepalive, idle timeout and limit, as sshfile's and sql's do, for
-// none of which there is a need here.
+// reaches a server does. It makes one connection for each scrape, closed
+// when the scrape is over. A scrape sends a few commands at most seconds
+// apart, and a connection costs a TCP handshake and AUTH, plus TLS's
+// handshake. A connection kept between scrapes would need its own
+// keepalive, idle timeout and limit, as sshfile's and sql's do, and there
+// is no need for any of them here.
 //
 // Only the commands of redisAllowedCommands may be listed: commands that
 // read, whose reply is bounded by the key they read, and that reveal no
-// secret or other client of the server, which CONFIG GET and CLIENT LIST
-// would. The password is read from password_file at every scrape, as
+// secret or other client of the server (as CONFIG GET and CLIENT LIST
+// would). The password is read from password_file at every scrape, as
 // every credential file is, and never shown: a debug report shows AUTH as
 // AUTH user ***.
 //
@@ -74,10 +74,10 @@ type RedisConfig struct {
 	Sentinel     *RedisSentinel `yaml:"sentinel,omitempty"`
 }
 
-// RedisSentinel is a redis collector's request.sentinel: the name of the
-// primary its target, a Sentinel, watches, and the Sentinel's own account,
-// which is not the servers': the scrape asks the Sentinel which server is
-// that primary now and reads that server.
+// RedisSentinel is a redis collector's request.sentinel. It holds the name
+// of the primary that its target, a Sentinel, watches, and the Sentinel's
+// own account, which is not the servers'. The scrape asks the Sentinel
+// which server is that primary now and reads that server.
 type RedisSentinel struct {
 	Master       string `yaml:"master,omitempty"`
 	Username     string `yaml:"username,omitempty"`
@@ -316,10 +316,10 @@ func validateRedisRequest(x *model.Collector) error {
 	return nil
 }
 
-// checkRedisSentinel checks request.sentinel: a master named, by a name
-// with no blank at its ends and no control character, and no placeholder,
-// since the Sentinel is asked of one primary; a username beside the
-// password_file of its password, as the collector's own.
+// checkRedisSentinel checks request.sentinel. A master must be named, by a
+// name with no blank at its ends, no control character and no placeholder,
+// since the Sentinel is asked of one primary. A username comes with the
+// password_file of its password, as with the collector's own.
 func checkRedisSentinel(s *RedisSentinel, notMade bool) error {
 	if s == nil {
 		return nil
@@ -355,11 +355,11 @@ func checkRedisUsername(name string) error {
 }
 
 // checkRedisTargetRequest checks a static target's own account and tls
-// block, which replace its collector's for that target
-// (withTargetAccount), as the collector's are checked: a username comes
-// with the password_file of its password, here the target's own, since the
-// collector's password is not another user's, and a password_file alone is
-// the password of the collector's user. No value of them takes a
+// block, which replace its collector's for that target (withTargetAccount).
+// They are checked as the collector's are. A username comes with the
+// password_file of its password, here the target's own, since the
+// collector's password is not another user's. A password_file alone is the
+// password of the collector's user. None of these values takes a
 // placeholder: a target's own values are used as written. A redis://
 // target, which asks for plaintext, with a tls block of its own contradicts
 // itself, as with the collector's.
@@ -760,11 +760,11 @@ func fetchRedis(ctx context.Context, target string, c *model.Collector, override
 	}, nil
 }
 
-// redisDial makes a connection to address, over TLS when secure, cfg's
-// server name the address's host unless the tls block names one, whose
-// every read and write ends at the scrape's deadline, or as soon as it is
-// cancelled; done closes it. Its lookup, connection and handshake are the
-// phases of the first command sent on it.
+// redisDial makes a connection to address, over TLS when secure. cfg's
+// server name is the address's host unless the tls block names one. Every
+// read and write on the connection ends at the scrape's deadline, or as
+// soon as it is cancelled; done closes it. Its lookup, connection and
+// handshake are the phases of the first command sent on it.
 func redisDial(ctx context.Context, address redisAddress, secure bool, cfg *tls.Config, limit int64) (*redisConn, func(), error) {
 	timedCtx, timing := withConnTiming(ctx)
 	dialer := &net.Dialer{}
@@ -811,12 +811,12 @@ func redisLogin(ctx context.Context, session *redisConn, label, username, passwo
 }
 
 // redisAskSentinel asks the Sentinel at address which server is the
-// primary of s.Master now, with SENTINEL GET-MASTER-ADDR-BY-NAME, and what
-// it knows of that primary, with SENTINEL MASTER: its fields, each number
-// a JSON number as INFO's are, and the address read, as the document's
-// sentinel holds them. The Sentinel's connection is its own, logged in
-// with the Sentinel's account, and closed before the primary is dialed; it
-// answers the bytes the Sentinel's replies took of the response limit.
+// primary of s.Master now (SENTINEL GET-MASTER-ADDR-BY-NAME), and what it
+// knows of that primary (SENTINEL MASTER): its fields, each number a JSON
+// number as INFO's are, and the address read, as the document's sentinel
+// holds them. The Sentinel's connection is its own, logged in with the
+// Sentinel's account, and closed before the primary is dialed. It answers
+// the bytes the Sentinel's replies took of the response limit.
 func redisAskSentinel(ctx context.Context, address redisAddress, secure bool, cfg *tls.Config, limit int64, s RedisSentinel) (redisAddress, map[string]any, int64, error) {
 	var primary redisAddress
 	var password string
@@ -900,8 +900,8 @@ func redisSend(ctx context.Context, session *redisConn, label string, args []str
 
 // redisReplyFacts are what a command's span tells of its reply
 // (TracedRequest.Facts): its type, and a bulk string's bytes or an array's
-// elements; never what it holds, not even an integer's value, which is the
-// server's data.
+// elements. They never tell what it holds, not even an integer's value,
+// which is the server's data.
 func redisReplyFacts(reply any) []TraceFact {
 	switch v := reply.(type) {
 	case nil:
@@ -918,10 +918,10 @@ func redisReplyFacts(reply any) []TraceFact {
 	return nil
 }
 
-// redisFailure is the failure of a read or a write, or a handshake: the
+// redisFailure is the failure of a read, a write or a handshake. It is the
 // scrape's deadline or cancellation when that is what ended it, since the
 // connection's deadline is set to make it end. The connection's deadline is
-// the scrape's, and its timer can fire before the context's own, so a
+// the scrape's, and its timer can fire before the context's own. So a
 // connection that timed out is the deadline's failure whether or not the
 // context says so yet.
 func redisFailure(ctx context.Context, err error) error {
@@ -935,10 +935,10 @@ func redisFailure(ctx context.Context, err error) error {
 }
 
 // checkRedisFiles reads the files a scrape reads, for --dry-run: the
-// password file, and the tls block's when the collector sets one, or those
-// a static target names of its own, and the collector's Sentinel's
-// password file. Loading the configuration reads none of
-// them, since a file may be mounted after the exporter starts.
+// password file and the tls block's files when the collector sets one, or
+// those a static target names of its own, and the collector's Sentinel's
+// password file. Loading the configuration reads none of them, since a
+// file may be mounted after the exporter starts.
 func checkRedisFiles(c *model.Collector, t *model.StaticTarget) []string {
 	warnings := accountFileWarnings(c, t)
 	if s := redisRequest(c).Sentinel; s != nil && s.PasswordFile != "" && t == nil {

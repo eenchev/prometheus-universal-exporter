@@ -9,36 +9,42 @@ import (
 )
 
 // sqlGuardedConn is a driver's connection as the pool's connector hands it
-// to database/sql (guardSQLConn): each call on it, and on the transactions
-// and statements it makes, turns a panic of the driver into an error, the
-// connection given up. database/sql calls a driver in goroutines of its own
-// as well as the scrape's: its connection cleaner closes a connection past
-// its lifetime or idle time, and a transaction whose context ends is rolled
-// back by a goroutine that waits for that (sql.go connectionCleaner,
-// Tx.awaitDone), where a panic would end the process.
+// to database/sql (guardSQLConn). Each call on it, and on the transactions
+// and statements it makes, turns a panic of the driver into an error and
+// gives up the connection. database/sql calls a driver in its own
+// goroutines as well as the scrape's. Its connection cleaner closes a
+// connection past its lifetime or idle time, and a goroutine that waits for
+// a transaction's context to end rolls the transaction back (sql.go
+// connectionCleaner, Tx.awaitDone). A panic there would end the process.
 //
-// It is what the driver's connection is to database/sql, which asks each
-// connection what it can do and acts on the answer. It runs a statement
-// with arguments on the connection itself, the arguments checked without
-// the statement, only when the connection says it can, and otherwise
-// prepares the statement first and checks the arguments by it (sql.go
-// execDC, queryDC); and it keeps the connection of a transaction whose
-// context ended only when the connection both resets its session and says
-// whether it is valid (sql.go beginDC). So a guarded connection runs
-// statements (driver.ExecerContext, driver.QueryerContext), resets its
-// session (driver.SessionResetter) and says whether it is valid
-// (driver.Validator) exactly when the driver's connection does, one of
-// sixteen types by those four (sqlGuardedKinds), running a statement on a
-// connection that takes no context as database/sql would (ctxutil.go
-// ctxDriverExec, ctxDriverQuery). The rest it always takes, and does as
-// database/sql does without them when the driver's connection does not:
-// asked to check an argument, it answers driver.ErrSkip, which has
-// database/sql check it as it would have (convert.go
-// driverArgsConnLocked); it pings as a connection that cannot ping is taken
-// to, by doing nothing; it prepares and begins as database/sql does with a
-// connection that takes no context (ctxutil.go ctxDriverPrepare,
-// ctxDriverBegin). Its statements are the same (sqlGuardedStmt), and
-// Conn.Raw's function finds the driver's connection by sqlDriverConn.
+// It stands for the driver's connection to database/sql, which asks each
+// connection what it can do and acts on the answer:
+//   - database/sql runs a statement with arguments on the connection
+//     itself, with the arguments checked without the statement, only when
+//     the connection says it can. Otherwise it prepares the statement first
+//     and checks the arguments by it (sql.go execDC, queryDC).
+//   - database/sql keeps the connection of a transaction whose context
+//     ended only when the connection both resets its session and says
+//     whether it is valid (sql.go beginDC).
+//
+// So a guarded connection runs statements (driver.ExecerContext,
+// driver.QueryerContext), resets its session (driver.SessionResetter) and
+// says whether it is valid (driver.Validator) exactly when the driver's
+// connection does. It is one of sixteen types by those four
+// (sqlGuardedKinds). It runs a statement on a connection that takes no
+// context as database/sql would (ctxutil.go ctxDriverExec, ctxDriverQuery).
+//
+// The rest it always takes. When the driver's connection does not, it does
+// what database/sql does without them:
+//   - Asked to check an argument, it answers driver.ErrSkip, so database/sql
+//     checks it as it would have (convert.go driverArgsConnLocked).
+//   - It pings the way a connection that cannot ping is taken to: by doing
+//     nothing.
+//   - It prepares and begins as database/sql does with a connection that
+//     takes no context (ctxutil.go ctxDriverPrepare, ctxDriverBegin).
+//
+// Its statements work the same way (sqlGuardedStmt), and Conn.Raw's
+// function finds the driver's connection by sqlDriverConn.
 type sqlGuardedConn struct {
 	conn       driver.Conn
 	driverName string
@@ -414,10 +420,10 @@ func (c *sqlGuardedConn) guardStmt(stmt driver.Stmt, err error) (driver.Stmt, er
 
 // sqlGuardedStmt is a statement of a guarded connection. It runs with a
 // context as database/sql runs a statement that takes none (ctxutil.go
-// ctxDriverStmtExec, ctxDriverStmtQuery), and checks an argument as its
-// statement does, or, when the statement does not, as its connection does,
-// which is whom database/sql asks then (convert.go driverArgsConnLocked),
-// or answers driver.ErrSkip.
+// ctxDriverStmtExec, ctxDriverStmtQuery). It checks an argument as its
+// statement does. When the statement does not, it checks as its connection
+// does, because database/sql asks the connection then (convert.go
+// driverArgsConnLocked), or it answers driver.ErrSkip.
 type sqlGuardedStmt struct {
 	stmt driver.Stmt
 	conn *sqlGuardedConn

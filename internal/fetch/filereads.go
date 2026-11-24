@@ -16,15 +16,15 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// localfile, sshfile and s3file read files the same way, from the exporter's
-// own filesystem, from a remote host's over SFTP and from a bucket over the
-// S3 API: confined to
-// request.root, only regular files, read again when they change under the
-// read, refused past the response limit or max_age, and presented to the
-// pipeline as a response with no status. What they read from is a fileSource:
-// an os.Root for localfile (rootSource), an SFTP session for sshfile, a
-// bucket for s3file (s3source.go). A
-// directory is read by the same code too (localfile_directory.go).
+// localfile, sshfile and s3file read files the same way: from the exporter's
+// own filesystem, from a remote host's over SFTP, and from a bucket over the
+// S3 API. Reads are confined to request.root and to regular files. A file is
+// read again when it changes under the read, refused past the response limit
+// or max_age, and presented to the pipeline as a response with no status.
+// What they read from is a fileSource: an os.Root for localfile
+// (rootSource), an SFTP session for sshfile, a bucket for s3file
+// (s3source.go). A directory is read by the same code too
+// (localfile_directory.go).
 
 // fileSource is a tree of files that every read is confined to. Names are
 // relative to its root.
@@ -125,10 +125,10 @@ func readSourceOpened(src fileSource, name, full string, limit int64) ([]byte, f
 	if !opened.Mode().IsRegular() {
 		return nil, nil, fmt.Errorf("%s is not a regular file (%s)", full, fileKind(opened.Mode()))
 	}
-	// The file's size is how long a buffer to read it into, and no more
-	// than that: a file that grew or shrank since is read to its end, and a
-	// file that gives no size, as those of /proc do, as a body of unknown
-	// length.
+	// The file's size sets the length of the buffer to read it into, and
+	// nothing more. A file that grew or shrank since is read to its end. A
+	// file that gives no size, like those of /proc, is read as a body of
+	// unknown length.
 	body, err := readBody(f, limit, opened.Size())
 	if err != nil {
 		return nil, nil, localFileError(full, err)

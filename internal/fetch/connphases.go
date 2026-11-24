@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-// connTiming times the phases of a connection a request type other than
-// http makes itself, as an http request's are timed (tripTrace): the
-// name's lookup and the connection, from the net package's hooks, which a
-// dial with the context of withConnTiming calls, and the TLS or SSH
-// handshake, which the type times itself (handshake). The phases are its
-// request's span's children: of the request sent when the connection was
-// made (tracePhases), or of the first request sent on it once it is
+// connTiming times the phases of a connection that a request type other
+// than http makes itself, as an http request's are timed (tripTrace). It
+// times the name lookup and the connection from the net package's hooks,
+// which a dial with the context of withConnTiming calls. The type times the
+// TLS or SSH handshake itself (handshake). The phases are children of a
+// request's span: the request sent when the connection was made
+// (tracePhases), or the first request sent on it once it is
 // (traceNextPhases). A nil connTiming, of a trip whose requests are not
 // recorded, times nothing.
 type connTiming struct {

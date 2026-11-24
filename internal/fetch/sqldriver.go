@@ -58,10 +58,11 @@ type sqlDriver struct {
 	// options are the request.options the driver takes, each with the
 	// values it takes, or nil for any text.
 	options map[string][]string
-	// tlsOption is the option that says whether, and how, TLS is used, and
-	// tlsModes what each of its values asks for. A collector that leaves it
-	// out has TLS, verified, when it sets a tls key, and none otherwise.
-	// Empty, the driver always uses TLS, verified (Snowflake's HTTPS).
+	// tlsOption is the option that says whether and how TLS is used, and
+	// tlsModes says what each of its values asks for. A collector that leaves
+	// it out has TLS, verified, when it sets a tls key, and none otherwise.
+	// When it is empty, the driver always uses TLS, verified (Snowflake's
+	// HTTPS).
 	tlsOption string
 	tlsModes  map[string]sqlTLSMode
 	// refusedTLS are the tls keys the driver cannot honour.
@@ -77,7 +78,7 @@ type sqlDriver struct {
 	account bool
 	host    func(account string) string
 	// ownDial says the driver dials by itself, not through the exporter's
-	// dialer: its connections' addresses are checked against the policy
+	// dialer. Its connections' addresses are checked against the policy
 	// before the connection, not on it, and TCP keepalives are the
 	// operating system's (Vertica).
 	ownDial bool
@@ -95,17 +96,17 @@ type sqlDriver struct {
 	// statement_timeout, set to the scrape's time left), which may come a
 	// moment before the scrape's context ends.
 	timedOut func(err error) bool
-	// serverError recognises in err's chain the server's own report of an
-	// error, and gives its code as the database's documentation names it
+	// serverError recognises the server's own report of an error in err's
+	// chain, and gives its code as the database's documentation names it
 	// (SQLSTATE 28P01, error 1045, ORA-01017). The server's message is the
-	// operator's: it may quote a value of a row, the statement, the account
-	// and the address it connected from, or a schema's names, so a probe's
+	// operator's. It may quote a value of a row, the statement, the account
+	// and the address it connected from, or a schema's names. So a probe's
 	// caller is told the code alone (sqlServerAnswer).
 	serverError func(err error) (code string, ok bool)
 	// readOnly says how run makes a statement read-only, for the docs and
-	// the tests: "transaction", "setting", "rollback" for a transaction
-	// that is rolled back, undoing what the statement wrote but what
-	// commits by itself (sqlserver), or "" for not at all.
+	// the tests. It is "transaction", "setting", "rollback" for a
+	// transaction that is rolled back, undoing what the statement wrote but
+	// not what commits by itself (sqlserver), or "" for not at all.
 	readOnly string
 	// statement, when set, refuses a statement the driver would not run as
 	// the one statement it makes read-only, when the configuration is
@@ -150,32 +151,32 @@ type sqlConnectSpec struct {
 	// appName is the name the connection gives itself where the driver
 	// sends one (sqlAppName).
 	appName string
-	// limit is the collector's response limit, 0 for none: a driver that can
-	// be told the most it reads of the server at once is told the limit and
-	// sqlMessageSlack beside it, so that a row larger than the limit is
-	// refused before it is read whole rather than after.
+	// limit is the collector's response limit, 0 for none. A driver that can
+	// be told the most it reads of the server at once is told the limit plus
+	// sqlMessageSlack. So a row larger than the limit is refused before it is
+	// read whole, not after.
 	limit int64
 }
 
-// sqlMessageSlack is what a driver bounded by the response limit may read of
-// one message beside the limit: what the protocol adds to a row's values, a
-// length for each, NULLs among them, which the limit does not count, and a
-// description of a wide result or a long error message. A row within the
-// limit and this much is read, and then refused by the limit on its values.
+// sqlMessageSlack is how much a driver bounded by the response limit may
+// read of one message beyond the limit. It covers what the protocol adds to
+// a row's values, which the limit does not count (a length for each, NULLs
+// among them), and a description of a wide result or a long error message.
+// A row within the limit plus this much is read, and then refused by the
+// limit on its values.
 const sqlMessageSlack = 1 << 20
 
 // sqlAppName is the name the exporter's connections give themselves where a
 // driver sends one, so that a database administrator can tell them apart.
 const sqlAppName = "prometheus-universal-exporter"
 
-// sqlDial is the dialer of a pool's connections: it connects to address,
+// sqlDial is the dialer of a pool's connections. It connects to address,
 // checks the address it connected to against the collector's policy, as an
-// http request's connections are (checkConnection), and sets TCP
-// keepalives at interval, none at 0. It dials TCP alone: a driver asking
-// for anything else (go-mssqldb asks the SQL Server Browser over UDP for an
-// instance a routing answer names without a port, tds.go getInstances)
-// would reach an address checkConnAddr does not see as TCP, so it is
-// refused.
+// http request's connections are (checkConnection), and sets TCP keepalives
+// at interval, none at 0. It dials TCP alone. A driver asking for anything
+// else would reach an address checkConnAddr does not see as TCP, so it is
+// refused (go-mssqldb asks the SQL Server Browser over UDP for an instance
+// a routing answer names without a port, tds.go getInstances).
 func sqlDial(policy *targetPolicy, host string, interval time.Duration) func(ctx context.Context, network, address string) (net.Conn, error) {
 	keepalive := interval
 	if keepalive <= 0 {
@@ -215,20 +216,21 @@ func sqlDial(policy *targetPolicy, host string, interval time.Duration) func(ctx
 }
 
 // sqlDriverPanic is the error of a driver that panicked, with the value
-// recover gave: a driver's fault, which an answer the driver did not expect
-// can set off, fails the one connection or statement, never the process,
-// and the connection it was on is given up.
+// recover gave. A driver's fault, which an answer the driver did not expect
+// can set off, fails the one connection or statement, never the process.
+// The connection it was on is given up.
 func sqlDriverPanic(driverName string, recovered any) error {
 	return fmt.Errorf("the %s driver failed on what the server sent (it panicked: %v); the connection is given up, "+
 		"and if this repeats the server or something between it and the exporter is answering in a way the driver cannot read", driverName, recovered)
 }
 
-// sqlConnectRecovering runs connect, turning a panic of the driver into
-// sqlDriverPanic. database/sql calls a connector both in the goroutine of
-// the scrape that asks for a connection, where a panic would leave the
-// connection counted as open, holding a place at max_per_target for good,
-// and in its own goroutine that opens connections for scrapes waiting for
-// one, where a panic would end the process.
+// sqlConnectRecovering runs connect and turns a panic of the driver into
+// sqlDriverPanic. database/sql calls a connector in two places:
+//   - in the goroutine of the scrape that asks for a connection, where a
+//     panic would leave the connection counted as open, holding a place at
+//     max_per_target for good;
+//   - in its own goroutine that opens connections for scrapes waiting for
+//     one, where a panic would end the process.
 func sqlConnectRecovering(ctx context.Context, driverName string, connect func(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, error), spec *sqlConnectSpec) (conn driver.Conn, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -239,10 +241,10 @@ func sqlConnectRecovering(ctx context.Context, driverName string, connect func(c
 }
 
 // checkOwnDial applies the policy to host for a driver that dials by itself
-// (sqlDriver.ownDial): its name, then every address it resolves to, before
-// the driver connects, since nothing checks the connection. A host whose
-// addresses could not be looked up fails, unlike one behind a proxy
-// (unresolved): the driver looks the name up itself and connects to
+// (sqlDriver.ownDial). It checks the name, then every address it resolves
+// to, before the driver connects, since nothing checks the connection. A
+// host whose addresses could not be looked up fails, unlike one behind a
+// proxy (unresolved). The driver looks the name up itself and connects to
 // whatever that gives, which nothing here has held to the policy.
 func (p *targetPolicy) checkOwnDial(ctx context.Context, host string) error {
 	_, err := p.checkHost(ctx, host, true, true)
@@ -279,9 +281,9 @@ func checkConnAddr(policy *targetPolicy, host string, conn net.Conn) error {
 
 // sqlReadOnlyTx runs a statement in a transaction begun read-only through
 // database/sql, which the driver turns into its own words (BEGIN READ ONLY,
-// START TRANSACTION READ ONLY), after the statements setup gives for the
-// timeout, run in it first. The transaction is rolled back at the end: it
-// has done nothing to keep.
+// START TRANSACTION READ ONLY). The statements setup gives for the timeout
+// run in it first. The transaction is rolled back at the end, since it has
+// done nothing to keep.
 func sqlReadOnlyTx(setup func(timeout time.Duration) []string) func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	return sqlTx(sql.TxOptions{ReadOnly: true}, setup)
 }
@@ -290,21 +292,21 @@ func sqlReadOnlyTx(setup func(timeout time.Duration) []string) func(ctx context.
 // statements setup gives.
 //
 // database/sql rolls back a transaction whose context ends from a goroutine
-// of its own (Tx.awaitDone), and then closes the *sql.Conn it was begun on
-// when the driver's connection does not both reset its session and say
-// whether it is valid (beginDC's keepConnOnRollback), at whatever moment
-// that goroutine runs. The scrape still holds the Conn then and calls
-// Conn.Raw on it, to give it back or close it, and Raw is not safe against
-// that close: one that completes between Raw's check that the Conn is open
-// and its lock hands Raw a nil connection (sql.go grabConn), a panic. So
-// the transaction is begun with a context of its own, which ends only once
-// done or a failure has rolled it back, and nothing closes the Conn behind
-// the scrape; BEGIN is still bounded by ctx, which the guarded connection
-// gives the driver in its place (sqlBeginContext). done then does what
-// database/sql would have: when ctx ended while the transaction was open,
-// at the scrape's deadline or when the statement was ended before its rows
-// were all read, the connection is closed rather than given back, unless it
-// resets its session and says whether it is valid.
+// of its own (Tx.awaitDone). It then closes the *sql.Conn the transaction
+// was begun on, at whatever moment that goroutine runs, unless the driver's
+// connection both resets its session and says whether it is valid
+// (beginDC's keepConnOnRollback). The scrape still holds the Conn then and
+// calls Conn.Raw on it, to give it back or close it. Raw is not safe
+// against that close: one that completes between Raw's check that the Conn
+// is open and its lock hands Raw a nil connection (sql.go grabConn), a
+// panic. So the transaction is begun with a context of its own, which ends
+// only once done or a failure has rolled it back, and nothing closes the
+// Conn behind the scrape. BEGIN is still bounded by ctx, which the guarded
+// connection gives the driver in its place (sqlBeginContext). done then
+// does what database/sql would have done: when ctx ended while the
+// transaction was open (at the scrape's deadline, or when the statement was
+// ended before its rows were all read), the connection is closed instead of
+// given back, unless it resets its session and says whether it is valid.
 func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	return func(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 		keep := false
@@ -349,10 +351,10 @@ func sqlTx(opts sql.TxOptions, setup func(timeout time.Duration) []string) func(
 	}
 }
 
-// sqlStepError is the failure of a step of sqlTx before the statement: the
-// step, which the exporter wrote, and the driver's error, which the pool
-// marks as the server's answer inside it (sqlServerAnswer), so that what a
-// probe's caller is told still names the step.
+// sqlStepError is the failure of a step of sqlTx before the statement. It
+// holds the step, which the exporter wrote, and the driver's error, which
+// the pool marks as the server's answer inside it (sqlServerAnswer). So what
+// a probe's caller is told still names the step.
 type sqlStepError struct {
 	step string
 	err  error
@@ -364,10 +366,10 @@ func (e *sqlStepError) Unwrap() error { return e.err }
 
 // sqlServerAnswer is err, an error the driver gave, marked as holding the
 // operator's detail when it is the server's own report of an error
-// (sqlDriver.serverError): the log and the debug report show the server's
-// message, and a probe's caller is told the code alone. An error that is not
-// the server's, such as a connection refused or a TLS handshake that failed,
-// is the exporter's side of the story and is returned as it is.
+// (sqlDriver.serverError). The log and the debug report show the server's
+// message, and a probe's caller is told the code alone. An error that is
+// not the server's, such as a connection refused or a TLS handshake that
+// failed, is the exporter's side of the story and is returned as it is.
 func (d *sqlDriver) sqlServerAnswer(err error) error {
 	if err == nil || d.serverError == nil {
 		return err

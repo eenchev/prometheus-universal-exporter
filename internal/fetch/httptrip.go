@@ -13,21 +13,21 @@ import (
 	"time"
 )
 
-// HTTPTrip is what an http or graphite collector's answer says of the
-// request that brought it, beside its status, headers and body: how long
+// HTTPTrip is what an http or graphite collector's answer says about the
+// request that brought it, besides its status, headers and body: how long
 // each phase of that request took, the TLS connection it was sent on, its
-// URL and the redirects that led to it. It is of the request whose status the
-// answer has: the last attempt of a retried trip, the request a redirect
-// led to, a 304 that revalidated a cached response, and of a paginated
-// trip the first page, or the page whose status failed it.
+// URL and the redirects that led to it. It describes the request whose
+// status the answer has: the last attempt of a retried trip, the request a
+// redirect led to, a 304 that revalidated a cached response, and for a
+// paginated trip the first page, or the page whose status failed it.
 type HTTPTrip struct {
-	// DNS, Connect and TLS are how long the name's lookup, the connection
-	// and the TLS handshake took, nil for a phase the request did not
-	// have: on a connection it reused, none of them; over plain HTTP, no
-	// handshake; to an IP address or a Unix socket, no lookup. Through a
-	// proxy, the lookup and the connection are the proxy's, and the
-	// handshake the target's through the tunnel, never the one with an
-	// https:// proxy (proxyTLSDialer).
+	// DNS, Connect and TLS are how long the name lookup, the connection
+	// and the TLS handshake took. Each is nil for a phase the request did
+	// not have: none of them on a reused connection, no handshake over
+	// plain HTTP, no lookup to an IP address or a Unix socket. Through a
+	// proxy, the lookup and the connection are the proxy's. The handshake
+	// is the target's through the tunnel, never the one with an https://
+	// proxy (proxyTLSDialer).
 	DNS, Connect, TLS *time.Duration
 	// FirstByte is the time from the request's start, when it asked for a
 	// connection, to the first byte of the answer; nil for none.
@@ -47,17 +47,17 @@ type HTTPTrip struct {
 	// ProtoMajor and ProtoMinor are the version of HTTP the answer came
 	// in, 1 and 1 for HTTP/1.1, 2 and 0 for HTTP/2; 0 and 0 for none.
 	ProtoMajor, ProtoMinor int
-	// RemoteIP is the address the request's connection was made to, the
-	// zero Addr when it is not known: a request that was not traced (fetch
-	// says when), one through a proxy, whose connection is to the proxy and
-	// not to the target, and one over a Unix socket, which has no address.
+	// RemoteIP is the address the request's connection was made to. It is
+	// the zero Addr when not known: for a request that was not traced
+	// (fetch says when), one through a proxy (connected to the proxy, not
+	// the target), and one over a Unix socket, which has no address.
 	RemoteIP netip.Addr
 }
 
-// JQHTTPVersion is the version of HTTP the answer came in, as jq's
-// $http_version and Python's response.http_version have it: "1.0", "1.1"
-// or "2", as blackbox_exporter's probe_http_version writes it; null for no
-// trip.
+// JQHTTPVersion returns the HTTP version the answer came in, as jq's
+// $http_version and Python's response.http_version expose it: "1.0", "1.1"
+// or "2", as blackbox_exporter's probe_http_version writes it. It is null
+// for no trip.
 func (t *HTTPTrip) JQHTTPVersion() any {
 	if t == nil || t.ProtoMajor == 0 {
 		return nil
@@ -74,10 +74,10 @@ func (t *HTTPTrip) JQHTTPVersion() any {
 	return strconv.Itoa(t.ProtoMajor) + "." + strconv.Itoa(t.ProtoMinor)
 }
 
-// JQRemoteIP is the address the request's connection was made to, as jq's
-// $remote_ip and Python's response.remote_ip have it: "203.0.113.7" or
-// "2001:db8::7", an IPv4 address that came as one mapped into IPv6 written
-// as IPv4; null when it is not known (RemoteIP) and for no trip.
+// JQRemoteIP returns the address the request's connection was made to, as
+// jq's $remote_ip and Python's response.remote_ip expose it: "203.0.113.7"
+// or "2001:db8::7". An IPv4 address mapped into IPv6 is written as IPv4.
+// It is null when not known (RemoteIP) and for no trip.
 func (t *HTTPTrip) JQRemoteIP() any {
 	if t == nil || !t.RemoteIP.IsValid() {
 		return nil
@@ -108,10 +108,10 @@ func (t *HTTPTrip) JQURL() any {
 	return t.ShownURL()
 }
 
-// ShownURL is the request's URL with its userinfo and fragment left out
-// and the values of the query parameters whose names read as credentials
-// masked, as a target is shown in a log line (MaskCredentialQueryValues);
-// "" for none.
+// ShownURL returns the request's URL as a target is shown in a log line
+// (MaskCredentialQueryValues): userinfo and fragment left out, and the
+// values of query parameters whose names look like credentials masked.
+// It returns "" for none.
 func (t *HTTPTrip) ShownURL() string {
 	if t == nil || t.URL == nil {
 		return ""
@@ -148,11 +148,11 @@ func redirectsTo(req *http.Request) int {
 	return n
 }
 
-// TLSConnection is what the exporter knows of a TLS connection to a target
-// and of the certificate the target presented on it, nothing secret: the
-// names follow the tlscert type's document (tls_version, cipher_suite,
-// server_name, verified, not_before, not_after, subject_cn, issuer_cn), so
-// a rule reads the two alike.
+// TLSConnection is what the exporter knows about a TLS connection to a
+// target and the certificate the target presented on it. It holds nothing
+// secret. The names follow the tlscert type's document (tls_version,
+// cipher_suite, server_name, verified, not_before, not_after, subject_cn,
+// issuer_cn), so a rule reads both the same way.
 type TLSConnection struct {
 	// TLSVersion is the protocol's version as the tlscert document writes
 	// it, "TLS 1.3".
@@ -172,10 +172,10 @@ type TLSConnection struct {
 	SubjectCN, IssuerCN string
 }
 
-// tlsConnectionOf is what state says of the connection a request was
-// answered on; nil for a request over plain HTTP. Through an https://
-// proxy, the state is the target's handshake through the tunnel, and
-// there is none for a plain HTTP target: the proxy's own connection is
+// tlsConnectionOf returns what state says about the connection a request
+// was answered on, or nil for a request over plain HTTP. Through an
+// https:// proxy, the state is the target's handshake through the tunnel.
+// There is none for a plain HTTP target: the proxy's own connection is
 // handed to the transport as no TLS connection (proxyTLSDialer).
 func tlsConnectionOf(state *tls.ConnectionState) *TLSConnection {
 	if state == nil {
@@ -234,12 +234,12 @@ func tripSeconds(d *time.Duration) any {
 }
 
 // tripTrace times the phases of one attempt's requests through
-// net/http/httptrace, and keeps the address of the connection each was sent
-// on. A redirect is a request of its own, which asks for a connection again
-// (GetConn), so each GetConn starts the timings anew and what is left at the
-// end is the last request's, the one answered. The hooks may be called from
-// the transport's own goroutines, a dial that tries several addresses among
-// them, hence the lock.
+// net/http/httptrace, and keeps the address of the connection each was
+// sent on. A redirect is its own request and asks for a connection again
+// (GetConn). So each GetConn restarts the timings, and what is left at the
+// end belongs to the last request, the one answered. The hooks may be
+// called from the transport's own goroutines, including a dial that tries
+// several addresses, hence the lock.
 type tripTrace struct {
 	mu                  sync.Mutex
 	start               time.Time
@@ -251,8 +251,8 @@ type tripTrace struct {
 	// remote is the remote address of the connection the request got,
 	// kept or new (GotConn).
 	remote net.Addr
-	// ctx is the context of the trip's requests, whose request trace, an
-	// exported trip's spans or a debug run's, is given each request's
+	// ctx is the context of the trip's requests. Its request trace (an
+	// exported trip's spans or a debug run's) is given each request's
 	// phases (tracePhases) once they are known: at the answer's first
 	// byte, or when the request failed before it (recordPhases).
 	ctx context.Context
@@ -286,10 +286,10 @@ func (t *tripTrace) phasesLocked() []TracedPhase {
 	return phases
 }
 
-// recordPhases gives the request being sent its phases timed so far, as
-// one that failed before its first byte has them: a lookup or a
-// connection that went through before what failed. The phases of a
-// request answered (given) are its own, not those of a redirect of it the
+// recordPhases gives the request being sent its phases timed so far, as a
+// request that failed before its first byte has them: a lookup or a
+// connection that succeeded before the failure. The phases given for an
+// answered request are its own, not those of a redirect from it that the
 // trip refused.
 func (t *tripTrace) recordPhases() {
 	if t == nil {
@@ -313,10 +313,10 @@ func (t *tripTrace) record(phases []TracedPhase) {
 	tracePhases(t.ctx, phases)
 }
 
-// hooks are the trace's hooks. A phase is taken only before the request
-// has its connection (GotConn): a dial still going on for an earlier
-// request, or one the transport began but did not use, says nothing of the
-// connection this request was sent on.
+// hooks returns the trace's hooks. A phase is recorded only before the
+// request has its connection (GotConn). A dial still running for an
+// earlier request, or one the transport began but did not use, says
+// nothing about the connection this request was sent on.
 func (t *tripTrace) hooks() *httptrace.ClientTrace {
 	since := func(start time.Time) *time.Duration {
 		d := time.Since(start)
@@ -400,11 +400,11 @@ func (t *tripTrace) hooks() *httptrace.ClientTrace {
 	}
 }
 
-// trip is what was timed of the answered request, which ended at end, when
-// its body had been read, and the connection resp came on. A nil t is an
-// attempt that was not timed (fetch says when), begun at start: its trip
-// has no phases and no remote address, and its total is the whole
-// attempt's, its redirects included.
+// trip returns what was timed for the answered request, which ended at
+// end, when its body had been read, and the connection resp came on. A nil
+// t is an attempt that was not timed (fetch says when), begun at start.
+// Its trip has no phases and no remote address, and its total covers the
+// whole attempt, including its redirects.
 func (t *tripTrace) trip(resp *http.Response, start, end time.Time) *HTTPTrip {
 	trip := &HTTPTrip{Total: end.Sub(start), ProtoMajor: resp.ProtoMajor, ProtoMinor: resp.ProtoMinor}
 	if t != nil {

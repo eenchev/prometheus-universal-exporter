@@ -30,16 +30,16 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// A call: the message is encoded from JSON into the input type, sent with
-// the metadata and credentials, and the answer is rendered as JSON in the
-// protobuf JSON mapping, with three choices made for metrics:
+// A call works like this. The message is encoded from JSON into the input
+// type and sent with the metadata and credentials. The answer is rendered as
+// JSON in the protobuf JSON mapping, with three choices made for metrics:
 //
-//   - Fields at their zero value are written, so a queue whose depth is 0
-//     has "depth": 0, rather than no depth for a rule to report missing.
-//   - Field names are as in the .proto file, include_shards rather than
-//     includeShards, as the service's own documentation shows them.
-//   - 64-bit integers are strings, as the mapping has it, which metric
-//     values read as numbers.
+//   - Fields at their zero value are written. A queue whose depth is 0 has
+//     "depth": 0, rather than no depth for a rule to report missing.
+//   - Field names are as in the .proto file (include_shards rather than
+//     includeShards), as the service's own documentation shows them.
+//   - 64-bit integers are strings, as the mapping has it. Metric values
+//     read them as numbers.
 //
 // A call answered OK is an ordinary fetch result: status 200, the JSON as its
 // body, and the answer's headers and trailers as its headers. Any other
@@ -63,9 +63,9 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	policy := policyOf(c)
 	proxied := false
 	if policy != nil {
-		// grpc-go goes through HTTPS_PROXY as an https request would. As
+		// grpc-go uses HTTPS_PROXY the same way an https request does. As
 		// for http, the server's name is looked up here only behind a
-		// proxy; otherwise its connections are checked as they are made,
+		// proxy. Otherwise its connections are checked as they are made,
 		// and a refused one is reported as the refusal (refusal below).
 		proxied = viaProxy(http.ProxyFromEnvironment, &url.URL{Scheme: "https", Host: address.hostPort})
 		host, _, _ := net.SplitHostPort(address.hostPort)
@@ -146,13 +146,13 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return m, in, nil
 	}
-	// again says whether a failed attempt is followed by another: its status
-	// is one retry.codes lists, an attempt is left, and so is time. It waits
-	// the backoff, and then ends the connection's own wait. An attempt that
-	// found no connection left the channel backing off, where grpc-go fails
-	// every call at once without dialing, so the retries of a refused
-	// connection would all be answered by the first refusal; with the wait
-	// ended, the retry connects, and reaches a server that came back.
+	// again says whether a failed attempt is followed by another. That
+	// happens when its status is listed in retry.codes and both an attempt
+	// and time are left. It waits the backoff, then ends the connection's own
+	// wait. An attempt that found no connection leaves the channel backing
+	// off, and grpc-go then fails every call at once without dialing. So all
+	// retries of a refused connection would get the first refusal. With the
+	// wait ended, the retry connects and reaches a server that came back.
 	again := func(attempt int, code string, failure error) (bool, error) {
 		if attempt >= attempts || !slices.Contains(retried, code) || ctx.Err() != nil {
 			return false, failure
@@ -166,21 +166,21 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return true, nil
 	}
-	// silent drops a connection that has stopped answering without a word:
-	// the probe's own deadline ended the wait, and grpc-go still calls the
-	// connection ready. One that is still connecting, or waiting to, is kept:
-	// it is making itself anew already, and dropping it would start a slow
-	// handshake over at every probe.
+	// silent drops a connection that has stopped answering without an
+	// error: the probe's own deadline ended the wait, but grpc-go still
+	// reports the connection as ready. A connection that is still
+	// connecting, or waiting to, is kept. It is already rebuilding itself,
+	// and dropping it would restart a slow handshake at every probe.
 	silent := func() {
 		if conn.GetState() == connectivity.Ready {
 			grpcConns.drop(key, entry)
 		}
 	}
 	callCtx := metadata.NewOutgoingContext(ctx, md)
-	// A traceparent of the operator's, in request.metadata or forwarded,
-	// is sent as it is (tracepropagation.go); otherwise each attempt sets
-	// the trip's own, under a span id of the attempt's, in md, the map
-	// callCtx carries.
+	// An operator's traceparent, in request.metadata or forwarded, is sent
+	// unchanged (tracepropagation.go). Otherwise each attempt sets the
+	// trip's own traceparent, under a span id for that attempt, in md (the
+	// map callCtx carries).
 	operatorTrace := len(md.Get("traceparent")) > 0
 	start := time.Now()
 	var (
@@ -272,10 +272,10 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// none of the span's.
 		traceFacts(ctx, intFact("rpc.grpc.status_code", int(status.Code(err))))
 		if err == nil {
-			// The limit bounds the message as it arrived, and the JSON it
-			// became, which writing every zero value can make much larger:
-			// the count before decoding is short of the JSON by what it
-			// does not count exactly.
+			// The limit applies both to the message as it arrived and to the
+			// JSON made from it. Writing every zero value can make the JSON
+			// much larger, so the count before decoding can fall short of the
+			// JSON's size.
 			if int64(len(body)) > limit {
 				return nil, &CallAnswerError{Err: model.MarkError(model.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", model.Size(len(body)), limit), model.ErrLimitExceeded)}
 			}
@@ -288,10 +288,10 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				return nil, r
 			}
 		}
-		// An answer whose headers or trailers are over the bound is over
-		// it on every attempt, and whatever the collector accepts: it is
-		// the answer's, as an http answer's headers over it are, and not
-		// a status the server sent.
+		// If an answer's headers or trailers are over the bound, they are
+		// over it on every attempt, whatever the collector accepts. The fault
+		// is the answer's, as for an http answer with headers over the bound.
+		// It is not a status the server sent.
 		if headerListTooLarge(st) {
 			return nil, headerListError("")
 		}
@@ -310,10 +310,10 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			headers.Set("grpc-message", st.Message())
 			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &code, Headers: headers, Body: []byte("{}"), Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
 		}
-		// With reflection, a method the server does not know, or an answer
-		// that does not decode, may be the server's schema having changed
-		// since it was asked: it is asked again, once, and the call made
-		// again. This is not one of the retries.
+		// With reflection, an unknown method or an answer that does not
+		// decode may mean the server's schema changed since it was asked.
+		// The server is then asked again, once, and the call is made again.
+		// This does not count as one of the retries.
 		if grpcRequest(c).Descriptors == descriptorsReflection && !refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
 			refreshed = true
 			reflectionAnswers.forget(reflection)
@@ -337,11 +337,12 @@ type grpcStreamAnswer struct {
 	Ended    bool              `json:"ended"`
 }
 
-// grpcReadStream calls a server streaming method with in and reads its
-// stream until the server ends it or most messages have come, when it is
-// cancelled: the messages are held to the response limit together, codec's
-// limit what is left of it before each one. A status the server ends the
-// stream with, other than OK, is the call's error, as a unary call's is.
+// grpcReadStream calls a server streaming method with in and reads the
+// stream until the server ends it, or until most messages have arrived and
+// the stream is cancelled. The messages share the response limit: before
+// each one, codec's limit is what is left of it. If the server ends the
+// stream with a status other than OK, that is the call's error, as for a
+// unary call.
 func grpcReadStream(ctx context.Context, conn *grpc.ClientConn, m grpcMethod, in *dynamicpb.Message, codec *answerCodec, most int, options []grpc.CallOption) ([]byte, int, metadata.MD, metadata.MD, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -424,12 +425,13 @@ func grpcTraceScheme(secure bool) string {
 	return "grpc://"
 }
 
-// propagateGRPC sets the trace context of ctx, under otlp.traces.propagate,
-// in md, a call's metadata, whose names are lower case, and returns the span
-// id the call is sent under, zero for none of the exporter's own
-// (tracepropagation.go). A tracestate the operator set without a
-// traceparent is dropped, as an HTTP request's is: it was not written for
-// the exporter's trace, and a tracestate goes with its traceparent.
+// propagateGRPC writes the trace context of ctx into md, the call's
+// metadata (whose names are lower case), as otlp.traces.propagate says. It
+// returns the span id the call is sent under, or zero when it is sent under
+// none of the exporter's own (tracepropagation.go). As for an HTTP request, a
+// tracestate the operator set without a traceparent is dropped. It was not
+// written for the exporter's trace, and a tracestate belongs with its
+// traceparent.
 func propagateGRPC(ctx context.Context, md metadata.MD) [8]byte {
 	p := tracePropagationFrom(ctx)
 	if p == nil {
@@ -457,11 +459,11 @@ func grpcTraceHeader(md metadata.MD) http.Header {
 }
 
 // renderAnswer renders an answer as compact JSON. The protobuf runtime
-// varies the spaces it writes from build to build, so its output is
-// compacted to be the same for the same answer. A google.protobuf.Any in the
-// answer is rendered as the message it carries, which is looked up among the
-// method's own types, from its descriptors, and then the types built into
-// the exporter; one found in neither fails the answer, naming its type.
+// varies the spaces it writes between builds, so the output is compacted
+// to be the same for the same answer. A google.protobuf.Any is rendered as
+// the message it carries. Its type is looked up in the method's own types
+// (from its descriptors), then in the types built into the exporter. A
+// type found in neither fails the answer, naming the type.
 func renderAnswer(out *dynamicpb.Message, types *dynamicpb.Types) ([]byte, error) {
 	options := grpcJSON
 	options.Resolver = answerResolver(types)
@@ -495,10 +497,10 @@ func grpcMessage(c *model.Collector, overrides RequestOverrides) (string, error)
 	return message, nil
 }
 
-// grpcOutgoing is the metadata a call sends: the collector's, a static
-// target's own over it, the credentials as authorization, and the forwarded
-// headers over all of them, their names lower-cased. A forwarded header gRPC
-// or HTTP/2 reserves is not sent.
+// grpcOutgoing is the metadata a call sends. It starts with the collector's
+// metadata, puts a static target's own over it, and adds the credentials as
+// authorization. The forwarded headers go over all of them. Names are
+// lower-cased. A forwarded header that gRPC or HTTP/2 reserves is not sent.
 func grpcOutgoing(c *model.Collector, overrides RequestOverrides, forwarded http.Header) (metadata.MD, error) {
 	md := metadata.MD{}
 	values, err := renderedValues(grpcRequest(c).Metadata, "header", "request.metadata.", overrides.Params)
@@ -588,18 +590,19 @@ func reflectionError(ctx context.Context, err error) error {
 	return e
 }
 
-// headerListTooLarge says st is grpc-go's own status for an answer whose
-// headers or trailers are over the bound the connection advertises
-// (grpc.WithMaxHeaderListSize, maxResponseHeaderBytes): the client stopped
-// reading them.
+// headerListTooLarge reports whether st is grpc-go's own status for an
+// answer whose headers or trailers exceed the bound the connection
+// advertises (grpc.WithMaxHeaderListSize, maxResponseHeaderBytes). In that
+// case the client stopped reading them.
 func headerListTooLarge(st *status.Status) bool {
 	return st.Code() == codes.Internal && st.Message() == "peer header list size exceeded limit"
 }
 
-// headerListError is the failure of a call, or of the reflection question
-// when asking says so, whose answer's headers or trailers are over the
-// bound: counted as a limit, as an http answer's headers over it are, in
-// that error's words. Its status is grpc-go's, INTERNAL.
+// headerListError is the error for a call whose answer has headers or
+// trailers over the bound. It is also the error for the reflection
+// question, when asking says so. It counts as a limit and uses the same words
+// as the error for an http answer with headers over the bound. Its status is
+// grpc-go's, INTERNAL.
 func headerListError(asking string) error {
 	return &CallStatusError{
 		Code: int(codes.Internal), CodeName: grpcCodeName(codes.Internal),
@@ -671,31 +674,31 @@ type reconnecting interface {
 	WaitForStateChange(ctx context.Context, from connectivity.State) bool
 }
 
-// reconnectWait is how long a call waits for a connection that had failed to
-// be made, and reconnectAgain how often within that wait it ends the
+// reconnectWait is how long a call waits for a connection that failed to be
+// made. reconnectAgain is how often, within that wait, it ends the
 // connection's own wait again (reconnectNow). They are variables for the
-// tests, which cannot say how long a connection takes on a busy machine.
+// tests, which cannot know how long a connection takes on a busy machine.
 var (
 	reconnectWait  = time.Second
 	reconnectAgain = 250 * time.Millisecond
 )
 
 // reconnectNow ends the wait of a connection that is backing off after
-// failing to connect. grpc-go fails every call at once while it waits, so a
-// server that came back would be reported down until the wait ended; a
-// probe, and each retry of one, is the moment to try again. The call then
-// waits for the connection, up to a second and within its deadline, rather
-// than failing at the old state. grpc-go keeps reporting the failure until a
+// failing to connect. While it waits, grpc-go fails every call at once, so a
+// server that came back would be reported down until the wait ended. A
+// probe, and each of its retries, is the moment to try again. The call then
+// waits for the connection, up to a second and within its deadline, instead
+// of failing on the old state. grpc-go keeps reporting the failure until a
 // connection is made, so a target that refuses again is waited for the whole
-// second: there is nothing to see the refusal by.
+// second: there is no way to see the refusal.
 //
-// Nor is there anything to see by whether the connection is waiting or is
-// trying at this moment, and ending the wait of one that is trying does
-// nothing: when that attempt then fails, begun before the server came back,
-// the connection waits again, as long as it would have, and the call would
-// fail with the server up. So the wait is ended again every quarter of the
-// second for as long as the failure is reported; while the target stays down
-// that is at most four attempts to connect in the second where it was one.
+// There is also no way to see whether the connection is waiting or trying
+// right now, and ending the wait of one that is trying does nothing. If that
+// attempt began before the server came back and then fails, the connection
+// waits again for the full time, and the call would fail with the server up.
+// So the wait is ended again every quarter second for as long as the failure
+// is reported. While the target stays down, that is at most four attempts to
+// connect in the second instead of one.
 func reconnectNow(ctx context.Context, conn reconnecting) {
 	if conn.GetState() != connectivity.TransientFailure {
 		return

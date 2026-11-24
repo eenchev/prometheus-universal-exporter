@@ -28,11 +28,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A jwt login is the login of a service account: an identity that has no
+// A jwt login is the login of a service account: an identity with no
 // password and no client secret, only a private key. The exporter signs a
-// JSON Web Token with the key, saying who it is (iss), for whom the token
-// is meant (aud) and for how long (exp), and hands it to login.url, which
-// answers a token the requests are sent with.
+// JSON Web Token with the key, stating who it is (iss), whom the token is
+// for (aud) and for how long (exp). It sends the token to login.url, which
+// answers with a token the requests are sent with.
 //
 //	login:
 //	  type: jwt
@@ -40,19 +40,20 @@ import (
 //	  signing_key_file: /etc/exporter/service-account.json
 //	  scopes: [https://www.googleapis.com/auth/spreadsheets.readonly]
 //
-// It is handed in as exchange says. form, the default, is the JWT bearer
-// grant of RFC 7523, which Google's service accounts use: a form of
-// grant_type and assertion, answered as an OAuth 2.0 token is, access_token
-// and expires_in. bearer sends the JWT as the request's own credential,
-// Authorization: Bearer, with no body, as a GitHub App asks for an
-// installation's token, which the answer holds in token.
+// exchange says how the JWT is sent:
+//   - form (the default) is the JWT bearer grant of RFC 7523, used by
+//     Google's service accounts: a form of grant_type and assertion. The
+//     answer is an OAuth 2.0 token, with access_token and expires_in.
+//   - bearer sends the JWT as the request's own credential, Authorization:
+//     Bearer, with no body. This is how a GitHub App asks for an
+//     installation's token, which the answer holds in token.
 //
-// The key is PEM, an RSA key (RS256), an elliptic curve key of P-256 or
-// P-384 (ES256, ES384) or an Ed25519 key (EdDSA), or the JSON key file
-// Google Cloud gives for a service account, whose client_email and
-// private_key_id are the issuer and the key's id unless the login says
-// its own. It is read at each login, through ReadCredentialFile, so it may
-// be a reference to a secret store.
+// The key is either PEM or the JSON key file Google Cloud gives for a
+// service account. A PEM key is an RSA key (RS256), an elliptic curve key
+// of P-256 or P-384 (ES256, ES384) or an Ed25519 key (EdDSA). In the JSON
+// key file, client_email and private_key_id are the issuer and the key's
+// id unless the login sets its own. The key is read at each login through
+// ReadCredentialFile, so it may be a reference to a secret store.
 
 // jwtLoginKeys are the keys a jwt login takes that no other kind does.
 var jwtLoginKeys = []string{"signing_key_file", "issuer", "subject", "audience", "key_id", "claims", "lifetime", "exchange"}
@@ -245,10 +246,10 @@ func signJWT(l *model.LoginConfig, u *url.URL, now time.Time) (string, time.Time
 	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), expires, nil
 }
 
-// jwtLogin signs a JWT and hands it to u for a token, as login.exchange
-// says, and reads the token from the answer: token and expires_in, jq
-// expressions, .access_token and .expires_in of a form exchange and .token
-// of a bearer one unless the login says its own.
+// jwtLogin signs a JWT, sends it to u for a token as login.exchange says,
+// and reads the token from the answer with the jq expressions token and
+// expires_in. Unless the login sets its own, these are .access_token and
+// .expires_in for a form exchange and .token for a bearer one.
 func jwtLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, start time.Time) (loginToken, error) {
 	assertion, _, err := signJWT(l, u, start)
 	if err != nil {

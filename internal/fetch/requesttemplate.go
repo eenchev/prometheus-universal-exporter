@@ -14,10 +14,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Request templates carry path parameters (pathparams.go) beyond the path: a
+// Request templates carry path parameters (pathparams.go) beyond the path. A
 // {{param_name}} placeholder may also stand in the request body, in a header
-// value and in a query value of an http collector, filled by the same probe
-// parameter, with the same defaults and the same errors:
+// value and in a query value of an http collector. It is filled by the same
+// probe parameter, with the same defaults and the same errors:
 //
 //	request:
 //	  method: POST
@@ -28,12 +28,13 @@ import (
 //	    region: "{{param_region:eu}}"
 //	  body: '{"query": "{ status(service: {{param_service|json}}) { up } }"}'
 //
-// Where a value lands decides how it must be written, or a probe parameter
-// could change the request's structure rather than fill a value in it:
+// Where a value lands decides how it must be written. Otherwise a probe
+// parameter could change the request's structure instead of filling a value
+// in it:
 //
-//   - In the body, a filter says how: {{param_x|json}} is a JSON string,
-//     quoted and escaped; |number is a JSON number, checked to be one;
-//     |form is URL form encoding; |xml is escaped XML text; |raw, or no
+//   - In the body, a filter says how. {{param_x|json}} is a JSON string,
+//     quoted and escaped. |number is a JSON number, checked to be one.
+//     |form is URL form encoding. |xml is escaped XML text. |raw, or no
 //     filter, is the value as it is — for a template that owns the whole
 //     structure, and only for values the monitor controls.
 //   - In a header value, the value is refused if it holds a control
@@ -45,16 +46,17 @@ import (
 //     ~. Anything else — a quote, a comma, a parenthesis, a glob — could
 //     change the expression rather than fill a value in it, and is refused.
 //
-// Filters exist only in the body: the path, header, query and targets each
-// have one safe encoding, applied always. In the body, a header value, a
-// query value and a target, `{{` opens a placeholder only when `param_` follows it, since a
-// body may well contain braces of its own; `{{ param_x }}` with spaces is
-// refused rather than sent as text. In a path, `{{` always opens one.
+// Filters exist only in the body. The path, header, query and targets each
+// have one safe encoding, which is always applied. In the body, a header
+// value, a query value and a target, `{{` opens a placeholder only when
+// `param_` follows it, since a body may well contain braces of its own.
+// `{{ param_x }}` with spaces is refused instead of being sent as text. In a
+// path, `{{` always opens one.
 //
-// A brace before a placeholder is a brace: in `{{{param_x}}}`, and in a
-// Graphite list `{{{param_a}},db}`, the first `{` is the text's own and the
-// two after it open the placeholder, so every `{{` of a run of braces is
-// looked at, each one byte after the last, and not every second one.
+// A brace before a placeholder is a plain brace. In `{{{param_x}}}`, and in
+// a Graphite list `{{{param_a}},db}`, the first `{` belongs to the text and
+// the two after it open the placeholder. So every `{{` in a run of braces is
+// looked at, each one byte after the last, not every second one.
 
 // The filters a body placeholder may name.
 var bodyFilters = []string{"json", "number", "form", "xml", "raw"}
@@ -84,8 +86,8 @@ func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered st
 			trimmed := strings.TrimLeft(after, " \t")
 			if !strings.HasPrefix(trimmed, PathParamPrefix) && !clockNameAt(after) {
 				// These two braces open nothing, but the second may be
-				// the first of two that do, as in {{{param_x}}: it is
-				// looked at next, where a step over both would pass the
+				// the first of two that do, as in {{{param_x}}. It is
+				// looked at next. A step over both would pass the
 				// placeholder by and leave it unfilled.
 				offset = open + 1
 				continue
@@ -168,12 +170,12 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header", "query", "arg" (a value sent as a value,
-	// such as a sql collector's args and a redis collector's command
-	// arguments), or a kind of templateEscapers or templateFilterRules,
-	// which a request type registers, such as graphite's "graphite", sql's
-	// "database", tcp's "line", ldap's "ldap_dn" and "ldap_filter" and
-	// grpc's "message", which decides the encoding.
+	// kind decides the encoding. It is "body", "header", "query", "arg" (a
+	// value sent as a value, such as a sql collector's args and a redis
+	// collector's command arguments), or a kind of templateEscapers or
+	// templateFilterRules that a request type registers, such as graphite's
+	// "graphite", sql's "database", tcp's "line", ldap's "ldap_dn" and
+	// "ldap_filter" and grpc's "message".
 	kind string
 }
 
@@ -202,12 +204,12 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	return out
 }
 
-// templateFilterRules are the kinds of templated field a request type
-// registers that take the body's filters and are written as the body is,
-// each with the rule of which filters it takes: it says why a placeholder of
-// the field where may not have its filter, or returns nil. Registered by the
-// type, as templateEscapers are, so the shared code knows no field of one
-// type.
+// templateFilterRules are the kinds of templated field, registered by a
+// request type, that take the body's filters and are written as the body
+// is. Each has a rule for which filters it takes: the rule says why a
+// placeholder of the field where may not have its filter, or returns nil.
+// The type registers them, as with templateEscapers, so the shared code
+// knows no field of one type.
 var templateFilterRules = map[string]func(where string, p pathPlaceholder) error{}
 
 // templateReplacers are the kinds of templated field a request type
@@ -280,10 +282,10 @@ func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[s
 	return b.String(), nil
 }
 
-// templateEscapers are the encodings of the kinds of templated field a
-// request type registers itself, by kind, so that a build without the type
-// carries none of its code: each writes the value of the placeholder name
-// into its place, the field where, or says why it cannot be.
+// templateEscapers are the encodings of the kinds of templated field that a
+// request type registers itself, by kind, so a build without the type
+// carries none of its code. Each writes the value of the placeholder name
+// into its place in the field where, or says why it cannot.
 var templateEscapers = map[string]func(where, name, value string) (string, error){}
 
 // templateLeadRules are the rules a request type registers, by kind, for a
@@ -293,15 +295,15 @@ var templateEscapers = map[string]func(where, name, value string) (string, error
 var templateLeadRules = map[string]func(where, name, written string) error{}
 
 // templateRenderedRules are the rules a request type registers, by kind,
-// for a field once its placeholders are filled in, the placeholders and
-// what they made of it given: a tcp collector's send may not come out
-// empty.
+// for a field once its placeholders are filled in. A rule is given the
+// placeholders and what they made of the field: a tcp collector's send may
+// not come out empty.
 var templateRenderedRules = map[string]func(where string, placeholders []pathPlaceholder, rendered string) error{}
 
 // templateFilledRules are the rules a request type registers, by kind, for
-// a field once filled in that are read against the field as it is written:
-// the values of an sshexec argument may not together make a .. the
-// configuration did not write.
+// a field once filled in, read against the field as written: the values of
+// an sshexec argument may not together make a .. that the configuration did
+// not write.
 var templateFilledRules = map[string]func(where, text string, placeholders []pathPlaceholder, filled string) error{}
 
 // write encodes a value for its place.
@@ -321,10 +323,10 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		// url.Values.Encode escapes the whole value.
 		return value, nil
 	case "arg":
-		// Sent as a value, bound to the statement or written into it by
-		// the driver quoted as a literal, never as SQL, or sent to a redis
-		// server as one bulk string of a command, never parsed as more of
-		// it, so any text is safe.
+		// The value is sent as a value: bound to the statement, or written
+		// into it by the driver quoted as a literal, never as SQL; or sent to
+		// a redis server as one bulk string of a command, never parsed as
+		// more of it. So any text is safe.
 		return value, nil
 	}
 	switch p.Filter {
@@ -351,11 +353,11 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 	return value, nil
 }
 
-// requestPlaceholders is the placeholders of a collector's request, found
-// (parsePathParams, parse) once for every check of parameters against it
-// that uses them: its path's, when it has any and is checked, and those of
-// each templated field (requestTemplates), each with the error finding them
-// gave, which a check reports only where it looks.
+// requestPlaceholders holds the placeholders of a collector's request. They
+// are found (parsePathParams, parse) once for every check of parameters
+// against it that uses them: its path's, when it has any and is checked,
+// and those of each templated field (requestTemplates). Each comes with the
+// error from finding them, which a check reports only where it looks.
 type requestPlaceholders struct {
 	hasPath bool
 	path    []pathPlaceholder
@@ -398,10 +400,10 @@ func parseRequestPlaceholders(c *model.Collector, overrides RequestOverrides) re
 	return parsed
 }
 
-// replacedBy tells whether the overrides replace the field, which
-// requestTemplates then leaves out: the body, and the fields of the kinds a
-// request type registers as replaceable (templateReplacers), such as a grpc
-// collector's message and a graphite collector's targets.
+// replacedBy reports whether the overrides replace the field, in which case
+// requestTemplates leaves it out. That is the body, and the fields of the
+// kinds a request type registers as replaceable (templateReplacers), such as
+// a grpc collector's message and a graphite collector's targets.
 func (f templateField) replacedBy(overrides RequestOverrides) bool {
 	if f.kind == "body" {
 		return overrides.Body != nil
@@ -482,10 +484,10 @@ func RequestParams(c *model.Collector) []RequestParam {
 
 // CheckRequestParams binds every placeholder of a request against the
 // parameters without sending anything, so a missing or unfit value is known
-// before the target is contacted, and reports parameters nothing uses. The
-// placeholders of the collector's label values are bound with them
-// (labelparams.go): a parameter one of those names is used, whatever the
-// request names and whatever of it the probe replaced.
+// before the target is contacted. It also reports parameters nothing uses.
+// The placeholders of the collector's label values are bound with them
+// (labelparams.go): a parameter that one of those names is used, whatever
+// the request names and whatever part of it the probe replaced.
 func CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused []string, err error) {
 	parsed := parseRequestPlaceholders(c, overrides)
 	return checkParsedRequestParams(c, &parsed, overrides)
@@ -493,12 +495,12 @@ func CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused 
 
 // RequestParamsCheck is CheckRequestParams for many checks against the same
 // collectors, as the check of a static target file against the
-// configuration makes, one for each target: each collector's placeholders
-// are found the first time it is checked, and kept for the checks after.
-// Finding them again for every target cost a quarter of that check. A loaded
+// configuration makes, one for each target. Each collector's placeholders
+// are found the first time it is checked and kept for later checks. Finding
+// them again for every target cost a quarter of that check. A loaded
 // collector does not change, and a RequestParamsCheck lives for one check of
 // a file against one configuration, so what it keeps cannot go stale. Its
-// zero value is ready to use; it is not safe for concurrent use.
+// zero value is ready to use. It is not safe for concurrent use.
 type RequestParamsCheck struct {
 	parsed map[*model.Collector]*requestPlaceholders
 }
@@ -521,10 +523,11 @@ func (check *RequestParamsCheck) CheckRequestParams(c *model.Collector, override
 	return checkParsedRequestParams(c, parsed, overrides)
 }
 
-// checkParsedRequestParams is CheckRequestParams for placeholders found
-// already, of at least the parts the overrides leave to the collector. Its
-// errors come in the order they always did: those finding the placeholders,
-// of the path and then of each field, and then those binding them.
+// checkParsedRequestParams is CheckRequestParams for placeholders already
+// found, of at least the parts the overrides leave to the collector. Its
+// errors come in the order they always did: first those from finding the
+// placeholders (of the path, then of each field), then those from binding
+// them.
 func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, overrides RequestOverrides) (unused []string, err error) {
 	if overrides.targetClock {
 		// A static target's value with a clock placeholder is checked as

@@ -36,10 +36,10 @@ func netTLSConfig(c *model.Collector, secure bool) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// checkNetAccount holds a collector's tls block and account to what every
-// one of these types holds them to: a client certificate with both its
-// files, a server_name that is a host's name, and no placeholder in the
-// account, which is used as it is written.
+// checkNetAccount holds a collector's tls block and account to the rules
+// all of these types share: a client certificate with both its files, a
+// server_name that is a host's name, and no placeholder in the account,
+// which is used as it is written.
 func checkNetAccount(x *model.Collector) error {
 	r := &x.Request
 	t := r.TLS

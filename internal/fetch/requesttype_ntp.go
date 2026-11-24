@@ -24,52 +24,55 @@ import (
 )
 
 // The ntp request type asks an NTP server for the time, as an SNTP client
-// does (RFC 4330, with the packet of NTPv4, RFC 5905), and hands what the
+// does (RFC 4330, with the packet of NTPv4, RFC 5905). It hands what the
 // server answered to the transforms as a JSON document: the clock's offset
 // from the server and the round trip's delay, worked out as RFC 5905 works
-// them out, and the server's stratum, leap indicator, precision, poll,
-// root delay and dispersion, reference id and reference time.
+// them out, and the server's stratum, leap indicator, precision, poll, root
+// delay and dispersion, reference id and reference time.
 //
 //	request:
 //	  type: ntp
 //
-// The probe's target is host:port, port 123 when it is left out. A scrape
-// sends one request in one UDP datagram and waits, until the scrape's
-// deadline, for the reply to it: nothing is sent again, since a server that
+// The probe's target is host:port, with port 123 when it is left out. A
+// scrape sends one request in one UDP datagram and waits for its reply
+// until the scrape's deadline. Nothing is sent again, since a server that
 // limits its clients' rate answers a client that asks twice with a
-// Kiss-o'-Death rather than the time.
+// Kiss-o'-Death instead of the time.
 //
-// The request's transmit timestamp is a random number, not the clock: a
+// The request's transmit timestamp is a random number, not the clock. A
 // reply is the reply to this request when its origin timestamp is that
-// number, which a third party that does not see the request cannot guess,
-// and the client's clock is not told to the server. The offset and delay
+// number, which a third party that does not see the request cannot guess.
+// And the client's clock is not told to the server. The offset and delay
 // need the time the request left, which the exporter keeps itself: its
 // wall clock then, and how long the round trip took by the monotonic
-// clock, so that a step of the wall clock during the round trip does not
-// make up a delay.
+// clock. So a step of the wall clock during the round trip does not make
+// up a delay.
 //
 // A datagram that is not the reply is ignored, and the scrape goes on
-// waiting for the reply: one shorter than an NTP packet, one whose origin
-// timestamp is not the request's, one that is not a server's (mode 4, or 5
-// as RFC 5905 lists), one of a version other than 3 or 4, and one with no
-// transmit timestamp. Such a datagram may be forged, and a forged one must
-// not end the scrape; when the deadline comes, the failure says how many
-// were ignored and why the last one was. The socket is connected, so only
-// datagrams from the address the request went to are read at all.
+// waiting for the reply. Such a datagram is one shorter than an NTP packet,
+// one whose origin timestamp is not the request's, one that is not a
+// server's (mode 4, or 5 as RFC 5905 lists), one of a version other than 3
+// or 4, or one with no transmit timestamp. It may be forged, and a forged
+// one must not end the scrape. When the deadline comes, the failure says
+// how many were ignored and why the last one was. The socket is connected,
+// so only datagrams from the address the request went to are read at all.
 //
 // The reply then fails the scrape when the server says it does not keep the
-// time: a Kiss-o'-Death (stratum 0), named by its code; leap indicator 3,
-// the alarm of a server that is not synchronised, or stratum 16, which says
-// the same; or a stratum past 16, which no server has. Its offset would be
-// to a clock nobody vouches for, and a rule over it would alert on that
-// clock rather than say why.
+// time:
+//   - a Kiss-o'-Death (stratum 0), named by its code;
+//   - leap indicator 3, the alarm of a server that is not synchronised, or
+//     stratum 16, which says the same;
+//   - a stratum past 16, which no server has.
+//
+// Its offset would be to a clock nobody vouches for, and a rule over it
+// would alert on that clock instead of saying why.
 //
 // This file imports nothing outside the standard library.
 
-// NTPConfig is an ntp collector's own keys: how many requests a scrape
-// sends each server, samples, from 1 to ntpMaxSamples, and how long apart,
-// sample_interval. The reply of the least delay is the server's answer, as
-// NTP's clock filter takes it, and the spread of the offsets its jitter.
+// NTPConfig is an ntp collector's own keys: samples, how many requests a
+// scrape sends each server, from 1 to ntpMaxSamples, and sample_interval,
+// how long apart. The reply of the least delay is the server's answer, as
+// NTP's clock filter takes it, and the spread of the offsets is its jitter.
 type NTPConfig struct {
 	Samples        int            `yaml:"samples,omitempty"`
 	SampleInterval model.Duration `yaml:"sample_interval,omitempty"`
@@ -329,10 +332,11 @@ type ntpDocument struct {
 	DurationSeconds float64 `json:"duration_seconds"`
 }
 
-// ntpServersDocument is the document of a target of several servers: each
-// one's, in the target's order, a server that did not answer the time with
-// its error alone; how many answered; and of their offsets the median and
-// the spread, the greatest less the least, left out when none answered.
+// ntpServersDocument is the document of a target of several servers. It
+// holds each server's document, in the target's order (a server that did
+// not answer the time has its error alone), how many answered, and the
+// median and the spread (the greatest less the least) of their offsets,
+// left out when none answered.
 type ntpServersDocument struct {
 	Servers             []ntpServerResult `json:"servers"`
 	ServersAnswered     int               `json:"servers_answered"`
@@ -414,12 +418,12 @@ func fetchNTP(ctx context.Context, target string, c *model.Collector, overrides 
 }
 
 // ntpServer asks address for the time, samples times, each request a
-// request of the trace: the reply of the least delay is its document, with
+// request of the trace. The reply of the least delay is its document, with
 // how many were sent and answered and the jitter of their offsets. A
-// request a later one follows waits for its reply until that one is due,
-// and is unanswered without one; a server that answers it does not keep the
-// time, or a failure of the socket, ends the server's samples with its
-// error, as does one whose every request is unanswered.
+// request that a later one follows waits for its reply until that one is
+// due, and is unanswered without one. A server that answers it does not
+// keep the time, or a failure of the socket, ends the server's samples with
+// its error. So does a server whose every request is unanswered.
 func ntpServer(ctx context.Context, address ntpAddress, r NTPConfig) (ntpDocument, error) {
 	var answered []ntpDocument
 	var last error
@@ -479,9 +483,10 @@ func ntpServer(ctx context.Context, address ntpAddress, r NTPConfig) (ntpDocumen
 }
 
 // ntpServers asks each of addresses for the time at once, as ntpServer
-// does: the document has each, a server that answered none with its error,
-// and of the offsets of those that answered their median and spread. When
-// none answered, the scrape fails with the first's error.
+// does. The document has each server's document (with its error for a
+// server that answered none), and the median and spread of the offsets of
+// those that answered. When none answered, the scrape fails with the
+// first's error.
 func ntpServers(ctx context.Context, addresses []ntpAddress, r NTPConfig) (ntpServersDocument, error) {
 	results := make([]ntpServerResult, len(addresses))
 	errs := make([]error, len(addresses))
@@ -577,11 +582,11 @@ func ntpExchange(ctx context.Context, address ntpAddress) (ntpDocument, error) {
 	}
 }
 
-// ntpReadFailure words a read that ended without the reply: the deadline,
-// which wraps context.DeadlineExceeded as a lookup's does, or the scrape's
-// cancellation, which wraps context.Canceled, saying how many datagrams
-// were ignored and why the last was; or an error of the socket,
-// such as the refusal an ICMP port unreachable brings.
+// ntpReadFailure words a read that ended without the reply. It is the
+// deadline, which wraps context.DeadlineExceeded as a lookup's does, or the
+// scrape's cancellation, which wraps context.Canceled, each saying how many
+// datagrams were ignored and why the last was. Or it is an error of the
+// socket, such as the refusal an ICMP port unreachable brings.
 func ntpReadFailure(ctx context.Context, address ntpAddress, err error, ignored int, lastIgnored string) error {
 	if ctx.Err() == nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("reading the reply from %s: %w", address.hostPort, err)
@@ -723,11 +728,11 @@ func ntpDescribe(p ntpPacket, wall time.Time, elapsed time.Duration) ntpDocument
 // the floor is 0.
 func ntpDelay(delay float64) float64 { return math.Max(delay, 0) }
 
-// ntpReferenceID is the reference id as text: of stratum 1, the code of the
-// server's reference clock, such as GPS, when it is printable ASCII, and
-// its bytes in hexadecimal otherwise; of a higher stratum, the IPv4 address
-// of the server's own server, or for one over IPv6 the first four bytes of
-// a hash of its address, which reads the same way.
+// ntpReferenceID is the reference id as text. For stratum 1 it is the code
+// of the server's reference clock, such as GPS, when it is printable ASCII,
+// and its bytes in hexadecimal otherwise. For a higher stratum it is the
+// IPv4 address of the server's own server, or, for one over IPv6, the first
+// four bytes of a hash of its address, which reads the same way.
 func ntpReferenceID(stratum int, id [4]byte) string {
 	if stratum != 1 {
 		return net.IPv4(id[0], id[1], id[2], id[3]).String()

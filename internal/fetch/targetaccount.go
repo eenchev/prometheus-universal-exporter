@@ -9,22 +9,22 @@ import (
 )
 
 // A static target of a redis, ldap, tcp or grpc collector may name its own
-// account and tls block, so one collector serves servers that each take
-// their own password or client certificate. The types read these from the
-// collector's request, in their checks, labels and fetches alike, so a
-// scrape of such a target is made with the collector as the target makes it
-// (withTargetAccount): a copy with the target's account and block in the
-// collector's place. No probe parameter sets them (RequestOverrides).
+// account and tls block. This lets one collector serve servers that each
+// take their own password or client certificate. The types read these from
+// the collector's request in their checks, labels and fetches alike. So a
+// scrape of such a target uses a copy of the collector with the target's
+// account and block in place of the collector's (withTargetAccount). No
+// probe parameter sets them (RequestOverrides).
 
-// withTargetAccount is c as a scrape with overrides makes it: a static
-// target's tls block in place of the collector's whole, its password_file
-// in place of the collector's, and its username, which comes only with its
-// own password_file, or alone under a collector that logs in with a token,
-// in place of the collector's; an ldap target's bind_dn, which comes with
-// its own password_file too, is ldap's own (withLDAPTargetAccount). A target that
-// names a password file alone logs in as the collector's account with that
-// password: servers that each keep their own password for one account are
-// what it is for. c itself is never written, being the configuration's.
+// withTargetAccount returns c as a scrape with overrides uses it. A static
+// target's tls block replaces the collector's whole block, and its
+// password_file replaces the collector's. Its username replaces the
+// collector's too; it comes only with its own password_file, or alone under
+// a collector that logs in with a token. An ldap target's bind_dn, which also
+// comes with its own password_file, is ldap's own (withLDAPTargetAccount).
+// A target that names only a password file logs in as the collector's
+// account with that password. This is for servers that each keep their own
+// password for one account. c itself belongs to the configuration and is never written.
 func withTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector {
 	// A collector that logs in with a token logs in to the target's
 	// mailbox with it, which the target names with its username alone.
@@ -46,10 +46,10 @@ func withTargetAccount(c *model.Collector, o RequestOverrides) *model.Collector 
 }
 
 // accountFileWarnings reads, for --dry-run, the password file and the tls
-// block's files a scrape of c reads, or those a static target t names of its
-// own, which are read in place of the collector's; the collector's are
-// warned of as the collector's. An empty password file is warned of when
-// the type refuses one.
+// block's files that a scrape of c reads. Files a static target t names of
+// its own are read in place of the collector's, and the collector's are
+// warned of as the collector's. An empty password file is warned of when the
+// type refuses one.
 func accountFileWarnings(c *model.Collector, t *model.StaticTarget) []string {
 	who, passwordFile, settings := fmt.Sprintf("collector %q", c.Name), c.Request.PasswordFile, &c.Request.TLS
 	if t != nil {

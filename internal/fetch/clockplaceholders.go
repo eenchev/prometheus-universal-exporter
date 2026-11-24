@@ -31,31 +31,32 @@ import (
 //	{{name[~last_success(fallback)][:offset][/unit][@zone][|filter]}}
 //
 // A placeholder starts from the time of the trip, which every placeholder
-// of the trip reads alike (ScrapeClock), so that {{date}} in a path and
+// of the trip reads alike (ScrapeClock). So {{date}} in a path and
 // {{datetime}} in a query are of the same moment, and a retry or a page
-// after the first is sent the same values. ~last_success starts from the
-// time of the last successful trip of the same collector, target and
-// parameters instead, which the exporter keeps; while there is none, after
-// a start or for a new target, it starts from the trip's time moved by the
-// fallback, an offset into the past such as -1h. Two placeholders,
-// from={{datetime~last_success(-1h)}}&to={{datetime}}, then ask for each
-// stretch of time once, with no gap between a trip and the next that
-// succeeded.
+// after the first is sent the same values.
 //
-// The offset, as the fallback, is a sign and one or more amounts of w (weeks), d (days), h,
-// m and s, such as -1d, +2h or -1d12h. Weeks and days are calendar days in
-// the zone, so -1d is yesterday's date also across a daylight saving
-// change; hours, minutes and seconds are elapsed time. The truncation, d,
-// h or m, is the start of the day, hour or minute the moment falls in, in
-// the zone, after the offset. The zone is an IANA name, UTC when left out,
-// or Local, the exporter's own. The filter is a body placeholder's, as for
-// {{param_...}} (requesttemplate.go).
+// ~last_success starts instead from the time of the last successful trip of
+// the same collector, target and parameters, which the exporter keeps.
+// While there is none, after a start or for a new target, it starts from the
+// trip's time moved by the fallback, an offset into the past such as -1h.
+// Two placeholders, from={{datetime~last_success(-1h)}}&to={{datetime}},
+// then ask for each stretch of time once, with no gap between a trip and the
+// next that succeeded.
 //
-// A clock placeholder stands where a {{param_...}} one may, in a request,
-// and its value is written as that place writes every value. It is no
-// probe parameter: no probe or static target fills it, and none may be
-// given for it. A label value takes none, since a series a day, or a
-// second, is no series at all.
+// The offset, like the fallback, is a sign and one or more amounts of w
+// (weeks), d (days), h, m and s, such as -1d, +2h or -1d12h. Weeks and days
+// are calendar days in the zone, so -1d is yesterday's date even across a
+// daylight saving change. Hours, minutes and seconds are elapsed time. The
+// truncation, d, h or m, is the start of the day, hour or minute the moment
+// falls in, in the zone, after the offset. The zone is an IANA name, UTC
+// when left out, or Local, the exporter's own. The filter is a body
+// placeholder's, as for {{param_...}} (requesttemplate.go).
+//
+// A clock placeholder stands where a {{param_...}} one may in a request, and
+// its value is written as that place writes every value. It is not a probe
+// parameter: no probe or static target fills it, and none may be given for
+// it. A label value takes none, since a series a day, or a second, is no
+// series at all.
 
 // clockFormats are the formats a clock placeholder is named by, each the
 // layout Go writes a time with, or, for unix and unix_ms, the seconds or
@@ -90,9 +91,9 @@ func clockFormatNames() []string {
 var clockNow = time.Now
 
 // clockSample is the moment a clock placeholder stands for when the
-// configuration is checked (clockPlaceholder.sample): a value of every
-// format, each of its parts unlike the others, which a check of the place
-// it stands in holds as it holds a default.
+// configuration is checked (clockPlaceholder.sample). It gives a value of
+// every format, each of its parts unlike the others. A check of the place it
+// stands in holds it as it holds a default.
 var clockSample = time.Date(2026, time.November, 9, 13, 4, 5, 6000000, time.UTC)
 
 // ScrapeClock is the clock of one trip: Now, read once when the trip
@@ -190,10 +191,10 @@ type clockOffset struct {
 	elapsed time.Duration
 }
 
-// from is t moved by the offset. Without days it is t and the elapsed
-// time alone: AddDate reads the wall clock and makes a time of it again,
-// which in the hour a zone repeats when its summer time ends is the hour's
-// second pass whichever t was in, an hour late for the whole first pass.
+// from is t moved by the offset. Without days it is t plus the elapsed time
+// alone. AddDate reads the wall clock and makes a time of it again. In the
+// hour a zone repeats when its summer time ends, that gives the hour's
+// second pass whichever pass t was in, an hour late for the whole first pass.
 func (o clockOffset) from(t time.Time) time.Time {
 	if o.days != 0 {
 		t = t.AddDate(0, 0, o.days)
@@ -202,10 +203,10 @@ func (o clockOffset) from(t time.Time) time.Time {
 }
 
 // startOfDay is the first moment of t's day in its zone. Where the zone's
-// clock is set back over midnight the day's first midnight is the earlier
-// one, and where it is set forward over midnight, so that the day has no
-// 00:00, the moment the day starts at, as 01:00: time.Date alone says
-// neither which it gives.
+// clock is set back over midnight, it is the earlier of the day's two
+// midnights. Where the clock is set forward over midnight, so that the day
+// has no 00:00, it is the moment the day starts at, such as 01:00.
+// time.Date alone says neither which it gives.
 func startOfDay(t time.Time) time.Time {
 	year, month, day := t.Date()
 	wall := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
@@ -364,9 +365,9 @@ func (c *clockPlaceholder) sample() string {
 }
 
 // ClockUseOf is what the request of c holds of clock placeholders, for
-// Collector.Clock: its path's, its body's, header and query values' and
-// its type's own fields'. A request whose placeholders cannot be parsed
-// holds none; the configuration refuses it before it gets here.
+// Collector.Clock: in its path, its body, its header and query values, and
+// its type's own fields. A request whose placeholders cannot be parsed holds
+// none; the configuration refuses it before it gets here.
 func ClockUseOf(c *model.Collector) model.ClockUse {
 	var use model.ClockUse
 	note := func(placeholders []pathPlaceholder) {
@@ -389,10 +390,10 @@ func ClockUseOf(c *model.Collector) model.ClockUse {
 }
 
 // A static target's parameter value may hold clock placeholders, filled in
-// at each of its trips: params: {param_day: "{{date@Europe/Sofia}}"} gives
-// a collector's {{param_day}} the target's own day. It holds no other
-// placeholder, and takes no filter: the placeholder it fills writes it as
-// it writes every value.
+// at each of its trips. params: {param_day: "{{date@Europe/Sofia}}"} gives a
+// collector's {{param_day}} the target's own day. The value holds no other
+// placeholder and takes no filter: the placeholder it fills writes it as it
+// writes every value.
 
 // targetParamUnfiltered is why a static target's parameter value takes no
 // filter.
@@ -433,11 +434,11 @@ func renderTargetParams(params map[string]string, clock ScrapeClock) (map[string
 	return out, nil
 }
 
-// CheckTargetParams refuses, when the static targets load, a target's
-// parameter value with a placeholder written wrong, with a {{param_...}}
-// placeholder, which nothing fills, or with a clock placeholder when the
-// parameter fills a label value of c, which would make a series of each
-// day, hour or second.
+// CheckTargetParams runs when the static targets load. It refuses a target's
+// parameter value with a placeholder written wrong, or with a {{param_...}}
+// placeholder, which nothing fills. It also refuses one with a clock
+// placeholder when the parameter fills a label value of c, which would make
+// a series of each day, hour or second.
 func CheckTargetParams(c *model.Collector, t *model.StaticTarget) error {
 	var labelled map[string]bool
 	for _, name := range model.SortedKeys(t.Params) {

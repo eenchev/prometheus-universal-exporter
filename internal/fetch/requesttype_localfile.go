@@ -48,12 +48,12 @@ import (
 //     Writers should write a temporary file in the same directory and rename
 //     it into place, which is atomic.
 //   - Staleness is visible. A file whose writer has stopped keeps its last
-//     values forever; max_age turns that into a failed scrape, and the
+//     values forever. max_age turns that into a failed scrape, and the
 //     modification time reaches transforms as the Last-Modified header.
 //   - Bounded. The read stops at the collector's response limit, and a probe
 //     returns when its timeout or context ends even if the filesystem hangs.
-//     The reads left running on a hung filesystem are capped per collector;
-//     reads whose probe is still waiting for them are not counted, so probes
+//     The reads left running on a hung filesystem are capped per collector.
+//     Reads whose probe is still waiting for them are not counted, so probes
 //     of a healthy filesystem are never refused for being many.
 
 func init() {
@@ -75,9 +75,9 @@ func init() {
 		Stage:          "file",
 		CheckOverride: func(c *model.Collector, key string) error {
 			// A param_ parameter can still fill a label value of the
-			// collector (labelparams.go): when its labels hold a
-			// placeholder, which parameters are used is for the check of
-			// the placeholders to say (CheckPathParams).
+			// collector (labelparams.go). When its labels hold a
+			// placeholder, the check of the placeholders decides which
+			// parameters are used (CheckPathParams).
 			if readsDirectory(c) && (key == "path" || strings.HasPrefix(key, PathParamPrefix) && c.LabelParams == nil) {
 				return fmt.Errorf("collector %q reads every file of a directory that request.files matches, so there is no file for it to name; name a directory with the target instead", c.Name)
 			}
@@ -124,9 +124,9 @@ func validateLocalFileRequest(x *model.Collector) error {
 }
 
 // localFileTargetHint is what the collectors page and the debug page say of
-// a target: the file under root, or, when the collector reads a directory or
-// request.path names the file, the directory under root it is read in. The
-// target may be left out (OptionalTarget), which the pages say.
+// a target: the file under root. When the collector reads a directory or
+// request.path names the file, it is the directory under root it is read
+// in. The target may be left out (OptionalTarget), and the pages say so.
 func localFileTargetHint(c *model.Collector) (string, string) {
 	switch {
 	case readsDirectory(c):
@@ -205,13 +205,14 @@ func localFileLabel(target string, c *model.Collector, overrides RequestOverride
 
 // localFileMaxAbandonedReads is how many reads of one collector may be left
 // running by probes that have given up on them. A read cannot be cancelled,
-// so on a filesystem that has stopped answering every probe would leave one
-// behind; identical probes share a read (exporter/probeflight.go), so
-// reaching the cap takes different files. A read whose probe is still waiting
-// for it is not counted: however many probes read a healthy filesystem at
-// once, none is refused. The reads left behind can therefore pass the cap by
-// the probes that were waiting when the filesystem stopped, which
-// limits.max_concurrent_probes bounds, and no read is started after that.
+// so on a filesystem that has stopped answering, every probe would leave one
+// behind. Identical probes share a read (exporter/probeflight.go), so
+// reaching the cap takes different files. A read whose probe is still
+// waiting for it is not counted: however many probes read a healthy
+// filesystem at once, none is refused. So the reads left behind can pass the
+// cap by the probes that were waiting when the filesystem stopped. Their
+// number is bounded by limits.max_concurrent_probes, and no read is started
+// after that.
 const localFileMaxAbandonedReads = 4
 
 // abandonedReads counts, per collector, the reads still running whose probe

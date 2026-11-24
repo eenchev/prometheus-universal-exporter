@@ -28,16 +28,18 @@ import (
 //	    x-tenant: "{{param_tenant:default}}"
 //	  descriptors: reflection                  # required: reflection, protoset or proto
 //
-// The probe's target is the server, host:port, plaintext unless grpcs:// or
-// a tls block asks for TLS. The message types come from descriptors the
-// configuration names (grpcdescriptors.go), so no service needs code
-// generated for it: the server's reflection service, a descriptor set file,
-// or .proto sources compiled when the configuration loads. The health
-// service, grpc.health.v1.Health, is built in and needs none.
+// The probe's target is the server, host:port. It is plaintext unless
+// grpcs:// or a tls block asks for TLS. The message types come from
+// descriptors the configuration names (grpcdescriptors.go), so no service
+// needs generated code. The source is the server's reflection service, a
+// descriptor set file, or .proto sources compiled when the configuration
+// loads. The health service, grpc.health.v1.Health, is built in and needs
+// none.
 //
 // The call is made on a connection kept per target and TLS settings
-// (grpcconn.go) and answered as JSON (grpccall.go); everything after it —
-// decoding, transforms, limits, caching — is every type's.
+// (grpcconn.go), and the answer is turned into JSON (grpccall.go).
+// Everything after that (decoding, transforms, limits, caching) is shared
+// with every type.
 //
 // This file and the grpc*.go files are the only ones that import grpc-go and
 // the protobuf runtime, all behind this type's build constraint, so a build
@@ -72,12 +74,14 @@ var grpcRPC = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-
 // digits and - _ . , as gRPC requires of a header name.
 var grpcMetadataKey = regexp.MustCompile(`^[0-9a-z_.-]+$`)
 
-// GRPCConfig is a grpc collector's own request keys: the method called,
-// package.Service/Method; the request message in the protobuf JSON
-// mapping; the request metadata; where the message types come from,
-// reflection, protoset (ProtosetFile) or proto (ProtoFiles, compiled with
-// ProtoImportPaths); and the gRPC status codes, other than OK, whose calls
-// are answers rather than failures, such as [NOT_FOUND].
+// GRPCConfig is a grpc collector's own request keys:
+//   - the method called, package.Service/Method;
+//   - the request message, in the protobuf JSON mapping;
+//   - the request metadata;
+//   - where the message types come from: reflection, protoset
+//     (ProtosetFile) or proto (ProtoFiles, compiled with ProtoImportPaths);
+//   - the gRPC status codes other than OK whose calls are answers rather
+//     than failures, such as [NOT_FOUND].
 type GRPCConfig struct {
 	RPC              string            `yaml:"rpc"`
 	Message          string            `yaml:"message"`
@@ -218,9 +222,9 @@ func grpcReadFiles(c *model.Collector) (paths []string, read string) {
 	return descriptorFiles.protoLooked(grpcRequest(c).ProtoFiles, grpcRequest(c).ProtoImportPaths)
 }
 
-// validateGRPCRequest holds the grpc type's rules: the method's shape, the
+// validateGRPCRequest checks the grpc type's rules: the method's shape, the
 // message and metadata, the descriptor source, the credentials and retries.
-// With descriptors protoset or proto the method is looked up now, so a
+// With descriptors protoset or proto, the method is looked up now. So a
 // method that does not exist, streams, or takes another message fails the
 // configuration rather than every scrape.
 func validateGRPCRequest(x *model.Collector) error {
@@ -303,10 +307,10 @@ func validateGRPCRequest(x *model.Collector) error {
 	return nil
 }
 
-// validateDescriptorKeys checks descriptors and the keys of its sources:
-// descriptors is required, but for the health service, and each source's
-// keys go only with it. descriptors is taken as written, in lower case and
-// without blanks around it, the one spelling the schemas take.
+// validateDescriptorKeys checks descriptors and the keys of its sources.
+// descriptors is required except for the health service, and each source's
+// keys go only with that source. descriptors is taken as written: lower
+// case without surrounding blanks, the only spelling the schemas accept.
 func validateDescriptorKeys(x *model.Collector) error {
 	r := grpcRequest(x)
 	service, _, _ := strings.Cut(r.RPC, "/")
@@ -346,12 +350,12 @@ func validateDescriptorKeys(x *model.Collector) error {
 	return nil
 }
 
-// messageForCheck is the message as the configuration loads it: {} when
-// left out, each placeholder standing in with its default, or with a value
-// of its filter's kind when it has none. It must be JSON. typed says every
-// placeholder had a default, so the message is what a probe without
-// parameters sends, and can be checked against the input type; a stand-in
-// could fail that check for a value no probe sends.
+// messageForCheck returns the message as the configuration loads it: {}
+// when left out, with each placeholder replaced by its default, or by a
+// value of its filter's kind when it has none. It must be JSON. typed
+// reports that every placeholder had a default. The message is then what a
+// probe without parameters sends, and can be checked against the input
+// type. A stand-in value could fail that check for a value no probe sends.
 func messageForCheck(text string) (message string, typed bool, err error) {
 	if strings.TrimSpace(text) == "" {
 		return "{}", true, nil
@@ -392,9 +396,8 @@ func messageForCheck(text string) (message string, typed bool, err error) {
 }
 
 // checkGRPCMetadata checks metadata keys and values. templated says the
-// values may hold placeholders, whose values are checked when they are
-// filled in; credentials says the credential keys already send
-// authorization.
+// values may hold placeholders, whose values are checked when filled in.
+// credentials says the credential keys already send authorization.
 func checkGRPCMetadata(metadata map[string]string, templated, credentials bool) error {
 	for _, key := range model.SortedKeys(metadata) {
 		if err := checkGRPCMetadataName(key); err != nil {
@@ -448,9 +451,9 @@ func normalizeRetryCodes(codes []string) error {
 }
 
 // checkGRPCTargetRequest checks what a static target's request sets for a
-// grpc collector: its message, which must be JSON and, with descriptors
-// read at load, fit the method; its metadata; its retry codes; and its own
-// tls block, which a grpc:// target, asking for plaintext, contradicts.
+// grpc collector: its message (which must be JSON and, with descriptors
+// read at load, fit the method), its metadata, its retry codes, and its own
+// tls block. A grpc:// target asks for plaintext, so a tls block contradicts it.
 func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	credentials := c.Request.BasicAuth != nil || c.Request.BasicAuthFile != nil || c.Request.BearerToken != "" || c.Request.BearerTokenFile != "" ||
 		t.Request.BasicAuth != nil || t.Request.BasicAuthFile != nil || t.Request.BearerToken != "" || t.Request.BearerTokenFile != ""
@@ -531,11 +534,12 @@ func parseGRPCTarget(raw string) (grpcAddress, error) {
 		return a, fmt.Errorf("target %q has the port %q; want a number from 1 to 65535", raw, port)
 	}
 	// grpc-go dials an address unix:<path> as a unix socket, whatever
-	// resolver produced it, and behind a proxy the address is the host:port
-	// as written, never resolved: unix:8443 would be the socket 8443 on the
-	// exporter's own machine, reached without the proxy or allowed_targets.
-	// Every other host is safe as a name: grpc-go is handed dns:///host:port
-	// (grpcConnCache.get), so unix-abstract or passthrough is only a name.
+	// resolver produced it. Behind a proxy the address is the host:port as
+	// written and is never resolved. So unix:8443 would be the socket 8443
+	// on the exporter's own machine, reached without the proxy or
+	// allowed_targets. Every other host is safe as a name: grpc-go gets
+	// dns:///host:port (grpcConnCache.get), so unix-abstract or passthrough
+	// is only a name.
 	if strings.EqualFold(host, "unix") {
 		return a, fmt.Errorf("target %q names the host unix, which grpc-go would dial as a unix socket on the exporter's machine; a grpc target is a TCP server, host:port, such as queue.internal:9090", raw)
 	}
@@ -592,31 +596,30 @@ func grpcDisplay(target string) string {
 	return strings.TrimSpace(target)
 }
 
-// fetchGRPC makes a scrape's call (grpccall.go), with a static target's
-// own tls block in place of the collector's: the connection is kept by its
-// TLS settings (grpcConnKey), so targets with blocks of their own share no
-// connection.
+// fetchGRPC makes a scrape's call (grpccall.go). A static target's own tls
+// block replaces the collector's. Connections are kept by TLS settings
+// (grpcConnKey), so targets with their own blocks share no connection.
 func fetchGRPC(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
 	return callGRPC(ctx, target, withTargetAccount(c, overrides), overrides, forwarded)
 }
 
-// checkGRPCFiles reads the tls block's files as a connection reads them,
-// the collector's or those of a static target's own block, for --dry-run.
-// Loading the configuration reads none of them, since a file may be
+// checkGRPCFiles reads the tls block's files the way a connection reads
+// them, for --dry-run. The block is the collector's or a static target's
+// own. Loading the configuration reads none of them, since a file may be
 // mounted after the exporter starts.
 func checkGRPCFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return accountFileWarnings(c, t)
 }
 
-// grpcSchemaRule is what a grpc collector's request requires, as the
-// exporter does (validateGRPCRequest): rpc, written with something other
-// than "", and where its message types come from, descriptors, unless it
-// calls the health service, whose types are built in
-// (validateDescriptorKeys). The files of one source of descriptors go with
-// it alone, as the exporter has them: protoset_file with descriptors:
+// grpcSchemaRule is what a grpc collector's request requires, matching the
+// exporter (validateGRPCRequest). rpc must be written with something other
+// than "". descriptors, where the message types come from, is required
+// unless the method is on the health service, whose types are built in
+// (validateDescriptorKeys). The files of one descriptor source go only
+// with that source, as in the exporter: protoset_file with descriptors:
 // protoset, which requires it, and proto_files and proto_import_paths with
-// descriptors: proto, which requires proto_files. The schema took either
-// beside any source, and a source without its files.
+// descriptors: proto, which requires proto_files. The schema used to
+// accept either beside any source, and a source without its files.
 func grpcSchemaRule() map[string]any {
 	rule := SchemaWrittenKey("rpc")
 	rule["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}

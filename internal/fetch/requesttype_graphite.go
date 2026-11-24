@@ -16,8 +16,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The graphite request type asks a Graphite render API — graphite-web,
-// carbonapi, or anything that answers /render the same way — for the series
+// The graphite request type asks a Graphite render API (graphite-web,
+// carbonapi, or anything that answers /render the same way) for the series
 // of one or more Graphite expressions:
 //
 //	request:
@@ -28,23 +28,24 @@ import (
 //	  from: -15min                # optional, the default
 //	  until: now                  # optional, the default
 //
-// The probe's target is the Graphite server, as an http collector's is its
-// host, and the request is a GET of target + path (/render by default) with
-// target=, from=, until= and format=json — or, when the expressions are too
-// long for a URL that every proxy passes, a POST of the same parameters as a
-// form, which graphite-web and carbonapi read alike. Everything about the connection —
-// authentication, TLS, retries, redirects, the response limit, the proxy
-// from the environment, the shared connection pool — is http's, since it is
-// the same request: only the URL is built differently, because request.query
-// holds one value to a name and Graphite takes target once per expression.
+// The probe's target is the Graphite server, as an http collector's target
+// is its host. The request is a GET of target + path (/render by default)
+// with target=, from=, until= and format=json. When the expressions are too
+// long for a URL that every proxy passes, it is instead a POST of the same
+// parameters as a form, which graphite-web and carbonapi both read.
+// Everything about the connection (authentication, TLS, retries,
+// redirects, the response limit, the proxy from the environment, the
+// shared connection pool) comes from http, since it is the same request.
+// Only the URL is built differently, because request.query holds one value
+// per name and Graphite takes target once per expression.
 //
-// What comes back is decoded by the graphite decoder (decode/graphite.go),
-// which decoder.type auto picks for this type, into series that jq, yq or a
-// Python script turn into metrics.
+// The answer is decoded by the graphite decoder (decode/graphite.go),
+// which decoder.type auto picks for this type, into series that jq, yq or
+// a Python script turn into metrics.
 //
-// Pushing to the exporter is not supported: carbon's line protocol is a push
-// protocol, and the exporter only pulls. The graphite decoder reads a file of
-// carbon lines through a localfile collector instead.
+// Pushing to the exporter is not supported: carbon's line protocol is a
+// push protocol, and the exporter only pulls. Instead, the graphite decoder
+// reads a file of carbon lines through a localfile collector.
 
 // graphiteOwnParams are the query parameters the type sets itself, so
 // request.query cannot set them too.
@@ -52,17 +53,18 @@ var graphiteOwnParams = []string{"target", "from", "until", "format"}
 
 // The render window used when request.from and request.until are left out.
 // Fifteen minutes holds a few points of a series stored at one-minute or
-// five-minute resolution, and the last complete point of one a statsd flush
-// writes late; response.graphite.max_age says how old the newest may be.
+// five-minute resolution, and the last complete point of a series that a
+// statsd flush writes late. response.graphite.max_age sets how old the
+// newest point may be.
 const (
 	graphiteDefaultFrom  = "-15min"
 	graphiteDefaultUntil = "now"
 )
 
 // graphitePostAbove is how many bytes of encoded expressions a request may
-// carry in its URL; past it, it is sent as a form with POST. Proxies and
-// servers commonly refuse URLs of a few kilobytes, and this leaves the rest
-// of the URL room.
+// carry in its URL. Above it, the request is sent as a form with POST.
+// Proxies and servers often refuse URLs of a few kilobytes, and this leaves
+// room for the rest of the URL.
 const graphitePostAbove = 2048
 
 // GraphiteConfig is a graphite collector's own request keys: the Graphite
@@ -161,12 +163,13 @@ func (graphiteRequester) Method(c *model.Collector, overrides RequestOverrides) 
 	return graphiteMethod(c, overrides)
 }
 
-// validateGraphiteRequest holds the graphite type's rules: at least one
+// validateGraphiteRequest checks the graphite type's rules: at least one
 // expression, each well formed; a render window without spaces; no query
 // parameter the type sets itself; and http's rules for the connection. It
-// fills in the defaults: path /render, from -15min, until now. The method is
-// always GET, and is left unset, since request.method is not graphite's to
-// set: a configuration validated again must not read as one that sets it.
+// fills in the defaults: path /render, from -15min, until now. The method
+// is always GET and is left unset, since graphite does not let
+// request.method be set. A configuration validated again must not look
+// like one that sets it.
 func validateGraphiteRequest(x *model.Collector) error {
 	own := graphiteRequest(x)
 	if len(own.Targets) == 0 {
@@ -254,10 +257,10 @@ func checkGraphiteTargetRequest(c *model.Collector, t *model.StaticTarget) error
 	return nil
 }
 
-// graphiteMethod is GET, or POST when the expressions the request carries,
-// encoded, are longer than graphitePostAbove. It is decided by the
-// expressions as configured, placeholders unfilled, so one collector or
-// target always uses one method, which the http_method label shows.
+// graphiteMethod returns GET, or POST when the request's encoded
+// expressions are longer than graphitePostAbove. It is decided from the
+// expressions as configured, with placeholders unfilled, so one collector
+// or target always uses one method, which the http_method label shows.
 func graphiteMethod(c *model.Collector, overrides RequestOverrides) string {
 	targets := overrides.Targets
 	if targets == nil {
@@ -273,10 +276,10 @@ func graphiteMethod(c *model.Collector, overrides RequestOverrides) string {
 	return http.MethodGet
 }
 
-// graphiteQuery is the query a graphite request adds: every expression as a
-// target, the window, and format=json. A static target's targets, from and
-// until replace the collector's; the collector's targets have their
-// placeholders filled in.
+// graphiteQuery returns the query a graphite request adds: every
+// expression as a target, the window, and format=json. A static target's
+// targets, from and until replace the collector's. The collector's targets
+// have their placeholders filled in.
 func graphiteQuery(c *model.Collector, overrides RequestOverrides) (url.Values, error) {
 	own := graphiteRequest(c)
 	targets := overrides.Targets
@@ -303,12 +306,15 @@ func graphiteQuery(c *model.Collector, overrides RequestOverrides) (url.Values, 
 	return url.Values{"target": targets, "from": {from}, "until": {until}, "format": {"json"}}, nil
 }
 
-// graphiteShownQuery says which pairs of graphiteQuery a debug report shows
-// the values of (ConfiguredQuery): format=json, the exporter's own, and the
-// collector's expressions without placeholders and its window as its file
-// writes them, from and until the defaults when it writes none. A window a
-// probe parameter or a static target gives, and an expression a placeholder
-// was filled in, are not the collector's, and stay masked.
+// graphiteShownQuery says which pairs of graphiteQuery have their values
+// shown in a debug report (ConfiguredQuery):
+//   - format=json, the exporter's own;
+//   - the collector's expressions without placeholders;
+//   - its window as its file writes it, or the from and until defaults
+//     when it writes none.
+//
+// A window from a probe parameter or a static target, and an expression
+// with a placeholder filled in, are not the collector's and stay masked.
 func graphiteShownQuery(c *model.Collector, name, value string) bool {
 	own := graphiteRequest(c)
 	switch name {
@@ -358,11 +364,11 @@ func checkGraphiteWindow(window string) error {
 }
 
 // checkGraphiteExpression checks that an expression is one Graphite could
-// parse as a whole: not empty, its quotes closed and its brackets balanced.
-// Inside quotes, a backslash escapes the character after it, as Graphite's
-// grammar has it: 'it\'s' is one string.
+// parse as a whole: not empty, with closed quotes and balanced brackets.
+// Inside quotes, a backslash escapes the next character, as in Graphite's
+// grammar: 'it\'s' is one string.
 // It does not know Graphite's functions, which differ between graphite-web
-// and carbonapi; an unknown function is the render API's to refuse.
+// and carbonapi. The render API refuses an unknown function.
 func checkGraphiteExpression(expression string) error {
 	if strings.TrimSpace(expression) == "" {
 		return errors.New("is empty; write a Graphite expression, such as app.*.requests.count")

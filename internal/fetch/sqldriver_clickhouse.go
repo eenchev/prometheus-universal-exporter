@@ -16,17 +16,17 @@ import (
 	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 )
 
-// The clickhouse driver is ClickHouse/clickhouse-go: built in only with the
-// sql_driver_clickhouse tag (SQL_DRIVERS=clickhouse). ClickHouse has no
-// transactions; every statement is sent with the setting readonly=1, which
-// lets it only read, and stopped by the server at the scrape's deadline,
-// which the driver cancels it at: on the native protocol by a cancel
-// packet, on http by ending the request, with the setting
-// cancel_http_readonly_queries_on_client_close=1 that has the server stop
-// the statement then. protocol is native (port 9000, or 9440
-// with TLS) or http (8123, or 8443 with TLS); compress is none, lz4 or
-// zstd; secure switches TLS on. On the http protocol, the driver's requests
-// go to the target, never through a proxy (clickHouseNoProxy).
+// The clickhouse driver is ClickHouse/clickhouse-go. It is built in only
+// with the sql_driver_clickhouse tag (SQL_DRIVERS=clickhouse). ClickHouse
+// has no transactions. Every statement is sent with the setting
+// readonly=1, which only lets it read. The server stops it at the scrape's
+// deadline, when the driver cancels it: on the native protocol with a
+// cancel packet, and on http by ending the request, with the setting
+// cancel_http_readonly_queries_on_client_close=1 so the server then stops
+// the statement. protocol is native (port 9000, or 9440 with TLS) or http
+// (8123, or 8443 with TLS). compress is none, lz4 or zstd. secure turns on
+// TLS. On the http protocol, the driver's requests go to the target, never
+// through a proxy (clickHouseNoProxy).
 func init() {
 	registerSQLDriver(&sqlDriver{
 		name:      SQLDriverClickHouse,
@@ -84,9 +84,9 @@ func clickHouseOptions(spec *sqlConnectSpec) *clickhouse.Options {
 		options.Protocol = clickhouse.HTTP
 		options.TransportFunc = clickHouseNoProxy
 		// Over http the driver cancels a statement at the deadline by
-		// ending its request, and the server stops a read-only statement
-		// whose client went away only with this setting, off by default;
-		// the driver sends its settings with every request (conn_http.go).
+		// ending its request. The server stops a read-only statement whose
+		// client went away only with this setting, which is off by default.
+		// The driver sends its settings with every request (conn_http.go).
 		options.Settings["cancel_http_readonly_queries_on_client_close"] = 1
 	}
 	switch spec.options["compress"] {
@@ -100,20 +100,21 @@ func clickHouseOptions(spec *sqlConnectSpec) *clickhouse.Options {
 
 // clickHouseNoProxy is the driver's http transport without a proxy. The
 // driver's transport takes the proxy from HTTP_PROXY, HTTPS_PROXY and
-// NO_PROXY (clickhouse-go conn_http.go, createHTTPRoundTripper), which would
-// send the request to the proxy, a host the exporter's dialer refuses, while
-// a statement, like every other driver's, goes to the target itself.
+// NO_PROXY (clickhouse-go conn_http.go, createHTTPRoundTripper). That
+// would send the request to the proxy, a host the exporter's dialer
+// refuses, while a statement, like every other driver's, goes to the
+// target itself.
 func clickHouseNoProxy(transport *http.Transport) (http.RoundTripper, error) {
 	transport.Proxy = nil
 	return transport, nil
 }
 
-// clickHouseDial is the driver's dial function: the exporter's dialer, and,
-// on the native protocol with TLS, the TLS handshake over what it dialed.
-// The driver wraps its connection in TLS only when it dials by itself, never
-// when given a dial function (clickhouse-go conn.go, dial), so without the
-// handshake here the login would go in plaintext; on the http protocol
-// net/http makes the handshake itself over the connection dialed.
+// clickHouseDial is the driver's dial function: the exporter's dialer, plus
+// the TLS handshake over the dialed connection on the native protocol with
+// TLS. The driver wraps its connection in TLS only when it dials itself,
+// never when given a dial function (clickhouse-go conn.go, dial). Without
+// the handshake here the login would go in plaintext. On the http protocol
+// net/http makes the handshake itself over the dialed connection.
 func clickHouseDial(spec *sqlConnectSpec) func(ctx context.Context, address string) (net.Conn, error) {
 	if spec.tls == nil || spec.options["protocol"] == "http" {
 		return func(ctx context.Context, address string) (net.Conn, error) {

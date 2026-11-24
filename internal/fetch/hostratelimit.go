@@ -14,23 +14,25 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// rate_limits bounds how fast the http and graphite requests of every
-// collector together ask a host. request.rate_limit is a collector's own, so
-// several collectors calling one API share nothing and may together exceed
-// a quota the API keeps for the host, or for a caller across its hosts; an
-// entry of rate_limits has one bucket that every request to one of its
-// hosts takes a turn from, whichever collector, probe or static target
-// sends it, as well as the turn it takes under its collector's own limit.
+// rate_limits bounds how fast the http and graphite requests of all
+// collectors together ask a host. request.rate_limit is per collector, so
+// several collectors calling one API share nothing. Together they may
+// exceed a quota the API keeps for the host, or for a caller across its
+// hosts. Each rate_limits entry has one bucket. Every request to one of
+// its hosts takes a turn from it, whichever collector, probe or static
+// target sends it, in addition to the turn under its collector's own limit.
 //
-// A request counts as request.rate_limit counts it — each attempt, page,
-// redirect hop and login request, against the host it is sent to — and
-// waits, or is refused, by the same code. The first entry whose hosts match
-// applies; one host may not be listed twice, nor under an earlier entry's
-// wildcard, where the second could never apply. A host matches whatever its port and scheme: a quota is the
-// host's, and a service seldom keeps one per port.
+// A request counts as it does for request.rate_limit: each attempt, page,
+// redirect hop and login request counts against the host it is sent to.
+// It waits, or is refused, by the same code. The first entry whose hosts
+// match applies. A host may not be listed twice, nor under an earlier
+// entry's wildcard, where the second could never apply. A host matches
+// whatever its port and scheme: a quota belongs to the host, and a service
+// seldom keeps one per port.
 //
-// Requests of the other types (grpc, sql, redis, ...) take no turn: they carry no rateLimitSetting,
-// which only the http and graphite fetch puts in a trip's context.
+// Requests of the other types (grpc, sql, redis, ...) take no turn. They
+// carry no rateLimitSetting, which only the http and graphite fetch puts
+// in a trip's context.
 
 // hostRateLimits holds the buckets of rate_limits' entries, one for each,
 // and their waits and refusals by entry name. It is apart from rateLimits,
@@ -65,10 +67,10 @@ func (r *hostRateLimitRule) matches(host string) bool {
 // order; nil without any.
 var hostRateLimitRules atomic.Pointer[[]*hostRateLimitRule]
 
-// hostRateLimitSince records when the counts of each entry began: the
-// zero time for the entries the first configuration followed had, which
-// count since the exporter started, and the time a later reload added the
-// others.
+// hostRateLimitSince records when the counts of each entry began. It is
+// the zero time for the entries the first followed configuration had,
+// which count since the exporter started, and the time of the later
+// reload that added each of the others.
 var hostRateLimitSince struct {
 	mu       sync.Mutex
 	followed bool
@@ -91,19 +93,20 @@ func matchHostRateLimit(u *url.URL) (*hostRateLimitRule, string) {
 	return nil, ""
 }
 
-// canonicalRequestHost is host in the form entries are matched in: in lower
-// case, without the dot that may end a fully qualified name, and an address
-// as netip writes it, so 2001:DB8:0::1 is 2001:db8::1. An IPv4 address mapped
-// into IPv6, ::ffff:10.0.0.1, is the IPv4 address, which is what Go dials for
-// it, and an IPv6 address's zone is dropped: the zone names an interface of
-// this machine, not another host, so it matters to an entry no more than a
-// port does, and an entry has none (canonicalRuleHost).
+// canonicalRequestHost returns host in the form entries are matched in:
+// lower case, without the dot that may end a fully qualified name, and an
+// address as netip writes it, so 2001:DB8:0::1 is 2001:db8::1. An IPv4
+// address mapped into IPv6, ::ffff:10.0.0.1, becomes the IPv4 address,
+// which is what Go dials for it. An IPv6 address's zone is dropped: the
+// zone names an interface of this machine, not another host. So it matters
+// to an entry no more than a port does, and an entry has none
+// (canonicalRuleHost).
 //
-// A name is matched as the URL writes it. One with a character outside
-// ASCII never gets here: the target policy refuses it before the request is
-// sent (canonicalHost), since Go would send it under two names, so a request
-// that takes a turn names an internationalised host in its xn-- form, the
-// one an entry is written in.
+// A name is matched as the URL writes it. A name with a non-ASCII
+// character never gets here: the target policy refuses it before the
+// request is sent (canonicalHost), since Go would send it under two names.
+// So a request that takes a turn names an internationalised host in its
+// xn-- form, the form an entry is written in.
 func canonicalRequestHost(host string) string {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	if addr, err := netip.ParseAddr(host); err == nil {
@@ -112,16 +115,16 @@ func canonicalRequestHost(host string) string {
 	return host
 }
 
-// hostNamePattern is a host name: labels of letters, digits, hyphens and
-// underscores, joined by dots. An internationalised name is written in its
-// ASCII (xn--) form, the only form a request a limit applies to can name it
+// hostNamePattern matches a host name: labels of letters, digits, hyphens
+// and underscores, joined by dots. An internationalised name is written in
+// its ASCII (xn--) form, the only form a rate-limited request can name it
 // in (canonicalRequestHost).
 var hostNamePattern = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$`)
 
-// canonicalRuleAddr is an address of an entry in the form requests are
-// matched in (canonicalRequestHost), or the reason it is refused: an
-// address with a zone, which would match only requests written with that
-// zone though the zone names nothing of the host.
+// canonicalRuleAddr returns an entry's address in the form requests are
+// matched in (canonicalRequestHost), or the reason it is refused. An
+// address with a zone is refused: it would match only requests written
+// with that zone, though the zone says nothing about the host.
 func canonicalRuleAddr(addr netip.Addr) (string, error) {
 	if addr.Zone() != "" {
 		return "", fmt.Errorf("has the zone %q; write the address without it, which matches it through every interface", addr.Zone())
@@ -194,17 +197,21 @@ func compileHostRateLimit(entry *model.HostRateLimit) (*hostRateLimitRule, error
 }
 
 // ValidateHostRateLimits checks rate_limits and fills in each entry's
-// burst. An entry needs a name, a label value of its self-metrics and so
-// unique, at least one host, each listed in one entry only and not covered
-// by a wildcard of an earlier entry, and a rate_limit as request.rate_limit's
-// is checked. Every mistake is reported.
+// burst. An entry needs:
+//   - a name, which is a label value of its self-metrics and so unique;
+//   - at least one host, each listed in one entry only and not covered by
+//     a wildcard of an earlier entry;
+//   - a rate_limit, checked as request.rate_limit is.
 //
-// The first entry that matches applies, so a host an earlier entry's
-// wildcard matches — an exact name under it, or a narrower wildcard — could
-// never apply where it is listed: it is refused as the same host listed
-// twice is, and the error says to list the narrower first, the way to carve
-// a host out of a wildcard. Within one entry a host its own wildcard covers
-// is harmless, the entry applying to it either way, and is let be.
+// Every mistake is reported.
+//
+// The first entry that matches applies. So a host an earlier entry's
+// wildcard matches (an exact name under it, or a narrower wildcard) could
+// never apply where it is listed. It is refused like a host listed twice,
+// and the error says to list the narrower one first, which is how to carve
+// a host out of a wildcard. Within one entry, a host covered by its own
+// wildcard is harmless, since the entry applies to it either way, and is
+// allowed.
 func ValidateHostRateLimits(entries []model.HostRateLimit) error {
 	var errs []error
 	names := map[string]bool{}
@@ -274,12 +281,12 @@ func ValidateHostRateLimits(entries []model.HostRateLimit) error {
 // rate_limits, may have.
 var collectorNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// FollowHostRateLimits puts the entries of rate_limits of the configuration
-// in force in force for the requests. The bucket of an entry a reload left
-// as it was is kept, with the turns it has promised; that of an entry it
-// changed, in its hosts or its limit, is dropped, the entry starting from a
-// full bucket, as a collector's changed request.rate_limit does. The counts
-// of an entry are kept while an entry of its name is in force.
+// FollowHostRateLimits puts the rate_limits entries of the configuration
+// in force for the requests. An entry a reload left unchanged keeps its
+// bucket, with the turns it has promised. An entry whose hosts or limit
+// changed loses its bucket and starts from a full one, as a collector's
+// changed request.rate_limit does. An entry's counts are kept while an
+// entry of its name is in force.
 func FollowHostRateLimits(entries []model.HostRateLimit) {
 	rules := make([]*hostRateLimitRule, 0, len(entries))
 	keys := map[rateLimitKey]bool{}

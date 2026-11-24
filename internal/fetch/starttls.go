@@ -19,23 +19,27 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// STARTTLS: a server that starts in plaintext and turns to TLS when the
-// client asks — SMTP on 25 and 587, IMAP on 143, POP3 on 110, FTP on 21 —
-// is read by greeting it, asking for TLS in its protocol's words and making
-// the handshake once it has said yes. What the client says before TLS is
-// only the protocol's own request for it: EHLO and STARTTLS for SMTP (RFC
-// 3207), a tagged STARTTLS for IMAP (RFC 3501, section 6.2.1), STLS for
-// POP3 (RFC 2595, section 4) and AUTH TLS for FTP (RFC 4217, section 4).
+// STARTTLS: some servers start in plaintext and turn to TLS when the client
+// asks: SMTP on 25 and 587, IMAP on 143, POP3 on 110, FTP on 21. Such a
+// server is read by greeting it, asking for TLS in its protocol's words, and
+// making the handshake once it has said yes. Before TLS, the client says
+// only the protocol's own request for it:
+//
+//   - EHLO and STARTTLS for SMTP (RFC 3207),
+//   - a tagged STARTTLS for IMAP (RFC 3501, section 6.2.1),
+//   - STLS for POP3 (RFC 2595, section 4),
+//   - AUTH TLS for FTP (RFC 4217, section 4).
+//
 // A server that does not offer TLS, refuses it or answers otherwise fails
-// the exchange: it never goes on in plaintext, so stripping STARTTLS from
-// the server's answers makes a failure, not a plaintext scrape.
+// the exchange. It never goes on in plaintext, so stripping STARTTLS from
+// the server's answers causes a failure, not a plaintext scrape.
 //
 // The dialogue is written apart from the request types that speak it, over
-// a connection and a reader of it: tcp, which goes on over TLS with send,
-// and tlscert, which reads the certificate the handshake presents. The file
-// is built with either, and holds what both need of a plain connection:
-// reading the greeting and a reply, and the failure of a connection the
-// scrape's deadline ended (tcpFailure).
+// a connection and a reader of it. They are tcp, which goes on over TLS
+// with send, and tlscert, which reads the certificate the handshake
+// presents. The file is built with either. It holds what both need of a
+// plain connection: reading the greeting and a reply, and the failure of a
+// connection the scrape's deadline ended (tcpFailure).
 
 // The protocols whose request for TLS the exchange speaks.
 const (
@@ -75,13 +79,13 @@ type startTLSStep struct {
 var errReplyTooLarge = errors.New("the reply reached the limit without ending")
 
 // readReply reads one reply of a text protocol: its first line, through the
-// line feed that ends it, or, when that line begins with three digits and a
-// '-', as SMTP's and FTP's multi-line replies' do ("220-mail.example.com
-// ESMTP"), every line up to and including the first that begins with the
-// same three digits and no '-' ("220 ready", or "220" alone). It is held to
-// limit: a reply that reaches it without having ended can only grow past
-// it, and is errReplyTooLarge at once rather than at the deadline. On an
-// error it returns what it read before it.
+// line feed that ends it. When that line begins with three digits and a
+// '-', as SMTP's and FTP's multi-line replies do ("220-mail.example.com
+// ESMTP"), it reads every line up to and including the first that begins
+// with the same three digits and no '-' ("220 ready", or "220" alone). It
+// is held to limit: a reply that reaches limit without having ended can only
+// grow past it, so it is errReplyTooLarge at once rather than at the
+// deadline. On an error it returns what it read before it.
 func readReply(reader *bufio.Reader, limit int64) ([]byte, error) {
 	var reply []byte
 	lineStart := 0
@@ -143,10 +147,10 @@ func replyCode(reply []byte) string {
 }
 
 // startTLSGreeted checks that a greeting is what a server of protocol greets
-// with when it will serve the client: 220 for SMTP and FTP, "* OK" for
-// IMAP, a "* PREAUTH" server having no STARTTLS to offer, and "+OK" for
-// POP3. Anything else is a server that will not go on, as an SMTP server's
-// 554 is, or not one of protocol.
+// with when it will serve the client: 220 for SMTP and FTP, "* OK" for IMAP
+// and "+OK" for POP3. A "* PREAUTH" IMAP server has no STARTTLS to offer.
+// Anything else is a server that will not go on, as with an SMTP server's
+// 554, or one that does not speak protocol.
 func startTLSGreeted(protocol, hostPort string, greeting []byte) error {
 	var want string
 	switch protocol {
@@ -175,18 +179,18 @@ func hasPrefixFold(b []byte, prefix string) bool {
 	return len(b) >= len(prefix) && strings.EqualFold(string(b[:len(prefix)]), prefix)
 }
 
-// startTLS asks a server of protocol, which has greeted, to begin TLS, and
-// returns the commands sent and the server's answers once it has said
-// yes: the caller makes the handshake next, on the connection reader reads.
-// conn is what the commands are written to; local is the connection's own
-// address, which names the client to an SMTP server. Each answer is held
-// to limit, which an error says to raise by limitKeys, the keys that set it
-// for the type, and the connection's deadline ends a server that does not
-// answer, as ctx's cancellation does (tcpFailure). A server that wrote more
-// than its yes before the handshake fails it: those bytes came in
-// plaintext, where anyone on the path could have put them, and would be
-// read as if they had come over TLS (CVE-2011-0411 is the server's side of
-// the same).
+// startTLS asks a server of protocol, which has greeted, to begin TLS. Once
+// the server has said yes, it returns the commands sent and the server's
+// answers. The caller makes the handshake next, on the connection reader
+// reads. conn is what the commands are written to. local is the
+// connection's own address, which names the client to an SMTP server. Each
+// answer is held to limit, and an error says to raise it by limitKeys, the
+// keys that set it for the type. The connection's deadline ends a server
+// that does not answer, as ctx's cancellation does (tcpFailure). A server
+// that wrote more than its yes before the handshake fails it. Those bytes
+// came in plaintext, where anyone on the path could have put them, and would
+// be read as if they had come over TLS (CVE-2011-0411 is the server's side
+// of the same).
 func startTLS(ctx context.Context, conn io.Writer, reader *bufio.Reader, protocol, hostPort string, local net.Addr, limit int64, limitKeys string) ([]startTLSStep, error) {
 	d := startTLSDialogue{ctx: ctx, conn: conn, reader: reader, protocol: protocol, hostPort: hostPort, limit: limit, limitKeys: limitKeys}
 	var err error
@@ -224,12 +228,13 @@ type startTLSDialogue struct {
 	steps     []startTLSStep
 }
 
-// smtp sends EHLO and, when the server's answer lists STARTTLS among its
-// extensions, STARTTLS, which the server answers 220 to begin TLS. The
-// client names itself by its address, [192.0.2.7] or [IPv6:2001:db8::7],
-// as RFC 5321 (section 4.1.4) has a client without a meaningful name do:
-// the exporter's host name is a pod's or a machine's that the mail server
-// cannot look up, and some servers refuse a name that does not resolve.
+// smtp sends EHLO. When the server's answer lists STARTTLS among its
+// extensions, it then sends STARTTLS, which the server answers with 220 to
+// begin TLS. The client names itself by its address, [192.0.2.7] or
+// [IPv6:2001:db8::7], as RFC 5321 (section 4.1.4) has a client without a
+// meaningful name do. The exporter's host name is a pod's or a machine's,
+// which the mail server cannot look up, and some servers refuse a name that
+// does not resolve.
 func (d *startTLSDialogue) smtp(local net.Addr) error {
 	ehlo := "EHLO " + smtpClientName(local) + "\r\n"
 	reply, err := d.ask(ehlo, readReply)
@@ -383,12 +388,12 @@ func startTLSShown(steps []startTLSStep) string {
 }
 
 // readStartTLSGreeting reads the greeting of a server of protocol
-// (readGreeting). An FTP server may say first when it will be ready, 120
-// "Service ready in nnn minutes", a reply of one line or several, before
-// its 220 (RFC 959, sections 4.2 and 5.4): those replies are read and
-// returned apart, in before, and the greeting is the reply after them,
-// which startTLSGreeted and a tcp collector's request.greeting check. All
-// of it is held to limit together, and to the connection's deadline.
+// (readGreeting). Before its 220, an FTP server may first say when it will
+// be ready: 120 "Service ready in nnn minutes", a reply of one line or
+// several (RFC 959, sections 4.2 and 5.4). Those replies are read and
+// returned separately, in before. The greeting is the reply after them,
+// which startTLSGreeted and a tcp collector's request.greeting check. All of
+// it is held to limit together, and to the connection's deadline.
 func readStartTLSGreeting(ctx context.Context, reader *bufio.Reader, protocol, hostPort string, limit int64, limitKeys, key string) (before, greeting []byte, err error) {
 	for {
 		greeting, err = readGreeting(ctx, reader, hostPort, limit, int64(len(before)), limitKeys, key)
@@ -399,12 +404,12 @@ func readStartTLSGreeting(ctx context.Context, reader *bufio.Reader, protocol, h
 	}
 }
 
-// readGreeting reads what a server says first, before anything is sent,
-// as readReply reads a reply: its first line, or, after a line beginning
-// with three digits and a '-', every line up to the one beginning with the
-// same digits and no '-'. The greeting is held to limit, less the used
-// bytes the server said before it, which an error says to raise by
-// limitKeys, and ends at the connection's deadline: a server that writes
+// readGreeting reads what a server says first, before anything is sent. It
+// reads it as readReply reads a reply: its first line, or, after a line
+// beginning with three digits and a '-', every line up to the one beginning
+// with the same digits and no '-'. The greeting is held to limit, less the
+// used bytes the server said before it, and an error says to raise it by
+// limitKeys. It ends at the connection's deadline, so a server that writes
 // no line end, or never ends its continuation, fails the scrape. Its
 // failures name key, the key that expects a greeting.
 func readGreeting(ctx context.Context, reader *bufio.Reader, hostPort string, limit, used int64, limitKeys, key string) ([]byte, error) {
@@ -430,11 +435,11 @@ func tcpShown(send string) string {
 }
 
 // tcpFailure is the failure of a connection, a handshake, the write or a
-// read: the scrape's deadline or cancellation when that is what ended it,
-// since the connection's deadline is set to make it end. The connection's
-// deadline is the scrape's, and its timer can fire before the context's
-// own, so a connection that timed out is the deadline's failure whether or
-// not the context says so yet.
+// read. When the scrape's deadline or cancellation ended it, the failure is
+// that deadline or cancellation, since the connection's deadline is set to
+// make it end. The connection's deadline is the scrape's, and its timer can
+// fire before the context's own. So a connection that timed out is the
+// deadline's failure, whether or not the context says so yet.
 func tcpFailure(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
 		return fmt.Errorf("%w (%w)", ctxErr, err)

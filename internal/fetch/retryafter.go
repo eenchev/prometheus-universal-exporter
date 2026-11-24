@@ -16,8 +16,8 @@ type retryWait struct {
 	wait time.Duration
 	why  string
 	// giveUp is set when the answer's Retry-After asks for a wait that
-	// would end at or after the request's deadline: the retry could not
-	// be sent in time, so the answer is the request's answer at once, and
+	// would end at or after the request's deadline. The retry could not be
+	// sent in time, so the answer is the request's answer at once, and
 	// giveUp says why it was not retried.
 	giveUp string
 }
@@ -28,12 +28,12 @@ type retryWait struct {
 const maxRetryAfterSeconds = math.MaxInt64 / int64(time.Second)
 
 // retryAfterWait is the wait before retrying an answer whose Retry-After
-// header is header, under retry.retry_after: the delay it asks for, as a
-// number of seconds or an HTTP date taken from now, else backoff. A date
-// already past asks for no wait. A value that is neither, a negative number
-// among them, is not the target's to be read, and backoff is waited as
-// without the header. A wait that would end at or after ctx's deadline is
-// not made at all.
+// header is header, under retry.retry_after. It is the delay the header
+// asks for, as a number of seconds or an HTTP date taken from now, else
+// backoff. A date already past asks for no wait. Any other value, including
+// a negative number, is not the target's to be read, and backoff is waited
+// as without the header. A wait that would end at or after ctx's deadline
+// is not made at all.
 func retryAfterWait(ctx context.Context, header string, backoff time.Duration, now time.Time) retryWait {
 	value := strings.TrimSpace(header)
 	if value == "" {

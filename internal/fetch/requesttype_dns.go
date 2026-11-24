@@ -27,19 +27,21 @@ import (
 //	  server: 10.0.0.53:53       # the system's resolver when left out
 //	  transport: tcp             # udp when left out
 //
-// The probe's target is the name, such as example.com, or for record_type
-// PTR the address whose names are asked for. The record type, the server
-// and the transport are the collector's: a probe cannot send the exporter's
-// questions to a server the configuration does not name.
+// The probe's target is the name, such as example.com. For record_type PTR
+// it is the address whose names are asked for. The record type, the server
+// and the transport belong to the collector, so a probe cannot send the
+// exporter's questions to a server the configuration does not name.
 //
-// The question is the exporter's own (dnswire.go), not Go's resolver's,
-// which gives neither the records' TTLs, nor the answer's response code
-// and flags, nor records of SOA, CAA or DNSKEY. Every answer is the
-// document, whatever its response code: NXDOMAIN, and NOERROR without
-// records of the type, are not_found, and SERVFAIL or REFUSED is the
-// document's rcode, so that a collector can say a record is missing or a
-// server failing; only a server that does not answer, or answers what is
-// no answer to the question, fails the scrape.
+// The exporter builds the question itself (dnswire.go) instead of using
+// Go's resolver. Go's resolver gives neither the records' TTLs, nor the
+// answer's response code and flags, nor SOA, CAA or DNSKEY records. Every
+// answer becomes the document, whatever its response code:
+//   - NXDOMAIN, and NOERROR without records of the type, are not_found.
+//   - SERVFAIL or REFUSED is the document's rcode.
+//
+// So a collector can report a missing record or a failing server. Only a
+// server that does not answer, or whose reply is no answer to the
+// question, fails the scrape.
 //
 // This file imports nothing outside the standard library.
 
@@ -192,8 +194,8 @@ func validateDNSRequest(x *model.Collector) error {
 }
 
 // parseDNSTarget reads a target of c: a DNS name, or for record_type PTR an
-// IP address. A name is held to what canonicalHost holds a host to, and to
-// the lengths of the DNS: at most 253 characters, each label from 1 to 63.
+// IP address. A name is held to the same rules canonicalHost applies to a
+// host, and to the DNS lengths: at most 253 characters, each label 1 to 63.
 // It is returned in lower case without a trailing dot.
 func parseDNSTarget(c *model.Collector, raw string) (string, error) {
 	target := strings.TrimSpace(raw)
@@ -252,9 +254,9 @@ func dnsURI(c *model.Collector, name string) string {
 }
 
 // dnsSignatureTimes places each RRSIG's inception and expiration in time,
-// from now: the wire writes them as 32-bit serial numbers of seconds since
-// 1970, compared as RFC 1982 does, each the time of that number nearest to
-// now (RFC 4034 § 3.1.5); and how long each has left.
+// relative to now, and sets how long each has left. The wire writes them
+// as 32-bit serial numbers of seconds since 1970, compared as in RFC 1982.
+// Each becomes the time for that number nearest to now (RFC 4034 § 3.1.5).
 func dnsSignatureTimes(answers []dnsAnswer, now time.Time) {
 	at := func(serial uint32) *int64 {
 		t := now.Unix() + int64(int32(serial-uint32(now.Unix()))) //nolint:gosec // G115: serial arithmetic wraps on purpose
@@ -332,11 +334,12 @@ type dnsAnswer struct {
 	Protocol  *uint8  `json:"protocol,omitempty"`
 	Algorithm *uint8  `json:"algorithm,omitempty"`
 	KeyTag    *uint16 `json:"key_tag,omitempty"`
-	// RRSIG's: the type of the records it signs, the labels of its owner,
-	// the TTL the records were signed with, when it was made and when it
-	// expires, in seconds since 1970, how long it has left, and the zone
-	// whose key signed it. expiration and inception are the wire's serial
-	// numbers, placed in time when the document is made (dnsSignatureTimes).
+	// RRSIG fields: the type of the records it signs, the labels of its
+	// owner, the TTL the records were signed with, when it was made and
+	// when it expires (in seconds since 1970), how long it has left, and the
+	// zone whose key signed it. expiration and inception are the wire's
+	// serial numbers, placed in time when the document is made
+	// (dnsSignatureTimes).
 	TypeCovered            string  `json:"type_covered,omitempty"`
 	Labels                 *uint8  `json:"labels,omitempty"`
 	OriginalTTL            *uint32 `json:"original_ttl,omitempty"`
@@ -430,9 +433,9 @@ func fetchDNS(ctx context.Context, target string, c *model.Collector, overrides 
 	}, nil
 }
 
-// dnsFailure words a failed lookup. The resolver's own error names the
-// server of the system's configuration, which is not the one asked when
-// request.server is set, so the server is named here instead; a lookup cut
+// dnsFailure describes a failed lookup. The resolver's own error names the
+// server from the system's configuration, which is not the one asked when
+// request.server is set, so the server is named here instead. A lookup cut
 // short by the scrape's deadline wraps the context's error.
 func dnsFailure(ctx context.Context, recordType, name, server string, err error) error {
 	if ctx.Err() != nil {
@@ -455,10 +458,10 @@ func dnsName(name string) string {
 	return strings.TrimSuffix(name, ".")
 }
 
-// sortDNSAnswers puts the records in an order of their own, by priority or
-// preference first where the type has one, so that two lookups of the same
-// records give the same document: the resolver shuffles records of the same
-// priority, as RFC 2782 has a client do.
+// sortDNSAnswers puts the records in a fixed order, by priority or
+// preference first where the type has one. Two lookups of the same records
+// then give the same document. The resolver shuffles records of the same
+// priority, as RFC 2782 tells a client to do.
 func sortDNSAnswers(answers []dnsAnswer) {
 	value := func(p *uint16) int {
 		if p == nil {
@@ -485,11 +488,11 @@ func sortDNSAnswers(answers []dnsAnswer) {
 }
 
 // checkDNSPolicy holds a lookup to the collector's target lists. A name is
-// matched by name alone: a lookup connects to nothing at the name, so what
-// it resolves to is the answer, not a host reached, and allowed_targets
-// that lists only networks allows no name. An address, a PTR collector's
-// target, is matched by address, the cloud metadata ones refused as every
-// collector refuses them.
+// matched by name alone. A lookup connects to nothing at the name, so what
+// it resolves to is the answer, not a host reached. An allowed_targets that
+// lists only networks therefore allows no name. An address (a PTR
+// collector's target) is matched by address, and the cloud metadata
+// addresses are refused, as every collector refuses them.
 func checkDNSPolicy(p *targetPolicy, name string) error {
 	if p == nil {
 		return nil

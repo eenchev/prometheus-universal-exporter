@@ -23,10 +23,10 @@ func brokerTLSConfig(c *model.Collector) (*tls.Config, error) {
 	return cfg, nil
 }
 
-// checkBrokerAccount holds a collector's tls block and account to what the
-// types that take them hold theirs to: a client certificate with both its
-// files, a server_name that is a host's name, an account that is whole, and
-// no placeholder or control character in it.
+// checkBrokerAccount holds a collector's tls block and account to the rules
+// of the types that take them: a client certificate with both its files, a
+// server_name that is a host's name, and an account that is whole, with no
+// placeholder or control character in it.
 func checkBrokerAccount(x *model.Collector) error {
 	r, t := &x.Request, x.Request.TLS
 	switch {

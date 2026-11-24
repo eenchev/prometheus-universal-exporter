@@ -12,19 +12,22 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// How localfile, sshfile, s3file and the opt-in ftp name the file a scrape
-// reads, and what they hold it to before it is read: the rules of
-// request.root and request.path, the path a probe names, max_age, and the
-// decoder a file's extension implies. How the first three read it is in
-// filereads.go.
+// This file holds how localfile, sshfile, s3file and the opt-in ftp name
+// the file a scrape reads, and the checks it must pass before it is read:
+// the rules of request.root and request.path, the path a probe names,
+// max_age, and the decoder a file's extension implies. How the first three
+// types read the file is in filereads.go.
 
 // validateFileRequest holds the rules localfile, sshfile and s3file share:
-// root is required, absolute, not localfile's filesystem root, and stored
-// cleaned; sshfile's may be /, which on a host is often the directory of an
-// account confined to it (a chroot), and is the host's alone in any case,
-// and s3file's, which is a bucket's every key; max_age
-// is not negative; and path, with its placeholders, names a file under root.
-// typeName is the type the message for a missing root names, and
+//   - root is required, absolute, not localfile's filesystem root, and
+//     stored cleaned. sshfile's root may be /, which on a host is often the
+//     directory of an account confined to it (a chroot), and in any case
+//     belongs to the host alone. So may s3file's, which is every key of a
+//     bucket.
+//   - max_age is not negative.
+//   - path, with its placeholders, names a file under root.
+//
+// typeName is the type named in the message for a missing root.
 // ownFilesystem says the root is on the exporter's own filesystem, as
 // localfile's is, where / is refused.
 func validateFileRequest(x *model.Collector, typeName string, ownFilesystem bool) error {
@@ -88,12 +91,12 @@ func checkLocalFileElement(value string) error {
 	return nil
 }
 
-// checkLocalFileParamValue is everything a path parameter's value is held
-// to before a file is read with it, the two steps of resolveLocalFile in
-// one: what any path parameter may not be (bindPathParams), and one path
-// element. An empty value is not refused: the placeholder then adds nothing
-// to the path, as a probe that leaves it out of a path with an empty default
-// has it.
+// checkLocalFileParamValue applies every check a path parameter's value
+// must pass before a file is read with it, combining the two steps of
+// resolveLocalFile: what no path parameter may be (bindPathParams), and a
+// single path element. An empty value is not refused. The placeholder then
+// adds nothing to the path, just as for a probe that leaves it out of a
+// path with an empty default.
 func checkLocalFileParamValue(name, value string) error {
 	if err := checkPathParamValue(name, value); err != nil {
 		return err
@@ -146,13 +149,16 @@ func checkMaxAge(c *model.Collector, full string, modified time.Time) error {
 }
 
 // localFileContentType lets decoder.type auto pick the decoder a file's
-// extension implies. .prom is the textfile collector's Prometheus text
-// format, and .graphite and .carbon carbon's plaintext lines, which the
-// graphite decoder reads (decode/graphite.go); text/x-graphite is the
-// exporter's own name for them, since they have no registered type. .ndjson
-// and .jsonl are JSON Lines, and .toml TOML; .ini and logfmt have no type
-// that names them, and are read by an explicit decoder.type. Anything else
-// is detected from its content.
+// extension implies:
+//   - .prom is the textfile collector's Prometheus text format.
+//   - .graphite and .carbon are carbon's plaintext lines, read by the
+//     graphite decoder (decode/graphite.go). text/x-graphite is the
+//     exporter's own name for them, since they have no registered type.
+//   - .ndjson and .jsonl are JSON Lines, and .toml is TOML.
+//   - .ini and logfmt have no type that names them, and are read with an
+//     explicit decoder.type.
+//
+// Anything else is detected from its content.
 func localFileContentType(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".json":

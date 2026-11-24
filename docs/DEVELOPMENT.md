@@ -113,9 +113,9 @@ the ones above them in this list:
 | `internal/allocapi` | What the target allocator and an exporter in allocator mode say to each other: the heartbeat, the bundle, the API's paths and timings, the rendezvous hash (`Score`) the allocator's weighted placement ranks the members by, and the bounds of a replica's capacity. |
 | `internal/kubeapi` | Listing objects from a Kubernetes API server over its REST API, with the standard library alone: the in-cluster address, token, CA and namespace of a pod's service account, and a listing of a path page by page with continue tokens, a bound on each page and the API server's refusals as errors; the `kubernetes` request type and the target allocator's Kubernetes discovery list with it. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, and the opt-in `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`, each in its own build-tagged `requesttype_<name>.go`, what the opt-in types share in `nettypes.go`, `nettls.go` and `netpassword.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket.go` and `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
-| `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
-| `internal/transform` | The transforms and metric rules, the Python worker pool, the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`, `kubernetes`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp`, and the opt-in `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`, each in its own build-tagged `requesttype_<name>.go`, what the opt-in types share in `nettypes.go`, `nettls.go` and `netpassword.go`, `icmp`'s unprivileged ICMP socket in `icmpsocket.go` and `icmpsocket_unix.go`, `snmp`'s BER encoding and SNMPv3 security in `snmpber.go` and `snmpusm.go`, `http`'s FastCGI client in `fastcgi.go`, `request.unix_socket`'s checks, of `http` and `tcp`, in `unixsocketpath.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go`, the SSH connections, keys and targets `sshfile` and `sshexec` share in `sshconn.go` and `sshtarget.go`, behind the tags of the two, `sshfile`'s SFTP reads in `sshsource.go` and `sftplist.go`, the value rule of `tcp`'s and `sshexec`'s placeholders in `linevalue.go`, `sql`'s pools, rows and drivers in `sql*.go` and `s3file`'s reads of a bucket in `s3source.go` behind their tags, and the file reading `localfile`, `sshfile` and `s3file` share in `filereads.go` and `localfile_directory.go`, behind the tags of the three — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. The `protobuf` decoder's descriptors are read in `internal/fetch` (`protobufdecoder.go`), with the `grpc` type's, behind its tag. |
+| `internal/transform` | The transforms and metric rules, the Python worker pool, the states scripts keep between runs (`pythonstate.go`), the checks run on rules and scripts at load, and the metric lint (`lint.go`), the advice on the series a collector makes that `--dry-run` and the debug report give. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/allocclient` | The exporter's side of the target allocator in allocator mode (`--allocator.url`): the heartbeats to every instance of the allocator, the long poll for its bundle, and the cache directory a bundle is written into, checked in and put in force by swapping one symbolic link, for the configuration manager to reload ([Target allocator](ALLOCATOR.md)). |
 | `internal/pagekit` | What the HTML pages of the exporter and of the target allocator share, so they look and behave alike: the stylesheet with its light and dark colours, the theme picker and the head script that applies the theme kept, the logo as the browser-tab icon (`logo.svg`, a copy of `docs/logo.svg`), the pages' Content-Security-Policy, the refresh controls of a page that refreshes itself, and how a page writes a duration (`1m`, not `1m0s`). |
@@ -588,6 +588,47 @@ true of it by hand. Most have no test that fails when the type is left out
   § 5.1's sentence of the opt-in types in `docs/SPECIFICATION-EXPORTER.md`;
   and, for a type that reaches a server over TCP, the comments opening
   `internal/fetch/nettypes.go` and `nettls.go`.
+
+### Adding a secret store
+
+A [secret store](AUTHENTICATION.md#secret-stores) is of a type, a value of
+`secret_stores[].type`, and each type is one file,
+`internal/fetch/secretstore_<name>.go`, that registers a
+`fetch.SecretStoreType` from its `init`. Everything else is the same for
+every type and lives in `secretstore.go`: the references, the cache, the use
+of a secret past `cache_ttl`, the counts and self-metrics, the checks of a
+configuration, and the schema. To add a type:
+
+1. **The store.** Write a `SecretBackend`: `Read(ctx, ref)` asks the store
+   for the secret at `ref.Path`, of `ref.Version` when it is set, within
+   `ctx`, and answers a `SecretDocument`: `Text` for a secret that is one
+   value, `Fields` for one that is several. It answers the secret whole,
+   whatever field the reference names, and is asked by several scrapes at
+   once. `secretClient` makes its HTTP client, `secretHTTP` a request held
+   to the answer's bound, and `secretStoreSaid` what a refusal says, masked.
+2. **The registration.** `Name`; `Keys`, the keys of an entry the type
+   takes beside the five every type takes; `Check`, its rules at load;
+   `New`, its constructor; `FieldRequired` when its secrets are always
+   fields; and `KeyRules`, each key's description for the schema, starting
+   with the type's name.
+3. **The keys.** A key no type takes yet is a new field of
+   `model.SecretStore`; a key another type has is shared, each type
+   describing it.
+4. **A type some builds are without** registers in every build, as `aws`
+   does, with a `Check` that says how to build with it, so its name and
+   keys are in every build's schema.
+5. **Tests**, against a stand-in of the store, as `secretstore_test.go` has
+   for the others; `make schemas`; and a row in
+   `test/repository/schemakeys_http_test.go` for a key the schema holds to
+   values or a pattern.
+6. **Documentation.** Its section of
+   [AUTHENTICATION.md](AUTHENTICATION.md#secret-stores), with an example
+   that loads, its rule in § 42.6c of the specification, and a line of the
+   changelog.
+
+A test fails for a type without a constructor, with a key
+`model.SecretStore` has no field for, or with a key it does not describe,
+and for a page that leaves a type out.
 
 ## Running the tests
 

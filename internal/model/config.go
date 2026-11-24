@@ -58,6 +58,10 @@ type Config struct {
 	// collector together ask a host, for an API whose quota is the host's
 	// rather than one collector's (fetch/hostratelimit.go).
 	RateLimits []HostRateLimit `yaml:"rate_limits"`
+	// SecretStores are the stores a credential may be read from in place
+	// of a file: a key that names a credential file may hold a reference,
+	// secret://<store>/<path>#<field>, to one (fetch/secretstore.go).
+	SecretStores []SecretStore `yaml:"secret_stores"`
 	// CollectorSources records the file each collector was defined in, and
 	// LoadedCollectorFiles the collector files read, in order. Neither is read
 	// from the document.
@@ -443,6 +447,66 @@ type HostRateLimit struct {
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
+// SecretStore is an entry of secret_stores: a store of secrets the
+// exporter reads credentials from, kept in its memory for CacheTTL and
+// never written to disk. Type says which kind it is, one the fetch package
+// has registered (fetch.SecretStoreType): vault, HashiCorp Vault's HTTP
+// API at Address, logged in to as Auth says; gcp, Google Cloud Secret
+// Manager for Project; aws, AWS Secrets Manager in Region. Name, Type,
+// CacheTTL, MaxStale and Timeout are every type's; each other key is of
+// the types that list it (SecretStoreType.Keys), and a new type's keys are
+// further fields here.
+type SecretStore struct {
+	// Name is what a reference names the store by, and the store label of
+	// its self-metrics.
+	Name string `yaml:"name"`
+	Type string `yaml:"type"`
+	// Address, Namespace, Auth and TLS are vault's: the server's URL, the
+	// Vault Enterprise namespace, how the exporter logs in and how the
+	// server's certificate is verified.
+	Address   string           `yaml:"address"`
+	Namespace string           `yaml:"namespace"`
+	Auth      *SecretStoreAuth `yaml:"auth"`
+	TLS       TLSConfig        `yaml:"tls"`
+	// Project and CredentialsFile are gcp's: the project whose secrets are
+	// read, and a service account's key file, in place of the metadata
+	// server's token.
+	Project         string `yaml:"project"`
+	CredentialsFile string `yaml:"credentials_file"`
+	// Region is aws's; the SDK's own configuration says it when left out.
+	Region string `yaml:"region"`
+	// Endpoint is the API's URL in place of the public one, of gcp and
+	// aws: a private endpoint.
+	Endpoint string `yaml:"endpoint"`
+	// CacheTTL is how long a secret read is used before the store is
+	// asked again, 5m when unset, and MaxStale how long past that the
+	// secret is still used while the store cannot be asked, 1h when unset
+	// and never when 0. Timeout bounds one request to the store, 5s when
+	// unset.
+	CacheTTL *Duration `yaml:"cache_ttl"`
+	MaxStale *Duration `yaml:"max_stale"`
+	Timeout  Duration  `yaml:"timeout"`
+}
+
+// SecretStoreAuth is a vault store's auth block: Method is token, with the
+// token of TokenFile or of the VAULT_TOKEN environment variable;
+// kubernetes, which logs in as Role with the service account token of
+// JWTFile; or approle, which logs in with RoleID and the secret id of
+// SecretIDFile or of VAULT_SECRET_ID. Mount is where the auth method is
+// mounted, kubernetes or approle when unset.
+type SecretStoreAuth struct {
+	Method       string `yaml:"method"`
+	TokenFile    string `yaml:"token_file"`
+	Role         string `yaml:"role"`
+	Mount        string `yaml:"mount"`
+	JWTFile      string `yaml:"jwt_file"`
+	RoleID       string `yaml:"role_id"`
+	SecretIDFile string `yaml:"secret_id_file"`
+}
+
+// SecretStoreAuthMethods are the values of a vault store's auth.method.
+var SecretStoreAuthMethods = []string{"token", "kubernetes", "approle"}
+
 // LoginConfig is request.login: how the exporter logs in to get the token
 // it sends to an http or graphite target. Type json posts a JSON object of
 // Fields and FieldFiles to URL and reads the token from the answer's body
@@ -767,6 +831,26 @@ type ResponseConfig struct {
 	Graphite   GraphiteConfig    `yaml:"graphite"`
 	Binary     BinaryConfig      `yaml:"binary"`
 	YAML       YAMLConfig        `yaml:"yaml"`
+	Protobuf   ProtobufConfig    `yaml:"protobuf"`
+}
+
+// ProtobufConfig is response.protobuf: the message the protobuf decoder
+// reads a body as, and the files that describe it, a descriptor set or
+// .proto files, as a grpc request names them (fetch/protobufdecoder.go).
+type ProtobufConfig struct {
+	// Message is the full name of the message, such as metrics.v1.Report.
+	Message string `yaml:"message"`
+	// ProtosetFile is a FileDescriptorSet, written with its imports.
+	ProtosetFile string `yaml:"protoset_file"`
+	// ProtoFiles are .proto files to compile, and ProtoImportPaths the
+	// directories their imports are resolved in.
+	ProtoFiles       []string `yaml:"proto_files"`
+	ProtoImportPaths []string `yaml:"proto_import_paths"`
+}
+
+// Set reports whether the block sets anything.
+func (p ProtobufConfig) Set() bool {
+	return p.Message != "" || p.ProtosetFile != "" || len(p.ProtoFiles) > 0 || len(p.ProtoImportPaths) > 0
 }
 
 // YAMLConfig is response.yaml: how the yaml decoder reads a body of more
@@ -853,7 +937,7 @@ type CSVConfig struct {
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
 // reads the response: json, ndjson, yaml, toml, ini, xml, csv, html,
-// logfmt, prometheus, text, graphite or binary, or none, which reads no body. Unset or auto, the transform's type
+// logfmt, prometheus, text, graphite, binary or protobuf, or none, which reads no body. Unset or auto, the transform's type
 // picks it when it implies one, and otherwise the response's content type or
 // its content.
 type DecoderConfig struct {
@@ -1263,7 +1347,7 @@ var LintRules = []string{LintCounterTotal, LintUnitSuffix, LintUnboundedLabel, L
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", DecoderNone}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite", "ndjson", "logfmt", "toml", "ini", "binary", "protobuf", DecoderNone}
 
 // DecoderNone is the decoder.type that reads no body: jq and yq rules read
 // null, with $status and $headers, and a Python script's data is None, for
@@ -1280,11 +1364,15 @@ var TransformTypes = []string{"jq", "yq", "xpath", "css", "csv", "regex", "pytho
 // expressions are written in, the scripts, and the renaming and filtering
 // applied to the metrics produced.
 type TransformConfig struct {
-	Type         string            `yaml:"type"`
-	PreScript    string            `yaml:"pre_script"`
-	Script       string            `yaml:"script"`
-	Libraries    []string          `yaml:"libraries"`
-	RequiredLibs []string          `yaml:"required_libs"`
+	Type         string   `yaml:"type"`
+	PreScript    string   `yaml:"pre_script"`
+	Script       string   `yaml:"script"`
+	Libraries    []string `yaml:"libraries"`
+	RequiredLibs []string `yaml:"required_libs"`
+	// State gives the collector's Python scripts a dict named state that
+	// is kept from one run of a script to its next, for each target
+	// (transform/pythonstate.go).
+	State        bool              `yaml:"state"`
 	Include      []string          `yaml:"include"`
 	Exclude      []string          `yaml:"exclude"`
 	Rename       map[string]string `yaml:"rename"`

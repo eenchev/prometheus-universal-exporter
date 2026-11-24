@@ -2,7 +2,7 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
-The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, the clock of an NTP server, or Kubernetes objects listed from the API server, objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, the output of a command run on another host over SSH, the searches of an LDAP directory, the echo replies of a host pinged over ICMP, or the objects and tables of an SNMP agent. An image built with the opt-in request types reads a mail server, a Modbus device, an MQTT broker, a WebSocket endpoint, a file on an FTP server, the mailboxes of a mail account or a mailbox over POP3 too. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, binary layouts, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+The exporter turns a source that was never meant for Prometheus into a Prometheus target: an HTTP API, a gRPC service, a Graphite server, a file in the pod or on another host over SSH, a SQL database, the records of a DNS name, the TLS certificate a server presents, the clock of an NTP server, or Kubernetes objects listed from the API server, objects in S3 or a store that speaks its API, or the INFO and read-only commands of a Redis or Valkey server, the statistics of a service that answers a line sent over TCP, such as memcached or ZooKeeper, the output of a command run on another host over SSH, the searches of an LDAP directory, the echo replies of a host pinged over ICMP, or the objects and tables of an SNMP agent. An image built with the opt-in request types reads a mail server, a Modbus device, an MQTT broker, a WebSocket endpoint, a file on an FTP server, the mailboxes of a mail account, a mailbox over POP3, a login against a RADIUS server or the registration of a domain too. Answers in JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, binary layouts, protobuf messages, Graphite's render API or Prometheus exposition are all read; a collector in the configuration says how to call the source, how to read the answer and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
 
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
 
@@ -10,9 +10,9 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 
 * A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
 * Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
-* `grpc`, `graphite`, `dns`, `tlscert`, `ntp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` collectors, and, in an image built with them, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3` ones
+* `grpc`, `graphite`, `dns`, `tlscert`, `ntp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `icmp` and `snmp` collectors, and, in an image built with them, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois` ones
 * HTTP logins, a JSON POST for a token or OAuth, and pagination across an API's pages
-* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text and Prometheus exposition, with auto-detection
+* Decoders for JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, plain text, protobuf messages and Prometheus exposition, with auto-detection
 * Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
 * Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
 * Declared metrics with types, descriptions, explicit labels and per-metric error policy
@@ -20,6 +20,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
 * `Probe` resources for uptime checks of URLs and Ingresses, as blackbox_exporter is declared
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
+* Target credentials read from HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets Manager, with nothing mounted
 * SSH keys, passwords and known hosts for `sshfile` and `sshexec` collectors, from a Secret and the values
 * Database passwords, Snowflake private keys and TLS files for `sql` collectors, from a Secret
 * `list` permissions on the resources `kubernetes` collectors read, for the exporter's own ServiceAccount
@@ -618,6 +619,41 @@ config:
 ```
 
 and probe it with the bucket as the target, `/probe?collector=textfiles&target=acme-metrics`. The annotation is on the ServiceAccount the chart creates; with an existing account, `serviceAccount.create: false`, annotate that account instead (see [Service account](#service-account)). Elsewhere, hand a key's two halves in from a Secret as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` through `env` or `envFrom`, or mount the Secret through `extraVolumes` and `extraVolumeMounts` and name its files with the collector's `access_key_id_file` and `secret_access_key_file`, which are read at every request. A store other than AWS — MinIO, Ceph, R2, Google Cloud Storage — is the collector's `endpoint`, with `path_style` where it needs one. With `networkPolicy.egress` rules, add one for the store's port, 443 for AWS. The request's keys are in [Objects in S3](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/S3FILE.md).
+
+## Secret stores
+
+A credential the exporter reads from a [secret store](../../docs/AUTHENTICATION.md#secret-stores), HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets Manager, needs no Secret mounted: the store and the references to it are part of the configuration, and the chart gives the pods what the store's login needs.
+
+For Vault's Kubernetes auth, the pods must mount their service account token, which they do not by default:
+
+```yaml
+serviceAccount:
+  automount: true
+config:
+  data:
+    config.yaml: |
+      secret_stores:
+        - name: vault
+          type: vault
+          address: https://vault.vault.svc:8200
+          auth: {method: kubernetes, role: exporter}
+      collectors:
+        - name: api
+          request:
+            type: http
+            bearer_token_file: secret://vault/secret/data/api#token
+          transform:
+            type: jq
+          metrics:
+            - name: api_up
+              expression: .up
+```
+
+The Vault role is bound to the ServiceAccount the pods run as, `<fullname>` in the release's namespace unless `serviceAccount.name` names another. To leave the API token unmounted, project a token of Vault's audience through `extraVolumes` and `extraVolumeMounts` and name it with the store's `auth.jwt_file`. A Vault token or an AppRole's secret id comes from a Secret as `VAULT_TOKEN` or `VAULT_SECRET_ID`, through `env` or `envFrom`.
+
+For AWS Secrets Manager, annotate the ServiceAccount with the IAM role, as for [S3 object collectors](#s3-object-collectors); for Google Cloud Secret Manager, with the Workload Identity binding, `iam.gke.io/gcp-service-account`. Neither needs the token mounted.
+
+With `networkPolicy.egress` rules, allow the store too: Vault's address, or the cloud's API and its metadata endpoint. With `allocator.enabled`, the exporter pods read from the stores, each for itself, and the allocator reaches none.
 
 ## Redis collectors
 

@@ -26,6 +26,8 @@ that does it, usually with an example to copy. New here? Start with
 | Ask a service that speaks a line protocol over TCP or UDP | [Text protocols over TCP](TCP.md) |
 | Search an LDAP directory | [LDAP directories](LDAP.md) |
 | Call a gRPC method | [gRPC](GRPC.md) |
+| Read an HTTP answer that is a protobuf message | [Protobuf responses](CONFIGURATION.md#protobuf-responses) |
+| Remember something from one scrape to the next in a script | [State between runs](PYTHON.md#state-between-runs) |
 | Read series from Graphite | [Graphite](GRAPHITE.md) |
 | Read Kubernetes objects | [Kubernetes objects](KUBERNETES.md) |
 | Read an SNMP agent | [SNMP agents](SNMP.md) |
@@ -45,6 +47,8 @@ that does it, usually with an example to copy. New here? Start with
 | Check a DNS name | [DNS](DNS.md) |
 | Check a clock against an NTP server | [NTP](NTP.md) |
 | Check that a mail server takes a login, or a recipient, without sending | [SMTP](SMTP.md), in a build with the opt-in type |
+| Check that a RADIUS server answers, or that a login through it works | [RADIUS](RADIUS.md), in a build with the opt-in type |
+| Know when a domain's registration expires | [WHOIS](WHOIS.md), in a build with the opt-in type |
 
 ## Ask the right way
 
@@ -54,6 +58,7 @@ that does it, usually with an example to copy. New here? Start with
 | Put today's or yesterday's date in a request | [Dates and times](REQUESTS.md#dates-and-times) |
 | Ask only for what happened since the last scrape | [Since the last success](REQUESTS.md#since-the-last-success) |
 | Send a username and password, or a token from a file | [Reaching the target](AUTHENTICATION.md#reaching-the-target) |
+| Read a password or a token from Vault, Google Secret Manager or AWS Secrets Manager, not from a file | [Secret stores](AUTHENTICATION.md#secret-stores) |
 | Log in with a JSON request for a token | [A JSON login](AUTHENTICATION.md#a-json-login) |
 | Log in with OAuth 2.0 | [OAuth 2.0 client credentials](AUTHENTICATION.md#oauth-20-client-credentials) and [A user's refresh token](AUTHENTICATION.md#a-users-refresh-token) |
 | Log in to a site that needs several requests | [A login of several steps](AUTHENTICATION.md#a-login-of-several-steps) |

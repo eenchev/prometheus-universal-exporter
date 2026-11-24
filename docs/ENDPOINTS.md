@@ -6,7 +6,7 @@ the [command-line flags](FLAGS.md).
 
 | Path | Purpose |
 | --- | --- |
-| `/` | A landing page: the build, links to the endpoints, and when the last reload put something in force and [what it changed](CONFIGURATION.md#what-a-reload-changed). |
+| `/` | A landing page: the build, links to the endpoints, and when the last reload put something in force and [what it changed](CONFIGURATION.md#what-a-reload-changed), as a table. |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.debug`, a link into the debug page. See [Probing from the browser](AUTHENTICATION.md#probing-from-the-browser). |
 | `/debug` | With `--web.debug`: run a collector, configured or written there in the playground, and see each stage of its trip and the series it gives, on a pasted response or, at `full`, a fetched target. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |
 | `/debug/run` | With `--web.debug`: where the debug page posts each run, `POST` with a JSON body and `X-Debug-Run`, answered with the run's stages, series and report as JSON; any other method is answered `405`. See [Debugging collectors](CONFIGURATION.md#debugging-collectors). |

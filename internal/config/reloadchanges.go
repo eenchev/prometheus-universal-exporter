@@ -33,7 +33,23 @@ type ReloadSummary struct {
 	// Changes names the collectors and static targets added, removed and
 	// changed, a list at a time, or says "no changes".
 	Changes string
+	// Lists are the same changes a list at a time, for a page to lay out:
+	// the lists that are not empty, the collectors' before the static
+	// targets', and none when the reload changed nothing.
+	Lists []ReloadChangeList
 }
+
+// ReloadChangeList is one list of a reload's changes: what of, "collectors"
+// or "static targets", how they changed, "added", "removed" or "changed",
+// how many did, and the names of the first reloadChangesNamed of them.
+type ReloadChangeList struct {
+	What, How string
+	Count     int
+	Names     []string
+}
+
+// More is how many of the list's names are counted and not named.
+func (l ReloadChangeList) More() int { return l.Count - len(l.Names) }
 
 // LastReload is the summary of the last reload that put something in force
 // since the exporter started, and false when none has.
@@ -181,16 +197,9 @@ func targetChanges(before, after *model.StaticTargetFile) changeLists {
 // rest, or "no changes".
 func reloadChanges(what string, lists changeLists) string {
 	var parts []string
-	for _, list := range []struct {
-		how   string
-		names []string
-	}{{"added", lists.added}, {"removed", lists.removed}, {"changed", lists.changed}} {
-		if len(list.names) == 0 {
-			continue
-		}
-		shown := list.names[:min(len(list.names), reloadChangesNamed)]
-		text := what + " " + list.how + ": " + strings.Join(shown, ", ")
-		if rest := len(list.names) - len(shown); rest > 0 {
+	for _, list := range reloadChangeLists(what, lists) {
+		text := list.What + " " + list.How + ": " + strings.Join(list.Names, ", ")
+		if rest := list.More(); rest > 0 {
 			text += fmt.Sprintf(" and %d more", rest)
 		}
 		parts = append(parts, text)
@@ -199,6 +208,26 @@ func reloadChanges(what string, lists changeLists) string {
 		return noReloadChanges
 	}
 	return strings.Join(parts, "; ")
+}
+
+// reloadChangeLists are the lists of lists that are not empty, added,
+// removed and changed in that order, each with reloadChangesNamed of its
+// names at most.
+func reloadChangeLists(what string, lists changeLists) []ReloadChangeList {
+	var out []ReloadChangeList
+	for _, list := range []struct {
+		how   string
+		names []string
+	}{{"added", lists.added}, {"removed", lists.removed}, {"changed", lists.changed}} {
+		if len(list.names) == 0 {
+			continue
+		}
+		out = append(out, ReloadChangeList{
+			What: what, How: list.how, Count: len(list.names),
+			Names: slices.Clone(list.names[:min(len(list.names), reloadChangesNamed)]),
+		})
+	}
+	return out
 }
 
 // noReloadChanges is what a reload that changed nothing says.

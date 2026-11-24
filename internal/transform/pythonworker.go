@@ -2717,6 +2717,10 @@ while True:
             logged.append('\x00pue-log:%s\x00%s\x00'%(level,text))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
                'metric':metric,'fail':fail,'log':log_line,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
+        # transform.state: what the script's last run for this target left
+        # in state, which the exporter keeps (transform/pythonstate.go).
+        keeps='state' in p
+        if keeps: scope['state']=p['state']
         sink=printing[0]=io.StringIO()
         # The script's source, for its lines in a traceback.
         linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')
@@ -2727,6 +2731,16 @@ while True:
         result={'ok':True,'log':log}
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics
+        if keeps:
+            # As JSON in a string, which is written whatever else the
+            # answer holds, and is small: a dict, of what JSON carries,
+            # within 64 KiB.
+            left=scope.get('state')
+            if type(left) is not dict: raise TypeError('state is a %s when the script ends; it is the dict the exporter keeps for the script\'s next run, so change what is in it and leave it a dict'%left.__class__.__name__)
+            try: kept=json.dumps(left,allow_nan=False)
+            except (TypeError,ValueError) as e: raise TypeError('state holds what cannot be kept for the script\'s next run: %s; a str, an int, a float that is a number, a bool, None, a list and a dict with str keys can'%str(e)[:200]) from None
+            if len(kept)>65536: raise OverflowError('state is %d bytes as JSON when the script ends, and the exporter keeps at most 65536 for a script and target; keep less in it'%len(kept))
+            result['state']=kept
         try: answer(result)
         except TypeError as e:
             # What JSON cannot carry is said in a line, not as the frames
@@ -2739,4 +2753,8 @@ while True:
         if no_room is not None: failed(e,(no_room,)); continue
         failed(e,('MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory,) if max_memory>0 else None)
     except BaseException as e:
+        # A script that reads state without transform.state has no such
+        # name: its error says what gives it one, on the script's own line.
+        if isinstance(e,NameError) and str(e)=="name 'state' is not defined" and 'state' not in p:
+            e.args=("name 'state' is not defined: a script has state, the dict kept between its runs, when its collector sets transform.state: true",)
         failed(e)`

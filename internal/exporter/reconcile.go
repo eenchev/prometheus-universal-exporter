@@ -384,12 +384,16 @@ func (s *Server) applyFollowed(followed *followedConfig) {
 	s.appliedGeneration = followed.generation
 	var collectors []model.Collector
 	var hostRateLimits []model.HostRateLimit
+	var secretStores []model.SecretStore
 	if followed.config != nil {
 		collectors = followed.config.Collectors
 		hostRateLimits = followed.config.RateLimits
+		secretStores = followed.config.SecretStores
 	}
 	fetch.FollowConfiguration(collectors, staticTargetsOf(followed.targets))
 	fetch.FollowHostRateLimits(hostRateLimits)
+	fetch.FollowSecretStores(secretStores)
+	transform.FollowPythonStates(collectors)
 }
 
 // followPlannedHook, set by tests, is called when a following has been

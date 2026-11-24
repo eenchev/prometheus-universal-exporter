@@ -664,7 +664,10 @@ for them.
 published image. Its code, and the gRPC and protobuf libraries it needs, are
 behind its build tag, so a build with
 [`REQUEST_TYPES`](CONFIGURATION.md#choosing-request-types-at-build-time) that
-leaves it out links none of them and cannot load a `grpc` collector:
+leaves it out links none of them and cannot load a `grpc` collector, nor a
+collector with the [`protobuf` decoder](CONFIGURATION.md#protobuf-responses),
+which reads an HTTP answer that is one protobuf message with the same
+descriptor files:
 
 ```text
 make build REQUEST_TYPES=http,localfile,graphite

@@ -236,6 +236,8 @@ func checkSettingsApply(x *model.Collector) error {
 		return fmt.Errorf("collector %q sets transform.script, which is the script of a python transform, but its transform is %s; set transform.type to python, or, to change the response before the %s rules read it, move the code to transform.pre_script", x.Name, t.Type, t.Type)
 	case len(t.Libraries) > 0 && !runsPython:
 		return fmt.Errorf("collector %q sets transform.libraries, which are imported for the collector's Python code, but it has neither a python transform nor a pre_script", x.Name)
+	case t.State && !runsPython:
+		return fmt.Errorf("collector %q sets transform.state, which keeps a dict between the runs of the collector's Python code, but it has neither a python transform nor a pre_script", x.Name)
 	case len(t.RequiredLibs) > 0 && !runsPython:
 		return fmt.Errorf("collector %q sets transform.required_libs, which are imported for the collector's Python code, but it has neither a python transform nor a pre_script", x.Name)
 	}

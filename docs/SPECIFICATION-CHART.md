@@ -1256,6 +1256,10 @@ The Helm chart README MUST document:
 - Configuration reload behavior
 - Extra volumes, volume mounts and command-line arguments, and which collisions
   the chart rejects
+- Secret stores: that Vault's Kubernetes login needs the pods' token
+  mounted, `serviceAccount.automount` or a projected one; the annotations
+  AWS and Google take the pods' identity from; and that with the allocator
+  the exporter pods read from the stores
 - The service account: the one the chart creates, running as an existing one
   named by `serviceAccount.name`, when a token is mounted and which account
   `kubernetesAccess` binds, that annotations apply only to a created account,

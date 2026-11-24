@@ -75,6 +75,10 @@ const (
 // comment where a row writes it.
 const hostRateLimit = "rate_limits:\n  - rate_limit:\n      requests_per_second: 1\n    hosts: [api.example]\n    # entry\n"
 
+// secretStore is an entry of secret_stores, a vault store that logs in with
+// a token, with a comment where a row writes a key of it.
+const secretStore = "secret_stores:\n  - name: vault\n    type: vault\n    address: https://vault.example.com:8200\n    auth: {method: token}\n    # entry\n"
+
 // switchedOnOTLP is a configuration with its otlp block switched on.
 const switchedOnOTLP = "otlp:\n  enabled: true\n  endpoint: http://collector.invalid:4318/v1/metrics\n  # otlp\n" + testutil.MinimalConfig
 
@@ -198,6 +202,15 @@ func httpSchemaKeys() []schemaKey {
 		// An entry of rate_limits needs a name, which labels its
 		// self-metrics, and each of its hosts something to match.
 		{key: "rate_limits[].name", document: jqCollector + hostRateLimit, at: "    # entry\n", setting: "    name: %s\n", valid: "api", invalid: "bad-name"},
+		// An entry of secret_stores needs a name a reference can write, a
+		// type, and for vault a way to log in; its durations bound
+		// something, zero the default or, of cache_ttl and max_stale, off.
+		{key: "secret_stores[].name", document: jqCollector + strings.Replace(secretStore, "  - name: vault\n", "  - # name\n", 1), at: "  - # name\n", setting: "  - name: %s\n", valid: "vault-prod", invalid: `"my store"`},
+		{key: "secret_stores[].type", document: jqCollector + "secret_stores:\n  - name: gcp\n    project: demo\n    # entry\n", at: "    # entry\n", setting: "    type: %s\n", valid: "gcp", invalid: "azure"},
+		{key: "secret_stores[].auth.method", document: jqCollector + strings.Replace(secretStore, "auth: {method: token}\n", "auth:\n      token_file: /run/vault/token\n      # method\n", 1), at: "      # method\n", setting: "      method: %s\n", valid: "token", invalid: "ldap"},
+		{key: "secret_stores[].cache_ttl", document: jqCollector + secretStore, at: "    # entry\n", setting: "    cache_ttl: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "secret_stores[].max_stale", document: jqCollector + secretStore, at: "    # entry\n", setting: "    max_stale: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
+		{key: "secret_stores[].timeout", document: jqCollector + secretStore, at: "    # entry\n", setting: "    timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "rate_limits[].hosts[]", document: jqCollector + hostRateLimit + "    name: api\n", at: "    hosts: [api.example]\n", setting: "    hosts: [%s]\n", valid: "api.example"},
 		{key: "collectors[].request.accept_status[]", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "collectors[].request.accept_status[]", of: "written with a point", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},

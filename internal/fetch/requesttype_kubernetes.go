@@ -392,6 +392,20 @@ type kubernetesConnection struct {
 	tokenFile string
 }
 
+// kubernetesToken is the token of request.bearer_token_file: the file's, or
+// the secret's when the key holds a reference to a secret store, as every
+// credential file may (secretstore.go). An empty one is refused either way.
+func kubernetesToken(file string) (string, error) {
+	if !IsSecretReference(file) {
+		return kubeapi.ReadToken(file)
+	}
+	token, err := ReadCredentialFile(file)
+	if err == nil && token == "" {
+		err = fmt.Errorf("%s is empty", strings.TrimSpace(file))
+	}
+	return token, err
+}
+
 func kubernetesConnectionOf(c *model.Collector) (kubernetesConnection, error) {
 	if kubernetesRequest(c).APIServer != "" {
 		server, err := parseKubernetesAPIServer(kubernetesRequest(c).APIServer)
@@ -497,7 +511,7 @@ func fetchKubernetes(ctx context.Context, target string, c *model.Collector, ove
 	}
 	token := ""
 	if conn.tokenFile != "" {
-		if token, err = kubeapi.ReadToken(conn.tokenFile); err != nil {
+		if token, err = kubernetesToken(conn.tokenFile); err != nil {
 			return nil, fmt.Errorf("the token to list %s with: %w", kubernetesRequest(c).Resource, err)
 		}
 	}
@@ -1130,7 +1144,7 @@ func checkKubernetesFiles(c *model.Collector, t *model.StaticTarget) []string {
 		return warnings
 	}
 	if c.Request.BearerTokenFile != "" {
-		if _, err := kubeapi.ReadToken(c.Request.BearerTokenFile); err != nil {
+		if _, err := kubernetesToken(c.Request.BearerTokenFile); err != nil {
 			warnings = append(warnings, fmt.Sprintf("collector %q: request.bearer_token_file: %v; a scrape would fail on it now (the file is read at each scrape, so one put in place later is used then)", c.Name, err))
 		}
 	}

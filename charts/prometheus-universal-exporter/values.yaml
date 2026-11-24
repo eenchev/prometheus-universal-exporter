@@ -20,7 +20,9 @@ imagePullSecrets: []
 # pods as the default account other workloads share, and on annotations,
 # which belong on the existing account itself. Either way the pods mount no
 # token unless automount or kubernetesAccess asks, and kubernetesAccess
-# binds its Roles to this account.
+# binds its Roles to this account. A secret store that logs in to Vault
+# with Kubernetes auth reads that token, so it needs automount, or a
+# projected token named with the store's auth.jwt_file.
 serviceAccount:
   create: true
   automount: false

@@ -182,10 +182,20 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	// The entries of rate_limits are in force from the start, counting
 	// since it; a reload's are followed with its collectors (reconcile).
 	var hostRateLimits []model.HostRateLimit
+	var secretStores []model.SecretStore
 	if cfg != nil {
 		hostRateLimits = cfg.RateLimits
+		secretStores = cfg.SecretStores
 	}
 	fetch.FollowHostRateLimits(hostRateLimits)
+	// So are the secret stores, which the first scrape may read from.
+	fetch.FollowSecretStores(secretStores)
+	// And the states of the scripts are those of its collectors.
+	var collectors []model.Collector
+	if cfg != nil {
+		collectors = cfg.Collectors
+	}
+	transform.FollowPythonStates(collectors)
 	// The state kept per collector follows a reload when it is made
 	// (reconcile.go), and what following it needs that takes long is worked
 	// out before the reload puts its configuration in force (prepareReload).

@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_kubernetes || request_type_icmp || request_type_ntp || request_type_tcp
+//go:build !select_request_types || request_type_kubernetes || request_type_icmp || request_type_ntp || request_type_tcp || request_type_radius || request_type_whois
 
 package fetch
 

@@ -365,6 +365,14 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 	if hook := targetsValidatedHook.Load(); hook != nil {
 		(*hook)()
 	}
+	// A target's credential file may be a reference to a secret store of
+	// the configuration, as a collector's may.
+	references := fetch.NewSecretReferences(c.SecretStores)
+	for i := range f.Targets {
+		if err := references.Check("target", f.Targets[i].Name, &f.Targets[i]); err != nil {
+			return err
+		}
+	}
 	for i := range f.Targets {
 		t := &f.Targets[i]
 		if !t.ExportViaOTLP {

@@ -558,7 +558,13 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
-	return withDefaultsRules(collectorSchemaRules())
+	rules := withDefaultsRules(collectorSchemaRules())
+	// The keys of an entry of secret_stores that are of a type of store
+	// are described by that type (fetch.SecretStoreType.KeyRules).
+	for key, rule := range fetch.SecretStoreKeyRules() {
+		rules["secret_stores[]."+key] = rule
+	}
+	return rules
 }
 
 // withDefaultsRules adds to rules those of a defaults block, the same, key
@@ -600,15 +606,22 @@ func collectorSchemaRules() map[string]map[string]any {
 			"allOf":       collectorTLSPairRule(),
 			"description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
 		},
-		"collectors":               {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
-		"collector_files":          {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and their defaults, and nothing else. See docs/CONFIGURATION.md#collector-files."},
-		"collector_files[]":        {"type": "string", "minLength": 1},
-		"rate_limits":              {"description": "Rate limits per host, shared by every collector: every http and graphite request to one of an entry's hosts, each attempt, page, followed redirect and login request counted, from any collector, probe or static target, takes a turn under the entry's rate_limit, as well as under its collector's own request.rate_limit. The first entry whose hosts match applies. Other request types are not limited. See docs/REQUESTS.md#rate-limits-per-host."},
-		"rate_limits[]":            {"required": []string{"name", "hosts", "rate_limit"}},
-		"rate_limits[].name":       {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name of the entry, the rule label of its self-metrics http_exporter_host_rate_limit_waits_total and http_exporter_host_rate_limit_refused_total."},
-		"rate_limits[].hosts":      {"minItems": 1, "description": "The hosts the entry limits, all ports and schemes of each together: host names, in any case, IP addresses, and *.example.com wildcards, which match every subdomain of example.com but not example.com itself. No scheme, port or path. A host may be listed in one entry only."},
-		"rate_limits[].hosts[]":    {"minLength": 1},
-		"rate_limits[].rate_limit": {"required": []string{"requests_per_second"}, "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once."},
+		"collectors":                                   {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
+		"collector_files":                              {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and their defaults, and nothing else. See docs/CONFIGURATION.md#collector-files."},
+		"collector_files[]":                            {"type": "string", "minLength": 1},
+		"secret_stores":                                {"description": "Secret stores a credential is read from in place of a file, where a secret may not be written to disk. A key that names a credential file, such as password_file or bearer_token_file, takes a reference to one: secret://<name>/<path>#<field>. What a store answered is kept in memory for cache_ttl. See docs/AUTHENTICATION.md#secret-stores."},
+		"secret_stores[]":                              {"required": []string{"name", "type"}},
+		"secret_stores[].name":                         {"pattern": `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`, "description": "Required. Unique name of the store, which a reference names it by and its self-metrics are labelled with: letters, digits, hyphens and underscores."},
+		"secret_stores[].type":                         {"enum": fetch.SecretStoreTypeNames(), "description": "Required. The kind of store: vault, HashiCorp Vault; gcp, Google Cloud Secret Manager; aws, AWS Secrets Manager, in the builds that have the s3file request type. Each takes the keys described with its name."},
+		"secret_stores[].cache_ttl":                    {"description": "How long a secret read is used before the store is asked again; 5m when left out, 0s to ask at every read."},
+		"secret_stores[].max_stale":                    {"description": "How long past cache_ttl a secret read before is still used while the store cannot be asked; 1h when left out, 0s for never."},
+		"secret_stores[].timeout":                      {"description": "The most one request to the store takes, at most 1m; 5s when left out."},
+		"rate_limits":                                  {"description": "Rate limits per host, shared by every collector: every http and graphite request to one of an entry's hosts, each attempt, page, followed redirect and login request counted, from any collector, probe or static target, takes a turn under the entry's rate_limit, as well as under its collector's own request.rate_limit. The first entry whose hosts match applies. Other request types are not limited. See docs/REQUESTS.md#rate-limits-per-host."},
+		"rate_limits[]":                                {"required": []string{"name", "hosts", "rate_limit"}},
+		"rate_limits[].name":                           {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name of the entry, the rule label of its self-metrics http_exporter_host_rate_limit_waits_total and http_exporter_host_rate_limit_refused_total."},
+		"rate_limits[].hosts":                          {"minItems": 1, "description": "The hosts the entry limits, all ports and schemes of each together: host names, in any case, IP addresses, and *.example.com wildcards, which match every subdomain of example.com but not example.com itself. No scheme, port or path. A host may be listed in one entry only."},
+		"rate_limits[].hosts[]":                        {"minLength": 1},
+		"rate_limits[].rate_limit":                     {"required": []string{"requests_per_second"}, "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once."},
 		"rate_limits[].rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
 		"rate_limits[].rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
 		// What a collector must have, and each of its rules a name.
@@ -639,9 +652,9 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].request.max_files":                  {"description": "localfile, sshfile and s3file with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
 		"collectors[].request.max_total_bytes":            {"description": "localfile, sshfile and s3file with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
 		"collectors[].request.max_age":                    {"description": "localfile, sshfile and s3file: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
-		"collectors[].request.username":                   {"not": onlyBlanks(), "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. Not blanks alone."},
+		"collectors[].request.username":                   {"not": onlyBlanks(), "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. Not blanks alone."},
 		"collectors[].request.private_key_file":           {"not": onlyBlanks(), "description": "sshfile and sshexec: the file of the private key the account authenticates with, tried before password_file. sql, the snowflake driver: the unencrypted PKCS#8 RSA key of key-pair authentication, instead of password_file. Read when a connection is made, so a key replaced on disk is used by the next one. See docs/SSHFILE.md#authentication and docs/SQL.md#authentication."},
-		"collectors[].request.password_file":              {"not": onlyBlanks(), "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2."},
+		"collectors[].request.password_file":              {"not": onlyBlanks(), "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape."},
 		"collectors[].request.auth":                       {"enum": optionalEnum([]string{"plain", "login", "cram-md5", "xoauth2", "oauthbearer", "user", "apop"}), "description": "smtp, imap and pop3: the mechanism the session logs in with: plain, login or cram-md5, with username and password_file, or xoauth2 or oauthbearer, with username and xoauth2; pop3 also takes user (USER and PASS) and apop, each with username and password_file. Left out, the type's choice of what the server offers, or xoauth2 when xoauth2 is set."},
 		"collectors[].request.allow_plaintext":            {"description": "imap and pop3: log in over a connection that is not TLS, to a server that offers none. The password is then sent as it is; left out, such a scrape fails before it logs in."},
 		"collectors[].request.xoauth2":                    {"description": "smtp, imap and pop3: where the OAuth 2.0 access token of an XOAUTH2 or OAUTHBEARER login comes from: token_file, a file that holds one, or a grant at token_url, with client_id or client_id_file: the refresh token grant, with refresh_token_file and, for a confidential client, client_secret_file, or grant: client_credentials, an application's own token, with client_secret_file. See docs/SMTP.md#xoauth2."},
@@ -691,16 +704,21 @@ func collectorSchemaRules() map[string]map[string]any {
 			"enum":        optionalEnum(model.DecoderTypes),
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None. binary reads the answer of a binary protocol by the layout of response.binary, never chosen by auto.",
 		},
-		"collectors[].response.binary":                     {"description": "binary decoder, required with it: the layout a binary answer is read by, its fields in order, into a document of each field's name and value for a jq, yq or python transform. See docs/CONFIGURATION.md#binary-answers."},
-		"collectors[].response.binary.byte_order":          {"enum": optionalEnum(model.BinaryByteOrders), "description": "binary decoder: the byte order of the numbers of a field that sets none: big, the default, as network protocols write them, or little."},
-		"collectors[].response.binary.fields":              {"maxItems": model.MaxBinaryFields, "description": "binary decoder: the fields, read in order, each from the byte after the one before it unless it sets offset. A field past the end of the answer fails the decode; bytes after the last are left unread."},
-		"collectors[].response.binary.fields[]":            {"required": []string{"type"}},
-		"collectors[].response.binary.fields[].name":       {"description": "The field's name in the document, unique, such as registers; required but for a skip, which has none."},
-		"collectors[].response.binary.fields[].type":       {"enum": model.BinaryTypes, "description": "Required. u8, u16, u32, u64: unsigned integers of 1, 2, 4 and 8 bytes; i8 to i64 two's complement ones; f32, f64: IEEE 754 floats; string: length bytes of text; cstring: text up to a NUL byte; skip: length bytes passed over."},
-		"collectors[].response.binary.fields[].offset":     {"minimum": 0, "description": "The byte the field starts at, from 0 at the start of the answer; left out, right after the field before it."},
-		"collectors[].response.binary.fields[].count":      {"minimum": 0, "maximum": model.MaxBinaryCount, "description": "Numbers only: the field is a list of this many values of its type, one after another, such as a run of registers; left out, one value and no list."},
-		"collectors[].response.binary.fields[].length":     {"minimum": 0, "description": "string and skip, required: how many bytes; cstring: the most bytes read for its NUL; no number takes it."},
-		"collectors[].response.binary.fields[].byte_order": {"enum": optionalEnum(model.BinaryByteOrders), "description": "The field's byte order, big or little, in place of the layout's."},
+		"collectors[].response.binary":                      {"description": "binary decoder, required with it: the layout a binary answer is read by, its fields in order, into a document of each field's name and value for a jq, yq or python transform. See docs/CONFIGURATION.md#binary-answers."},
+		"collectors[].response.protobuf":                    {"description": "protobuf decoder: the message a body is read as and the files that describe it, .proto files or a descriptor set, as a grpc request names them. In the builds that have the grpc request type. See docs/CONFIGURATION.md#protobuf-responses."},
+		"collectors[].response.protobuf.message":            {"description": "protobuf decoder: the message the body is, by its full name, package and all, such as metrics.v1.Report. Required."},
+		"collectors[].response.protobuf.proto_files":        {"description": "protobuf decoder: the .proto files that define the message, compiled when the configuration loads."},
+		"collectors[].response.protobuf.proto_import_paths": {"description": "protobuf decoder: the directories the imports of proto_files are resolved in, as protoc -I; each file's own directory when left out."},
+		"collectors[].response.protobuf.protoset_file":      {"description": "protobuf decoder: in place of proto_files, a descriptor set written with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes."},
+		"collectors[].response.binary.byte_order":           {"enum": optionalEnum(model.BinaryByteOrders), "description": "binary decoder: the byte order of the numbers of a field that sets none: big, the default, as network protocols write them, or little."},
+		"collectors[].response.binary.fields":               {"maxItems": model.MaxBinaryFields, "description": "binary decoder: the fields, read in order, each from the byte after the one before it unless it sets offset. A field past the end of the answer fails the decode; bytes after the last are left unread."},
+		"collectors[].response.binary.fields[]":             {"required": []string{"type"}},
+		"collectors[].response.binary.fields[].name":        {"description": "The field's name in the document, unique, such as registers; required but for a skip, which has none."},
+		"collectors[].response.binary.fields[].type":        {"enum": model.BinaryTypes, "description": "Required. u8, u16, u32, u64: unsigned integers of 1, 2, 4 and 8 bytes; i8 to i64 two's complement ones; f32, f64: IEEE 754 floats; string: length bytes of text; cstring: text up to a NUL byte; skip: length bytes passed over."},
+		"collectors[].response.binary.fields[].offset":      {"minimum": 0, "description": "The byte the field starts at, from 0 at the start of the answer; left out, right after the field before it."},
+		"collectors[].response.binary.fields[].count":       {"minimum": 0, "maximum": model.MaxBinaryCount, "description": "Numbers only: the field is a list of this many values of its type, one after another, such as a run of registers; left out, one value and no list."},
+		"collectors[].response.binary.fields[].length":      {"minimum": 0, "description": "string and skip, required: how many bytes; cstring: the most bytes read for its NUL; no number takes it."},
+		"collectors[].response.binary.fields[].byte_order":  {"enum": optionalEnum(model.BinaryByteOrders), "description": "The field's byte order, big or little, in place of the layout's."},
 		"collectors[].transform.type": {
 			"enum":        model.TransformTypes,
 			"description": "How metrics are extracted from the decoded response. Required.",
@@ -709,6 +727,7 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].transform.libraries[]":             libraries,
 		"collectors[].transform.required_libs[]":         libraries,
 		"collectors[].transform.pre_script":              {"description": "Python run before the transform. It receives data and must leave its result in data."},
+		"collectors[].transform.state":                   {"description": "python: true gives the collector's scripts a dict named state that the exporter keeps from one run of a script to its next for the same target, in memory: what a run leaves in it, JSON of at most 64KiB, is what the next finds. For a script that counts what is new since it last ran. See docs/PYTHON.md#state-between-runs."},
 		"collectors[].transform.script":                  {"description": "Python for the python transform. It emits metrics with metric(...)."},
 		"collectors[].error_handling.on_fetch_error":     errorPolicy,
 		"collectors[].error_handling.on_decode_error":    errorPolicy,

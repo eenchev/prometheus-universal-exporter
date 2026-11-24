@@ -294,6 +294,13 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_cache_revalidations_total":                  "Trips of this http or graphite collector that revalidated an expired cached response with If-None-Match or If-Modified-Since (cache.revalidate), by result: not_modified (the target answered 304 and the cached body was transformed again) or modified (it sent a new response the collector accepts).",
 	"http_exporter_host_rate_limit_waits_total":                "Requests of every http and graphite collector together, each attempt, page, redirect and login request counted, that waited for their turn under this entry of rate_limits before they were sent.",
 	"http_exporter_host_rate_limit_refused_total":              "Requests of every http and graphite collector together that this entry of rate_limits refused before they were sent, because their turn would have come at or past their deadline; the scrape failed with them.",
+	"http_exporter_secret_store_secrets":                       "Secrets this entry of secret_stores keeps in memory now: those it has read and a credential may still be read from, within cache_ttl and max_stale of the reading.",
+	"http_exporter_python_states":                              "States the exporter keeps of the Python scripts of this collector, which sets transform.state: one for each script, target and set of probe parameters that left one.",
+	"http_exporter_python_state_bytes":                         "Bytes of those states, as the JSON they are kept as, together.",
+	"http_exporter_python_states_dropped_total":                "States of this collector's scripts that the exporter dropped to keep the states of every collector within their number and size, those used longest ago first; the script of each started from an empty state at its next run.",
+	"http_exporter_secret_store_requests_total":                "Requests the exporter made to this entry of secret_stores for a secret: the reads its cache did not answer.",
+	"http_exporter_secret_store_failures_total":                "Requests to this entry of secret_stores that failed: the store could not be reached, refused the exporter, or had no such secret.",
+	"http_exporter_secret_store_stale_reads_total":             "Credentials read from a secret this entry of secret_stores answered more than cache_ttl ago, because the store could not be asked again; max_stale bounds how long one is.",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
@@ -570,6 +577,8 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, cacheRevalidationMetrics(names, values, requestTypes)...)
 	out = append(out, hostRateLimitMetrics()...)
+	out = append(out, secretStoreMetrics()...)
+	out = append(out, s.pythonStateMetrics(values)...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
@@ -628,6 +637,79 @@ func cacheRevalidationMetrics(names []string, values map[string]statsValues, req
 				Name: name, Help: exporterMetricHelp[name], Type: model.CounterMetricType,
 				Value: float64(r.value(v)), Labels: map[string]string{"collector": collector, "result": r.result}, Created: createdMillis(v.created),
 			})
+		}
+	}
+	return out
+}
+
+// secretStoreMetrics are the families of secret_stores: a series of each
+// for every store in force, labelled by its name, from zero. A store is the
+// exporter's, read by any collector, so the families have no collector
+// label.
+func secretStoreMetrics() []model.Metric {
+	var out []model.Metric
+	counts := fetch.SecretStoreCounts()
+	for _, count := range counts {
+		const name = "http_exporter_secret_store_secrets"
+		out = append(out, model.Metric{Name: name, Help: exporterMetricHelp[name], Type: model.GaugeMetricType, Value: float64(count.Secrets), Labels: map[string]string{"store": count.Name}})
+	}
+	for _, family := range []struct {
+		name  string
+		value func(fetch.SecretStoreCount) uint64
+	}{
+		{"http_exporter_secret_store_requests_total", func(c fetch.SecretStoreCount) uint64 { return c.Requests }},
+		{"http_exporter_secret_store_failures_total", func(c fetch.SecretStoreCount) uint64 { return c.Failed }},
+		{"http_exporter_secret_store_stale_reads_total", func(c fetch.SecretStoreCount) uint64 { return c.Stale }},
+	} {
+		for _, count := range counts {
+			created := exporterStart()
+			if !count.Since.IsZero() {
+				created = count.Since
+			}
+			out = append(out, model.Metric{Name: family.name, Help: exporterMetricHelp[family.name], Type: model.CounterMetricType, Value: float64(family.value(count)), Labels: map[string]string{"store": count.Name}, Created: createdMillis(created)})
+		}
+	}
+	return out
+}
+
+// pythonStateMetrics are the families of transform.state: a series of each
+// for every collector whose scripts keep a state, from zero, so a collector
+// without the key has none. The states are counted where they are kept
+// (transform.PythonStateCounts), and follow a reload as the collector's
+// other counts do (transform.FollowPythonStates): the dropped ones count
+// since the collector's counters began, which values says.
+func (s *Server) pythonStateMetrics(values map[string]statsValues) []model.Metric {
+	var out []model.Metric
+	collectors := s.manager.Get().Collectors
+	var counts map[string]transform.PythonStateCount
+	for i := range collectors {
+		c := &collectors[i]
+		if !c.Transform.State {
+			continue
+		}
+		if counts == nil {
+			counts = transform.PythonStateCounts()
+		}
+		count := counts[c.Name]
+		labels := map[string]string{"collector": c.Name}
+		for _, family := range []struct {
+			name  string
+			kind  model.MetricType
+			value float64
+		}{
+			{"http_exporter_python_states", model.GaugeMetricType, float64(count.States)},
+			{"http_exporter_python_state_bytes", model.GaugeMetricType, float64(count.Bytes)},
+			{"http_exporter_python_states_dropped_total", model.CounterMetricType, float64(count.Dropped)},
+		} {
+			m := model.Metric{Name: family.name, Help: exporterMetricHelp[family.name], Type: family.kind, Value: family.value, Labels: labels}
+			if family.kind == model.CounterMetricType {
+				created := exporterStart()
+				if v, counted := values[c.Name]; counted && !v.created.IsZero() {
+					created = v.created
+				}
+				m.Created = createdMillis(created)
+			}
+			out = append(out, m)
 		}
 	}
 	return out

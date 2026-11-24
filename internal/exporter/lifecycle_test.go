@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -246,12 +247,48 @@ func TestTheLandingPageShowsTheLastReload(t *testing.T) {
 	}
 	last, _ := r.manager.LastReload()
 	page := getPage(t, r.server, "/")
-	requireContains(t, page, "Last reloaded at "+last.At.UTC().Format(time.RFC3339)+": collectors added: third; collectors removed: second; static targets added: two.")
+	requireContains(t, page, "Last reloaded at "+last.At.UTC().Format(time.RFC3339)+". It changed:")
+	for _, row := range []string{
+		`<tr><td class="what">Collectors</td><td>added</td><td class="num">1</td><td class="names"><code>third</code> </td></tr>`,
+		`<tr><td class="what">Collectors</td><td>removed</td><td class="num">1</td><td class="names"><code>second</code> </td></tr>`,
+		`<tr><td class="what">Static targets</td><td>added</td><td class="num">1</td><td class="names"><code>two</code> </td></tr>`,
+	} {
+		requireContains(t, page, row)
+	}
+	if strings.Contains(page, "collectors added: third") {
+		t.Error("the page gives the changes as a sentence beside the table")
+	}
 	if strings.Contains(page, "Not reloaded") {
 		t.Error("the page says there was no reload after one")
 	}
 	if err := r.manager.Reload(config.ReloadTriggerHTTP); err != nil {
 		t.Fatal(err)
 	}
-	requireContains(t, getPage(t, r.server, "/"), ": no changes.")
+	page = getPage(t, r.server, "/")
+	requireContains(t, page, ": no changes.")
+	if strings.Contains(page, "<table") {
+		t.Error("a reload that changed nothing has a table")
+	}
+}
+
+// A list of the table names ten and counts the rest, with how many changed
+// in all.
+func TestTheLandingPageCountsTheChangesItDoesNotName(t *testing.T) {
+	const head = "interval: 1m\ntargets:\n  - name: base\n    collector: first\n    target: http://a.example\n"
+	r := newReloadable(t, testutil.CollectorsDocument("first"), head)
+	var targets strings.Builder
+	targets.WriteString(head)
+	for i := range 13 {
+		fmt.Fprintf(&targets, "  - name: t%02d\n    collector: first\n    target: http://a.example\n", i)
+	}
+	r.write(r.targets, targets.String())
+	if err := r.manager.Reload(config.ReloadTriggerHTTP); err != nil {
+		t.Fatal(err)
+	}
+	page := getPage(t, r.server, "/")
+	requireContains(t, page, `<td class="what">Static targets</td><td>added</td><td class="num">13</td>`)
+	requireContains(t, page, `<code>t09</code> <span class="more">and 3 more</span></td>`)
+	if strings.Contains(page, "<code>t10</code>") {
+		t.Error("the page names more than ten of a list")
+	}
 }

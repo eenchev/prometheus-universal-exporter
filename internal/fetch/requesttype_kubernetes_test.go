@@ -614,3 +614,34 @@ func TestAKubernetesListingCarriesItsTraceparent(t *testing.T) {
 		t.Errorf("without propagation the request carries %q and %q", got.Traceparent, got.Tracestate)
 	}
 }
+
+// The token may be in a secret store: request.bearer_token_file takes a
+// reference as every credential file does, the listing is sent with the
+// secret, and --dry-run reads it from the store.
+func TestAKubernetesCollectorReadsItsTokenFromASecretStore(t *testing.T) {
+	s := kubetest.New(t)
+	s.Serve("/api/v1/namespaces/shop/pods", kubetest.List{Kind: "PodList", APIVersion: "v1"})
+	store := &memoryStore{secrets: map[string]SecretDocument{"kube": {Text: " token-1\n"}, "none": {Text: "\n"}}}
+	registerSecretStoreType(&SecretStoreType{Name: "memory", New: func(model.SecretStore, time.Duration) (SecretBackend, error) { return store, nil }})
+	t.Cleanup(func() { delete(secretStoreTypes, "memory") })
+	storesInForce(t, model.SecretStore{Name: "m", Type: "memory"})
+	c := kubernetesCollector(t, "", "pods", func(c *model.Collector) {
+		editKubernetes(c, func(r *KubernetesConfig) { r.APIServer, r.Namespaces = s.URL, []string{"shop"} })
+		c.Request.TLS.CAFile = filepath.Join(s.Dir, "ca.crt")
+		c.Request.BearerTokenFile = "secret://m/kube"
+	})
+	ctx, trace := WithRequestTrace(context.Background())
+	if _, err := FetchCollector(ctx, "", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if requests := trace.Requests(); len(requests) != 1 || requests[0].Header.Get("Authorization") != "Bearer token-1" {
+		t.Errorf("traced %+v", requests)
+	}
+	if warnings := FileWarnings(c, nil); len(warnings) != 0 {
+		t.Errorf("warnings %v", warnings)
+	}
+	c.Request.BearerTokenFile = "secret://m/none"
+	if _, err := FetchCollector(context.Background(), "", c, RequestOverrides{}, nil); err == nil || !strings.Contains(err.Error(), "secret://m/none is empty") {
+		t.Errorf("an empty secret: %v", err)
+	}
+}

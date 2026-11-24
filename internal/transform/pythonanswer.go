@@ -86,6 +86,7 @@ func readPythonAnswer(line []byte) (*pythonOutput, bool) {
 		sawError
 		sawMetrics
 		sawData
+		sawState
 	)
 	seen := 0
 	for {
@@ -118,6 +119,11 @@ func readPythonAnswer(line []byte) (*pythonOutput, bool) {
 		case "error":
 			saw = sawError
 			if out.Error, ok = a.string(answerOnce); !ok {
+				return nil, false
+			}
+		case "state":
+			saw = sawState
+			if out.State, ok = a.string(answerOnce); !ok {
 				return nil, false
 			}
 		case "metrics":

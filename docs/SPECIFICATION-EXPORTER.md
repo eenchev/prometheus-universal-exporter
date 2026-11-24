@@ -30,9 +30,9 @@ The exporter MUST:
 
 - Discover targets through Prometheus Operator `ServiceMonitor` / `PodMonitor` rather than hardcoding target URLs in the exporter configuration.
 - Select a configured `collector` through a Prometheus scrape parameter, e.g. `/probe?target=<TARGET>&collector=<COLLECTOR>`.
-- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`).
+- Reach its sources itself, each through a request type (§ 5.1): HTTP/HTTPS endpoints, including authentication, custom headers, TLS configuration, timeouts, and HTTP methods (`http`); gRPC methods (`grpc`); Graphite's render API (`graphite`); files on the exporter's host (`localfile`) or on another over SSH (`sshfile`); a command's output on another host over SSH (`sshexec`); SQL databases (`sql`); DNS lookups (`dns`); TLS handshakes (`tlscert`); NTP servers' time (`ntp`); Kubernetes API listings (`kubernetes`); objects in S3 (`s3file`); the INFO and read-only commands of Redis and Valkey servers (`redis`); the answers of text-protocol services to a line sent over TCP, over UDP or a Unix socket, and whether a port takes a connection (`tcp`); searches of LDAP directories (`ldap`); the echo replies of hosts pinged over ICMP (`icmp`); the objects and tables of SNMP agents, v1, v2c and v3 (`snmp`); and, in a build that asks for them, mail servers' sessions (`smtp`), Modbus TCP devices' registers (`modbus`), MQTT brokers' topics (`mqtt`), WebSocket endpoints' messages (`websocket`), files on FTP servers (`ftp`), the mailboxes of a mail account over IMAP (`imap`) and a mailbox over POP3 (`pop3`), a login against a RADIUS server (`radius`) and the registration of a domain (`whois`).
 - Support multiple response decoders as first-class peers.
-- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, and Python.
+- Support JSON, NDJSON, YAML, TOML, INI, XML, CSV, HTML, logfmt, Prometheus exposition format, plain text, Graphite, binary layouts, protobuf messages, and Python.
 - Support jq transformations for JSON.
 - Support yq transformations for YAML.
 - Support XPath for XML/HTML.
@@ -714,7 +714,7 @@ Every collector MUST declare `request.type`, which selects how it reaches its
 data. `http`, `localfile`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`,
 `tlscert`, `ntp`, `s3file`, `kubernetes`, `redis`, `tcp`, `ldap`, `sshexec`,
 `icmp` and `snmp` are implemented, and so are the opt-in `smtp`,
-`modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. The
+`modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -776,7 +776,7 @@ Which request types a binary carries MUST be decided at build time, so a build
 can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type but the opt-in ones. An opt-in type is one few deployments would want
-in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3`. No build
+in the binary, for the libraries it links or for what it speaks: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois`. No build
 MAY carry an opt-in type unless asked for it by its tag, and the source MUST
 list the opt-in types.
 
@@ -841,7 +841,7 @@ list the opt-in types.
   three default drivers and none of the opt-in ones in a build with it, the
   default build included, and an opt-in driver's modules — Snowflake's AWS
   and Azure SDKs and Apache Arrow among them — only in a build that asks for
-  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` and `pop3` MUST
+  that driver. `dns`, `tlscert`, `ntp`, `kubernetes`, `redis`, `tcp`, `ldap`, `icmp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` and `whois` MUST
   import nothing outside the standard library and the module's own packages
   — no Kubernetes, Redis or LDAP client library, the stand-in servers of
   `redis`'s and `ldap`'s tests (`internal/redistest`, `internal/ldaptest`)
@@ -1265,6 +1265,7 @@ as it is to the rest of this specification:
 - [`mqtt`](SPECIFICATION-MQTT.md)
 - [`ntp`](SPECIFICATION-NTP.md)
 - [`pop3`](SPECIFICATION-POP3.md)
+- [`radius`](SPECIFICATION-RADIUS.md)
 - [`redis`](SPECIFICATION-REDIS.md)
 - [`s3file`](SPECIFICATION-S3FILE.md)
 - [`smtp`](SPECIFICATION-SMTP.md)
@@ -1275,6 +1276,7 @@ as it is to the rest of this specification:
 - [`tcp`](SPECIFICATION-TCP.md)
 - [`tlscert`](SPECIFICATION-TLSCERT.md)
 - [`websocket`](SPECIFICATION-WEBSOCKET.md)
+- [`whois`](SPECIFICATION-WHOIS.md)
 
 ---
 
@@ -1360,7 +1362,7 @@ ambiguous or incorrectly labeled endpoints.
 
 Which decoder's document each transform reads MUST be held in one table, read
 by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml`,
-`graphite`, `ndjson`, `logfmt`, `toml`, `ini` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+`graphite`, `ndjson`, `logfmt`, `toml`, `ini`, `binary`, `protobuf` and `none`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
 `xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
 reads every decoder. An explicit `decoder.type` the collector's transform
 does not read MUST be refused when the configuration loads, with a message
@@ -1444,6 +1446,33 @@ to the body it reads.
   negative `offset`, `count` or `length`, a `count` above 65,536 or on a
   `string`, `cstring` or `skip`, a `string` or `skip` without `length`, and a
   number with one.
+
+### 6.0c The protobuf decoder
+
+`decoder.type: protobuf` MUST read a body as one message of the type
+`response.protobuf.message` names, described by `proto_files`, with
+`proto_import_paths`, or by `protoset_file`, each read as a `grpc` request's
+are, and MUST hand on the JSON a `grpc` answer is written as: fields by
+their names in the `.proto` file, unset fields with their zero values. It
+is for `jq`, `yq` and `python` alone; `auto` MUST never choose it, and no
+charset MUST be applied to the body it reads.
+
+- A body that is not the message MUST fail the decode, naming the message.
+- At load MUST be refused: `response.protobuf` beside another decoder, or
+  with the decoder left to the response; the decoder without `message`,
+  without a file, with both `protoset_file` and `proto_files` or
+  `proto_import_paths`, with an empty entry of either list, or with a
+  transform other than `jq`, `yq` and `python`; files that cannot be read
+  or compiled; and a `message` that is not a message of them. The files
+  MUST NOT be read by a load that reads no descriptor file.
+- The files MUST be watched as a `grpc` collector's descriptor files are,
+  and read again when one changed.
+- A build without the `grpc` request type MUST NOT link the libraries that
+  read descriptors, and MUST refuse the decoder at load, saying it comes
+  with that type.
+- A collector written on the debug page that names the decoder's files MUST
+  be refused before it is checked, as one that names a file in its request
+  is (§ 42.17).
 
 ### 6.0a NDJSON, logfmt, TOML and INI
 
@@ -3152,6 +3181,24 @@ expressions name it, as for a clock placeholder that reads it, and MUST NOT
 for any other; a scrape that fails, one answered from the cache and a debug
 probe MUST keep none. Without a clock, as in a transform run outside a
 scrape, both MUST be `None` and `null`.
+
+With `transform.state: true` a script, a transform's and a pre-script,
+MUST also have `state`, a dict that holds what the last run of the same
+script that ended without failing left in it, for the same collector,
+target and parameters, and is empty when there was none; a pre-script and
+a transform MUST each have their own. It MUST be kept as JSON, in memory
+alone. A script MUST fail when it ends with `state` bound to anything but
+a dict, holding what JSON cannot carry, or of more than 65,536 bytes
+written out, and what it left MUST NOT be kept. A debug probe MUST read
+the state and MUST NOT change it. The exporter MUST keep at most 4,096
+states and 64 MiB of them, those used last. A reload MUST keep the states of
+a collector it keeps, whatever of its definition changed, and MUST drop
+those of a collector it removes or that no longer sets the key, with their
+count of dropped states, so a collector added again under the name starts
+from an empty state; a run such a reload found under way MUST NOT leave
+one. Without the key a script MUST have no such name,
+and the key on a collector that runs no Python script MUST be refused at
+load.
 
 `target` MUST be the target as given, credentials included; the
 documentation MUST say so, and that a script printing it or labelling with it
@@ -5926,6 +5973,9 @@ http_exporter_missing_keys_total
 
 http_exporter_script_errors_total
 http_exporter_script_duration_seconds
+http_exporter_python_states
+http_exporter_python_state_bytes
+http_exporter_python_states_dropped_total
 
 http_exporter_metrics_emitted_total
 http_exporter_invalid_utf8_total
@@ -5943,6 +5993,10 @@ http_exporter_rate_limit_waits_total
 http_exporter_rate_limit_refused_total
 http_exporter_host_rate_limit_waits_total
 http_exporter_host_rate_limit_refused_total
+http_exporter_secret_store_requests_total
+http_exporter_secret_store_failures_total
+http_exporter_secret_store_stale_reads_total
+http_exporter_secret_store_secrets
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -6086,6 +6140,23 @@ reload that keeps an entry of its name, changed or not, forgotten with an
 entry a reload removes, and start at 0 at the exporter's shutdown; their
 created time MUST be the exporter's start for an entry it started with, and
 when the reload put it in force for one a reload added.
+`http_exporter_secret_store_requests_total`,
+`http_exporter_secret_store_failures_total` and
+`http_exporter_secret_store_stale_reads_total`, counters, MUST be
+exporter-wide, labelled `store` with the name of an entry of
+`secret_stores` and no `collector` label, a series of each for every entry
+in force from 0, kept and created as those of an entry of `rate_limits`
+are: the requests made to the store for a secret, those that failed, and
+the credentials read from a secret past its `cache_ttl` because the store
+could not be asked (§ 42.6c). `http_exporter_secret_store_secrets`, a gauge
+labelled likewise, MUST be the secrets the store keeps that a credential
+may still be read from.
+`http_exporter_python_states` and `http_exporter_python_state_bytes`,
+gauges, and `http_exporter_python_states_dropped_total`, a counter, MUST
+exist for every collector that sets `transform.state` and for no other,
+labelled `collector`, from 0: the states kept of its scripts, their bytes
+as JSON together, and the states of its scripts dropped to keep all states
+within their bounds, created as the collector's other counters are (§ 16).
 `http_exporter_backoff_skipped_total`, a counter, per collector and per
 request in verbose mode, and `http_exporter_targets_backing_off`, a gauge,
 per collector with no per-request series, MUST exist for every collector,
@@ -7120,7 +7191,11 @@ file's `defaults` (§ 5.0b) as much as one it writes, and a static target when
 anything in its entry differs. Each list MUST name at most 10 and count the
 rest (`and 3 more`). A refused reload MUST NOT change what the last said.
 The landing page (§ 23) MUST show the time of the last reload that put
-something in force, and what it changed, both files' changes together.
+something in force, and what it changed, both files' changes together, as
+a table: a row for each list that is not empty, the collectors' before the
+static targets', each with what changed, how (added, removed or changed),
+how many did, and the names, at most 10 with a count of the rest. A reload
+that changed nothing MUST be shown as `no changes`, without a table.
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before
@@ -8262,7 +8337,7 @@ Requirements:
 ## 26.1 Target allowlists and deny lists
 
 An `http`, `graphite`, `grpc`, `sshfile`, `sql`, `dns`, `tlscert`, `ntp`,
-`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap` or `pop3` collector MAY set `request.allowed_targets`
+`icmp`, `s3file`, `redis`, `tcp`, `ldap`, `sshexec`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius` or `whois` collector MAY set `request.allowed_targets`
 and `request.denied_targets`, lists of host names, globs of host names
 (`*` and `?`, `*` matching dots too, so `*.example.com` matches
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
@@ -9574,7 +9649,7 @@ The repository MUST include documentation covering:
     `docs/SQL.md`, `dns` in `docs/DNS.md`, `tlscert` in `docs/TLSCERT.md`,
     `ntp` in `docs/NTP.md`, `kubernetes` in `docs/KUBERNETES.md`, `s3file` in
     `docs/S3FILE.md`, `redis` in `docs/REDIS.md`, `tcp` in `docs/TCP.md`,
-    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, with `localfile` and `grpc` above and `http` in
+    `ldap` in `docs/LDAP.md`, `sshexec` in `docs/SSHEXEC.md`, `icmp` in `docs/ICMP.md` and `snmp` in `docs/SNMP.md`, and the opt-in `smtp` in `docs/SMTP.md`, `modbus` in `docs/MODBUS.md`, `mqtt` in `docs/MQTT.md`, `websocket` in `docs/WEBSOCKET.md`, `ftp` in `docs/FTP.md`, `imap` in `docs/IMAP.md`, `pop3` in `docs/POP3.md`, `radius` in `docs/RADIUS.md`, `whois` in `docs/WHOIS.md`, with `localfile` and `grpc` above and `http` in
     `docs/CONFIGURATION.md` and `docs/REQUESTS.md`. A test MUST find, for
     each `internal/fetch/requesttype_<name>.go` but `http`'s, the page
     `docs/<NAME>.md`, named in this list and linked from the README's index
@@ -11041,6 +11116,79 @@ values from its answer, and send the value `token` names as the token.
   login's `fields` are, and an OAuth 1.0a secret written in them withheld.
   The states of a login MUST be dropped as its tokens are (§ 42.6a), and at
   most 1000 kept.
+
+## 42.6c Secret stores
+
+`secret_stores` lists stores a credential MAY be read from in place of a
+file. An entry MUST have a `name`, unique, of letters, digits, hyphens and
+underscores, and a `type`: `vault`, `gcp` or `aws`.
+
+Each type MUST be one registration in the source: its name, the keys of an
+entry it takes, its rules, its constructor and the schema's description of
+its keys. The references, the cache, the use of a secret past its time, the
+counts and the checks of a configuration MUST be the same for every type,
+and a further type MUST need none of them changed. An entry that sets a key
+its type does not take MUST be refused at load, naming the key and the
+type, and the values of `type` in the schema and in a refusal MUST be the
+types registered.
+
+- A key that names a credential file, of a collector and of a static
+  target, MUST take a reference, `secret://<store>/<path>[?version=<v>][#<field>]`,
+  wherever the file is read as a credential at a scrape, and the credential
+  MUST then be read from the store, trimmed as a file's content is. At
+  load MUST be refused, naming the key: a reference in a key whose file is
+  opened as a file (`ca_file`, `cert_file`, `key_file`, `kubelet_ca_file`,
+  `private_key_file`, `known_hosts_file`, `protoset_file`, `proto_files`,
+  `statement_file`, `keep_file`) or in a key that names no file; one not
+  written as a reference is; one that names no store of the configuration;
+  one to a `vault` store without a field; and one in `web.basic_auth` or in
+  a key a store itself is reached with. The keys of a block that names
+  credential files, `basic_auth_file`'s `username` and `password`, MUST take
+  one as a key that names a file does. A static target file MUST be held
+  to the stores of the configuration it is checked against.
+- A secret read MUST be kept in memory, by store, path and version, and
+  MUST NOT be written to disk. A read within `cache_ttl` of it, 5m unless
+  set, MUST NOT ask the store, whatever field it reads. Past it the store
+  MUST be asked; when that fails, the secret kept MUST be used until it is
+  `max_stale`, 1h unless set, past its `cache_ttl`, the first such failure
+  logged at warn and each such read counted, and otherwise the read MUST
+  fail, naming the reference and what the store said, never a secret. A
+  store that failed for a secret MUST NOT be asked for it again within 5
+  seconds. A request to a store MUST be bounded by `timeout`, 5s unless
+  set and at most 1m. At most 1,024 secrets MUST be kept for a store.
+- A reload MUST keep a store whose entry it left as it was, with what it
+  has read, and start one it changed anew.
+- `vault` MUST read `GET <address>/v1/<path>`, with `?version=` when the
+  reference has one, sending the token and `namespace` when set, and take
+  the fields under `data.data` when `data.metadata` is beside them (KV
+  version 2) and under `data` otherwise. `auth.method` MUST be `token`, the
+  token of `auth.token_file` read at each request or of `VAULT_TOKEN`;
+  `kubernetes`, a login at `auth/<mount>/login` with `auth.role` and the
+  token of `auth.jwt_file`, the pod's service account token unless set; or
+  `approle`, with `auth.role_id` and the secret id of
+  `auth.secret_id_file` or of `VAULT_SECRET_ID`. A token a login gave MUST
+  be kept until nine tenths of its lease have passed, and a `403` to it
+  MUST be answered by logging in again, once. The files of `tls` MUST NOT
+  be opened when the configuration loads, which a target allocator does
+  without them, but when the store is first asked. A key of another method, and
+  of another type, MUST be refused at load.
+- `gcp` MUST read the version `latest`, or the reference's, of the secret
+  in `project` over Secret Manager's REST API, and take its payload as the
+  secret's text. The access token MUST be the metadata server's, or, with
+  `credentials_file` or `GOOGLE_APPLICATION_CREDENTIALS`, the one a JWT
+  signed with the service account's key is exchanged for, kept until a
+  minute before it expires.
+- `aws` MUST call Secrets Manager's `GetSecretValue` for the secret the
+  reference names, its version a stage when it starts with `AWS` and a
+  version id otherwise, signed with the credentials the AWS SDK's default
+  chain finds, and take its `SecretString`, or the bytes of its
+  `SecretBinary`, as the secret's text. It MUST add no module to the
+  binary, MUST be in the builds that have the `s3file` request type, and
+  MUST be refused at load by any other.
+- A field of a secret of text MUST be a member of the JSON object the text
+  is; text, a number and a boolean MUST be read as their text, and a field
+  the secret has not, or that is none of those, MUST fail the read.
+- `--dry-run` MUST read the references as it reads credential files.
 
 ## 42.9 OTLP TLS configuration
 

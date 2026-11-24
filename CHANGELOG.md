@@ -99,11 +99,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   member on the status page and in `/v1/status`, counts it in
   `pue_allocator_members_same_name`, and tells both exporters, which log it
   too ([Members and allocation](docs/ALLOCATOR.md#members-and-allocation)).
-- **Seven opt-in request types**, each written with the standard library
+- **Nine opt-in request types**, each written with the standard library
   alone, in no default build and not in the published image: build with
-  `make build OPT_IN_REQUEST_TYPES=smtp,modbus,mqtt,websocket,ftp,imap,pop3`,
+  `make build OPT_IN_REQUEST_TYPES=smtp,modbus,mqtt,websocket,ftp,imap,pop3,radius,whois`,
   or the image's `OPT_IN_REQUEST_TYPES` build argument, naming those you
-  want. Together they add about 0.5 MB to the binary.
+  want. Together they add about 0.6 MB to the binary.
 - **[`smtp`](docs/SMTP.md)** holds a mail server's session up to, and never
   including, the message: the greeting, the extensions `EHLO` lists,
   `STARTTLS`, a login with `PLAIN`, `LOGIN`, `CRAM-MD5`, `XOAUTH2` or
@@ -160,6 +160,44 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `USER` and `PASS`, `APOP`, or SASL `PLAIN`, `LOGIN`, `CRAM-MD5`,
   `XOAUTH2` or `OAUTHBEARER`, as [`auth`](docs/POP3.md#logging-in) names
   or the server offers.
+- **[`radius`](docs/RADIUS.md)**, an opt-in request type, asks a RADIUS
+  server to authenticate an account, with PAP or CHAP, or with
+  `mode: status-server` whether it is alive, and reads whether the account
+  was accepted, how long the reply took and how many times the request was
+  sent. A rejected account is an answer, not a failure. Requests carry a
+  Message-Authenticator, and a reply is taken only when the shared secret
+  verifies it.
+- **[`whois`](docs/WHOIS.md)**, an opt-in request type, reads a domain's
+  registration from its registry's WHOIS server: when it expires, its
+  registrar, status and name servers, with every line of the answer by its
+  key. The registry is the one IANA names for the top-level domain, or
+  `whois_server`. Cache it for hours: registries limit how often they are
+  asked.
+- **[`decoder.type: protobuf`](docs/CONFIGURATION.md#protobuf-responses)**
+  reads a body that is one protobuf message, described by `.proto` files
+  or a descriptor set as a `grpc` request's are, and hands it to `jq`, `yq`
+  or `python` as the JSON a `grpc` answer is. It is in every build that
+  has the `grpc` request type.
+- **[Secret stores](docs/AUTHENTICATION.md#secret-stores)**: a credential
+  is read from HashiCorp Vault, Google Cloud Secret Manager or AWS Secrets
+  Manager instead of a file, where a secret may not be written to disk.
+  The stores are named in `secret_stores`, and any key that names a
+  credential file takes a reference to one,
+  `password_file: secret://vault-prod/secret/data/db#password`. A secret is
+  kept in memory for `cache_ttl`, 5m, and used for `max_stale` more, 1h,
+  while its store is down. Vault logs in with Kubernetes auth, a token or
+  an AppRole; Google and AWS use the workload's own identity. Each store's
+  requests, failures, stale reads and secrets kept are
+  [self-metrics](docs/SELF-METRICS.md#secret-stores). No dependency is
+  added.
+- **[`transform.state: true`](docs/PYTHON.md#state-between-runs)** gives a
+  Python script a dict, `state`, that is kept between its runs for a
+  target, so a script can tell what changed since the last scrape: a
+  counter's increase, a value seen before, when something was first seen.
+  It is kept in memory, at most 64 KiB a script and target, lost at a
+  restart and dropped when a reload removes the collector;
+  `http_exporter_python_states` and its two companions say what
+  is kept of a collector's states, and how many were dropped.
 - A static target of an `smtp`, `imap` or `pop3` collector that logs in
   with a token names its own mailbox with `username` alone, so one
   application's token watches many mailboxes.
@@ -196,6 +234,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   `error`, where `print` is seen at debug level only. What a script
   logged before it failed is written with its failure, and the last 1,024
   characters of what it printed, in the failure's own line.
+- **The last reload as a table.** The home page shows what the last reload
+  changed as a table, a row for the collectors or static targets added,
+  removed or changed, with how many and their names, where it wrote them
+  all in one sentence.
 
 ### Fixed
 

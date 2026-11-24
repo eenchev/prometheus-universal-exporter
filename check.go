@@ -379,6 +379,9 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 		details["deprecations"] = conf.Deprecations
 	}
 	warnings := slices.Clone(conf.Warnings)
+	// The check reads the credentials a scrape would, those in a secret
+	// store from the store, so its stores are put in force for it.
+	fetch.FollowSecretStores(conf.SecretStores)
 	for i := range conf.Collectors {
 		warnings = append(warnings, fetch.FileWarnings(&conf.Collectors[i], nil)...)
 	}

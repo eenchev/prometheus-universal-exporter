@@ -8,12 +8,12 @@ import (
 )
 
 // A collector's fixed label values may hold {{param_<name>}} placeholders,
-// which the parameters of the probe fill (fetch/labelparams.go). The
-// transform is where a label value is read, so it is where they are filled:
-// Transform reads a collector whose labels hold placeholders as a copy with
-// the values filled in, and every transform, the label value maps, the
-// truncation and the collector-wide label settings then read a filled value
-// as they read one written in the configuration.
+// filled from the probe's parameters (fetch/labelparams.go). The transform
+// is where a label value is read, so it is where they are filled. Transform
+// reads a collector whose labels hold placeholders as a copy with the values
+// filled in. Every transform, the label value maps, the truncation and the
+// collector-wide label settings then read a filled value just like one
+// written in the configuration.
 
 type labelParamsKey struct{}
 
@@ -37,12 +37,12 @@ func withFilledLabels(ctx context.Context, c *model.Collector) (*model.Collector
 	return fetch.FilledLabels(c, params)
 }
 
-// ruleLabelHoldsPlaceholders says whether value, the value of a static
-// label of one of c's rules, holds placeholders a probe's parameters fill:
-// whether it is the text of one of the collector's label values that were
-// read to hold some when the configuration loaded (fetch.ParseLabelParams).
-// A text is read the same in whichever rule it stands, so the rule is not
-// asked for. A collector whose label values were never read has none.
+// ruleLabelHoldsPlaceholders reports whether value, the value of a static
+// label of one of c's rules, holds placeholders that a probe's parameters
+// fill. That is, whether it is the text of one of the collector's label
+// values found to hold some when the configuration loaded
+// (fetch.ParseLabelParams). A text is read the same in any rule, so the rule
+// is not needed. A collector whose label values were never read has none.
 func ruleLabelHoldsPlaceholders(c *model.Collector, value string) bool {
 	if c.LabelParams == nil {
 		return false

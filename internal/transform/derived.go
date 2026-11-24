@@ -11,8 +11,8 @@ import (
 )
 
 // A collector's derived list computes series from the series its own rules
-// made, so that every transform can export what only arithmetic over its
-// values gives, such as a cache's hit ratio from its hits and misses:
+// made, so that every transform can export values that only arithmetic
+// over its values gives, such as a cache's hit ratio from its hits and misses:
 //
 //	derived:
 //	  - name: memcached_gets_total
@@ -21,42 +21,42 @@ import (
 //	  - name: memcached_get_hit_ratio
 //	    ratio: [memcached_get_hits_total, memcached_gets_total]
 //
-// Derivation reads the series as the transform made them: after the value
-// maps and scale of the rules, the label value maps and truncation, and
-// before transform.labels, remove_labels, rename_labels, metrics_prefix and
-// name escaping, which then apply to the derived series as to every other
-// (Transform). So an operand is written as the rule's name is written,
-// without the prefix, and a label of by as the rule's label is named, before
-// any rename; and a derived series gets the collector-wide labels without
-// carrying them through the arithmetic.
+// Derivation reads the series as the transform made them. That is after
+// the rules' value maps and scale, the label value maps and truncation. It
+// is before transform.labels, remove_labels, rename_labels, metrics_prefix
+// and name escaping, which then apply to derived series like any other
+// (Transform). So an operand is written like the rule's name, without the
+// prefix, and a label in by is named like the rule's label, before any
+// rename. A derived series gets the collector-wide labels without carrying
+// them through the arithmetic.
 //
 // An entry sets one operation:
 //
-//   - sum of two families or more adds up their series, matched by their
-//     label sets; with by, of exactly one family, it adds up that family's
-//     series into one for each set of values of the labels by keeps, and
-//     into one series when by is [];
-//   - difference [a, b] is a - b, and ratio [a, b] is a / b, the series of
-//     the two matched by their label sets.
+//   - sum of two or more families adds up their series, matched by label
+//     sets. With by, and exactly one family, it adds up that family's
+//     series into one per set of values of the labels by keeps, or into a
+//     single series when by is [].
+//   - difference [a, b] is a - b, and ratio [a, b] is a / b, with the
+//     series of the two matched by label sets.
 //
-// Matching is PromQL's one-to-one matching without on or ignoring: series of
-// the operands are matched when their labels are the same, names and
-// values, a label of an empty value being no label. A series with no
-// partner in every other operand makes no derived series, nor does a label
-// set that two series of one operand have, which has no one partner. A
-// result that is NaN or infinite — a ratio over 0 among them — makes no
-// series either: no number is better than one no query can use, and the
-// target answered every value it was asked for, so it is no failure.
+// Matching is PromQL's one-to-one matching without on or ignoring. Series
+// of the operands match when their labels are equal, names and values; a
+// label with an empty value counts as no label. No derived series is made
+// for a series with no partner in every other operand, or for a label set
+// that two series of one operand share, since it has no single partner. A
+// result that is NaN or infinite, including a ratio over 0, makes no
+// series either. No number is better than one no query can use. The
+// target answered every value it was asked for, so this is not a failure.
 //
-// Entries are computed in their order, and an entry may read an earlier
-// one, hidden or not. A hidden entry is computed for later entries to read
-// and is not exported, which is what a hit ratio of hits / (hits + misses)
+// Entries are computed in order, and an entry may read an earlier one,
+// hidden or not. A hidden entry is computed for later entries to read and
+// is not exported. That is what a hit ratio of hits / (hits + misses)
 // needs without exporting the sum.
 //
-// Exported derived series count against limits.max_metrics as every series
-// does, and a scrape that makes more fails as one whose rules make more
-// does. A derived series has no timestamp, whatever its operands had, and
-// no created timestamp.
+// Exported derived series count against limits.max_metrics like every
+// series, and a scrape that makes more fails as when its rules make more.
+// A derived series has no timestamp, whatever its operands had, and no
+// created timestamp.
 
 // derivedOperation names the operation of an entry, as it is written.
 func derivedOperation(d *model.DerivedRule) (op string, operands []string) {
@@ -93,18 +93,19 @@ func DescribeDerived(d *model.DerivedRule) string {
 }
 
 // CheckDerived refuses a derived list that could not be computed, or whose
-// series every scrape would refuse, and gives an entry without a type the
-// type gauge. It is checked once the rules are, their types filled in.
+// series every scrape would refuse. It gives an entry without a type the
+// type gauge. It runs after the rules are checked and their types filled
+// in.
 //
-// An operand is a rule's name or an earlier entry's. The series of a python
-// script and of a prometheus pass-through are named by the target and the
-// script, at run time, so an operand of such a collector that no rule names
-// is taken, and read from the series of that name each scrape makes; one a
-// rule names is checked as any other's. Only a counter, a gauge or an
-// untyped family can be an operand: a histogram or a summary has no one
-// value to add. Such a family that only a scrape shows is read as no series,
-// and is reported as a failure of the entry, under error_mode log
-// (deriveSeries).
+// An operand is the name of a rule or of an earlier entry. The series of a
+// python script and of a prometheus pass-through are named by the target
+// and the script at run time. So for such a collector, an operand no rule
+// names is accepted and read from the series of that name each scrape
+// makes. An operand a rule names is checked like any other. Only a
+// counter, a gauge or an untyped family can be an operand: a histogram or
+// a summary has no single value to add. Such a family that only a scrape
+// reveals is read as no series, and is reported as a failure of the entry,
+// under error_mode log (deriveSeries).
 func CheckDerived(x *model.Collector) error {
 	if len(x.Derived) == 0 {
 		return nil
@@ -284,9 +285,9 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 		return nil
 	}
 	// Only the families the entries read are gathered, each in the order
-	// its series came; and the names of the entries exported are looked
-	// for among the series in the same pass, since a pass-through's target
-	// or a python script may make a family of one (derivedTaken).
+	// its series came. The same pass looks for the exported entries' names
+	// among the series, since a pass-through's target or a python script
+	// may make a family with one of them (derivedTaken).
 	families := map[string][]model.Metric{}
 	taken := map[string]bool{}
 	for i := range c.Derived {
@@ -328,11 +329,11 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 			series, err = deriveEntry(d, families)
 		}
 		if err != nil {
-			// A histogram or a summary only a scrape shows (CheckDerived),
-			// or a name the scrape's series have (derivedTaken): the entry
-			// carries on without series, as a rule under log does, and is
-			// reported so. Only a context that is done stops
-			// it, as it stops every rule (handleMetricError).
+			// A histogram or summary that only a scrape reveals
+			// (CheckDerived), or a name the scrape's series already use
+			// (derivedTaken). The entry continues without series, as a
+			// rule under log does, and is reported. Only a done context
+			// stops it, as it stops every rule (handleMetricError).
 			rule := derivedRule(d)
 			if !handleMetricError(ctx, c, rule, err) {
 				return interruptedAt(ctx, d.Name)
@@ -357,22 +358,23 @@ func deriveSeries(ctx context.Context, set *model.MetricSet, c *model.Collector)
 	return nil
 }
 
-// derivedTaken is the failure of an entry exported under a name the series
-// of the scrape have, which only a prometheus pass-through's target and a
-// python script can give them, since CheckDerived refuses the name of a rule.
-// Its series would be series of a family the target made, of another type
-// and help, and those of the same labels duplicates, which fail the whole
-// scrape: the entry makes none, and the target's family is answered as it
-// came.
+// derivedTaken is the failure of an entry exported under a name the
+// scrape's series already have. Only a prometheus pass-through's target or
+// a python script can produce that, since CheckDerived refuses a rule's
+// name. Its series would join a family the target made, with another type
+// and help, and those with the same labels would be duplicates, which fail
+// the whole scrape. So the entry makes no series, and the target's family
+// is answered as it came.
 func derivedTaken(d *model.DerivedRule) error {
 	return fmt.Errorf("derived %q is the name of a family the scrape's series have already, so its series would be duplicates of them; give the entry a name the target does not export", d.Name)
 }
 
-// derivedAbsent are the operands of the entry at index that have no series in
-// the scrape, families gathered: each operand that is a family of the scrape
-// and has none, and those an earlier entry it reads had, from absent. An
-// absent operand is no failure, as a family a target leaves out while it has
-// nothing to count is not, and is only shown in a debug probe's report.
+// derivedAbsent returns the operands of the entry at index that have no
+// series in the scrape, given the gathered families. These are each operand
+// that is a family of the scrape with no series, plus, from absent, those
+// of an earlier entry it reads. An absent operand is not a failure, just as
+// a family a target omits while it has nothing to count is not. It is only
+// shown in a debug probe's report.
 func derivedAbsent(c *model.Collector, index int, families map[string][]model.Metric, absent map[string][]string) []string {
 	_, operands := derivedOperation(&c.Derived[index])
 	var out []string

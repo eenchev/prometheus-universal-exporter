@@ -209,11 +209,11 @@ func ValidatePythonScripts(pythonPath string, c *model.Config) error {
 	return nil
 }
 
-// CheckPythonScripts is ValidatePythonScripts with the faults kept apart: err
-// is the interpreter itself failing, and problems are the individual script
-// faults, in the order of the collectors, each naming its collector in its
-// message and beside it. --dry-run reports the latter one by one. The
-// interpreter is run once, whatever it finds.
+// CheckPythonScripts is ValidatePythonScripts with the faults kept apart. err
+// is a failure of the interpreter itself, and problems are the individual
+// script faults, in collector order. Each names its collector in its message
+// and beside it. --dry-run reports the problems one by one. The interpreter
+// is run once, whatever it finds.
 func CheckPythonScripts(pythonPath string, c *model.Config) ([]PythonScriptProblem, error) {
 	scripts := CollectorScripts(c)
 	if len(scripts) == 0 {

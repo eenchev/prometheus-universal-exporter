@@ -7,19 +7,19 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// ReadsTimings says whether a rule or a script of c may read what only the
-// trace of its request sees: the timings, $timings or Python's
-// response.timings, and the address the connection was made to,
-// $remote_ip or response.remote_ip. A request is traced only when
+// ReadsTimings reports whether a rule or a script of c may read what only
+// the trace of its request sees: the timings ($timings, or Python's
+// response.timings) and the address the connection was made to
+// ($remote_ip or response.remote_ip). A request is traced only when
 // something reads them (model.Collector.TimingsUnread).
 //
-// A Python script may reach response.timings by a name it makes, so a
+// A Python script may reach response.timings by a name it builds, so a
 // collector with one always reads them. A jq or yq program can name a
-// variable only as it is written, so one that reads $timings or $remote_ip
-// holds that text: every text of the collector is looked through for them,
-// whichever key holds it, so a key that comes to hold a program is never
-// missed. A text that holds one and is no program, or that names another
-// variable of that name of its own, only costs the trace it did not need.
+// variable only literally, so a program that reads $timings or $remote_ip
+// contains that text. Every text of the collector is searched for them,
+// whatever key holds it, so a key that comes to hold a program is never
+// missed. A text that contains one but is not a program, or that defines its
+// own variable of that name, only costs an unneeded trace.
 func ReadsTimings(c *model.Collector) bool {
 	if c.Transform.Type == "python" || strings.TrimSpace(c.Transform.PreScript) != "" {
 		return true

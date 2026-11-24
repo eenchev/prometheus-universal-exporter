@@ -20,28 +20,28 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A request to a worker is one line of JSON, and writing it was a third of
-// what handing a document of five thousand items to a script cost the
-// exporter: json.Marshal of a pythonInput first copied the whole of data to
-// put markers where its floats are not finite, then walked it by reflection,
-// made a slice of each object's keys to sort them, and copied the body to a
-// string to write it. pythonEncoder writes the same line — the same bytes,
-// which pythonrequest_test.go compares over every kind of value — from the
-// values a decoder makes, into a buffer it keeps, and what it does not know
-// how to write is written as it was (pythonRequestMarshalled). The one
-// request it writes otherwise than json.Marshal is one of csv rows by
-// header, which it sends as their table, and the worker makes into the rows
-// the line once carried (csvTable).
+// A request to a worker is one line of JSON. Writing it was a third of the
+// exporter's cost of handing a document of five thousand items to a
+// script. json.Marshal of a pythonInput first copied all of data to put
+// markers where its floats are not finite. It then walked it by
+// reflection, made a slice of each object's keys to sort them, and copied
+// the body to a string to write it. pythonEncoder writes the same line
+// (the same bytes; pythonrequest_test.go compares them over every kind of
+// value) from the values a decoder makes, into a buffer it keeps. What it
+// does not know how to write is written as before
+// (pythonRequestMarshalled). The one request it writes differently from
+// json.Marshal is one of csv rows by header. It sends them as their table,
+// and the worker turns that into the rows the line once carried
+// (csvTable).
 //
-// What a script reads is therefore what it read: an object's keys in order
-// of their bytes, which is the order a script iterates a dict in; a whole
-// float, 1.0 in the response, as the int 1; a string that is not UTF-8 with
-// U+FFFD for each byte that is not. A JSON response is not handed over as
-// the bytes the target sent, although they are at hand, because a script
-// would then read another document: its keys in the target's order, 1.0 as
-// a float, 1e400 as inf rather than the text the json decoder keeps, and a
-// whole number of five thousand digits as an int, or an error, rather than
-// its text.
+// So a script reads what it read before: an object's keys in byte order,
+// which is the order a script iterates a dict in; a whole float, 1.0 in the
+// response, as the int 1; a string that is not UTF-8 with U+FFFD for each
+// invalid byte. A JSON response is not handed over as the bytes the target
+// sent, although they are available, because a script would then read a
+// different document: keys in the target's order, 1.0 as a float, 1e400 as
+// inf instead of the text the json decoder keeps, and a whole number of
+// five thousand digits as an int, or an error, instead of its text.
 
 // pythonEncoder writes requests.
 type pythonEncoder struct {
@@ -67,10 +67,10 @@ type pythonEncoder struct {
 	clock scrapeClock
 }
 
-// pythonParams is what a script reads as params: each parameter the
-// probe, or the static target, gave, a param_<name> that is not empty, by
-// its name, as jq reads them in $params. nil when there is none: the
-// worker then gives the script an empty dict.
+// pythonParams is what a script reads as params: each non-empty
+// param_<name> that the probe or the static target gave, keyed by its
+// name, as jq reads them in $params. It is nil when there are none, and
+// the worker then gives the script an empty dict.
 func pythonParams(ctx context.Context) map[string]string {
 	given, _ := ctx.Value(labelParamsKey{}).(map[string]string)
 	var params map[string]string
@@ -102,29 +102,32 @@ var pythonEncoders = sync.Pool{New: func() any { return &pythonEncoder{} }}
 const pythonEncoderKept = 16 << 20
 
 // pythonEncoderDepth is how deep the encoder follows data: as deep as a
-// decoder makes a value, so that a response nested as deep as one decodes
-// is handed to its script. It was 1,000, the depth at which json.Marshal
-// starts looking for a value that holds itself, and deeper data was left
-// to json.Marshal. A Go release that bounds the nesting json.Marshal
-// writes then refused, with "exceeded max depth", a JSON document nested
-// as deep as the decoder reads one, the request being one object deeper
-// than its data. What nests deeper than any decoder's value no decoder
-// made: it is written as it was, by json.Marshal, and refused as it was
-// where json.Marshal refuses it, for holding itself or for its depth.
+// decoder makes a value, so that a response nested as deep as a decoder
+// accepts is handed to its script. It was 1,000, the depth at which
+// json.Marshal starts checking for a value that contains itself, and deeper
+// data was left to json.Marshal. A Go release that limits the nesting
+// json.Marshal writes then refused, with "exceeded max depth", a JSON
+// document nested as deep as the decoder reads, because the request is one
+// object deeper than its data. Data nested deeper than any decoder's value
+// was not made by a decoder. It is written as before, by json.Marshal, and
+// refused where json.Marshal refuses it, for containing itself or for its
+// depth.
 const pythonEncoderDepth = decode.MaxDepth
 
-// pythonRequestFactor is how many times the response limit and
-// limits.max_output_bytes together a request may be long. A request holds
-// the body once and the data once, and the data of a pre-script, which is
-// no longer than limits.max_output_bytes as the worker wrote it; JSON writes
-// a byte as six at most (a control character as \u0001, < as \u003c), and
-// a decoder makes more of a short line than its bytes — the prometheus
-// decoder makes "a 1" a dict of five keys, some sixty bytes. A request
-// longer than all that holds data a decoder made far more of than its
-// response, and is refused before it is written to its end, rather than
-// built in the exporter's memory and parsed in the worker's: the csv rows
-// of a header of 5,000 columns over 5,000 short lines, 39 kB, were once
-// written as a dict of every column for each row, a request of 257 MiB.
+// pythonRequestFactor is how many times the response limit plus
+// limits.max_output_bytes a request may be long. The reasoning:
+//   - A request holds the body once and the data once, and a pre-script's
+//     data, which the worker wrote within limits.max_output_bytes.
+//   - JSON writes a byte as at most six (a control character as \u0001, <
+//     as \u003c).
+//   - A decoder makes more of a short line than its bytes: the prometheus
+//     decoder makes "a 1" a dict of five keys, some sixty bytes.
+//
+// A longer request holds data a decoder made far larger than its response.
+// It is refused before it is fully written, instead of being built in the
+// exporter's memory and parsed in the worker's. For example, the csv rows
+// of a 5,000-column header over 5,000 short lines, 39 kB, were once written
+// as a dict of every column for each row: a request of 257 MiB.
 const pythonRequestFactor = 32
 
 // pythonRequestLimit is how long the request that runs script for a
@@ -239,11 +242,11 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 		clear(e.members[:cap(e.members)])
 		return pythonRequestMarshalled(mode, script, d, r, c, e.params, e.clock)
 	}
-	// A string that is a marker of a float that is not finite is rewritten
-	// as it always was, wherever it stands; only a request that holds one
-	// is, which copies it. A marker starts with a NUL, so a request none of
-	// whose strings holds one is not searched: looking through a megabyte
-	// for the marker took as long as writing it.
+	// A string that marks a non-finite float is rewritten as before,
+	// wherever it appears. Only a request containing one is rewritten,
+	// which copies it. A marker starts with a NUL, so a request with no NUL
+	// in its strings is not searched: searching a megabyte for the marker
+	// took as long as writing it.
 	if e.nul && bytes.Contains(dst, nonFiniteJSONMarker) {
 		return []byte(nonFiniteJSON.Replace(string(dst))), nil
 	}
@@ -274,10 +277,10 @@ func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HT
 	return payload, nil
 }
 
-// value writes v as json.Marshal writes it, but for a float that is not
-// finite, which is written as the token Python's json reads as that float,
-// as the request always carried it. It reports false for a value it does
-// not write, of a type no decoder makes.
+// value writes v as json.Marshal writes it, except a non-finite float. That
+// is written as the token Python's json reads as that float, as the
+// request always carried it. It reports false for a value it does not
+// write, of a type no decoder makes.
 func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 	switch x := v.(type) {
 	case nil:
@@ -318,10 +321,10 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 		}
 		return append(dst, ']'), true
 	case *decode.CSVRows:
-		// The csv decoder's rows without a header, written as the list of
-		// rows they stand for (decode.CSVRows.Document) without making it:
-		// a list of each row's fields. Rows by header are written as their
-		// table where they are the data (csvTable), and are nowhere else.
+		// The csv decoder's rows without a header are written as the list
+		// of rows they stand for (decode.CSVRows.Document), without building
+		// it: a list of each row's fields. Rows by header are written as
+		// their table where they are the data (csvTable), and nowhere else.
 		if depth+2 > pythonEncoderDepth || x.Named() {
 			return dst, false
 		}
@@ -330,9 +333,9 @@ func (e *pythonEncoder) value(dst []byte, v any, depth int) ([]byte, bool) {
 		if depth >= pythonEncoderDepth {
 			return dst, false
 		}
-		// The members are sorted by key, as json.Marshal sorts them, where
-		// the members of the objects around this one are kept, and are
-		// read from there by their place: writing a member's value may move
+		// The members are sorted by key, as json.Marshal sorts them. They
+		// are stored after the members of the enclosing objects and are
+		// read back by index, because writing a member's value may move
 		// them all to a larger slice.
 		first := len(e.members)
 		for key, value := range x {
@@ -381,16 +384,17 @@ func (e *pythonEncoder) csvRows(dst []byte, rows *decode.CSVRows) ([]byte, bool)
 	return append(dst, ']'), true
 }
 
-// csvTable writes the csv decoder's rows read by header as the table they
-// are: {"columns": [...], "places": [...], "rows": [[...], ...]}, the names
-// of the header's columns in the order of their bytes, the place of each in
-// a row, and each row's cells as its line holds them. The worker makes of
-// it the list of rows a script reads, a dict of every column the header
-// names to its cell, "" where the row is short of it, as json.loads made of
-// that list written out (decode.CSVRows.Document). Written out, that list
-// is as long as the header times the rows, which a body of a long header
-// and many short lines makes far more than its size; the table is as long
-// as the body. It sets over for a table longer than the request may be.
+// csvTable writes the csv decoder's rows read by header as a table:
+// {"columns": [...], "places": [...], "rows": [[...], ...]}. columns holds
+// the header's column names in byte order, places the position of each in
+// a row, and rows each row's cells as its line holds them. From it the
+// worker makes the list of rows a script reads: a dict of every header
+// column to its cell, "" where the row is too short. That equals what
+// json.loads made of the list written out (decode.CSVRows.Document).
+// Written out, that list is as long as the header times the rows, far more
+// than the body's size for a long header and many short lines. The table is
+// as long as the body. It sets over for a table longer than the request may
+// be.
 func (e *pythonEncoder) csvTable(dst []byte, rows *decode.CSVRows) []byte {
 	columns := rows.Columns()
 	dst = append(dst, `{"columns":[`...)
@@ -469,9 +473,9 @@ func appendPythonHeaders(dst []byte, headers map[string][]string, nul *bool) []b
 }
 
 // appendPythonFloat writes a float as json.Marshal writes it, as JavaScript
-// does: without an exponent from a millionth up to 1e21, and with one, of
-// as few digits as it has, beyond. One that is not finite is written as the
-// token Python's json reads it from.
+// does: without an exponent from a millionth up to 1e21, and beyond that
+// with one, using as few digits as needed. A non-finite float is written as
+// the token Python's json reads it from.
 func appendPythonFloat(dst []byte, f float64) []byte {
 	switch {
 	case math.IsNaN(f):
@@ -497,9 +501,9 @@ func appendPythonFloat(dst []byte, f float64) []byte {
 }
 
 // pythonStringSafe says which bytes below 0x80 json.Marshal writes in a
-// string as they are: all but the control characters, the quote, the
-// backslash and, as it escapes what a browser could read as markup, <, >
-// and &.
+// string unchanged: all except the control characters, the quote, the
+// backslash, and <, > and &, which it escapes because a browser could read
+// them as markup.
 var pythonStringSafe = func() (safe [utf8.RuneSelf]bool) {
 	for c := byte(' '); c < utf8.RuneSelf; c++ {
 		safe[c] = c != '"' && c != '\\' && c != '<' && c != '>' && c != '&'
@@ -508,10 +512,10 @@ var pythonStringSafe = func() (safe [utf8.RuneSelf]bool) {
 }()
 
 // pythonReplacement is what json.Marshal writes for a byte of a string that
-// is not UTF-8: U+FFFD, as its escape or as the character itself, which
-// depends on the Go release the exporter is built with. A script reads the
-// same character of either, and the request is written as the json.Marshal
-// of this build writes it, so that the two are one line on every release.
+// is not UTF-8: U+FFFD, either as its escape or as the character itself,
+// depending on the Go release the exporter is built with. A script reads
+// the same character either way. The request is written as this build's
+// json.Marshal writes it, so that the two give one line on every release.
 var pythonReplacement = func() string {
 	quoted, err := json.Marshal("\xff")
 	if err != nil || len(quoted) < 2 {
@@ -579,13 +583,13 @@ func appendPythonString[Text []byte | string](dst []byte, text Text, nul *bool) 
 	return append(dst, '"')
 }
 
-// appendPythonTrip writes what a script's response has of the request
+// appendPythonTrip writes what a script's response holds about the request
 // besides its answer, as jq has it (fetch.HTTPTrip): response.timings,
-// response.tls, response.url, response.redirects, response.http_version
-// and response.remote_ip, as json.Marshal
-// writes the values jq reads, their keys in order. They are written from
-// the trip itself, without the maps jq's values are, which a request line
-// would make for every response only to write them.
+// response.tls, response.url, response.redirects, response.http_version and
+// response.remote_ip. They are written as json.Marshal writes the values jq
+// reads, with keys in order. They are written from the trip itself, without
+// the maps jq uses, which a request line would otherwise build for every
+// response only to write them.
 func appendPythonTrip(dst []byte, trip *fetch.HTTPTrip, nul *bool) []byte {
 	if trip == nil {
 		return append(dst, `,"timings":null,"tls":null,"url":null,"redirects":null,"http_version":null,"remote_ip":null`...)

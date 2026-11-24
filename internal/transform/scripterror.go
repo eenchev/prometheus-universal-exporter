@@ -9,23 +9,25 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A script that fails answers with its traceback: the frames of the script,
-// innermost last, and then the exception's own line, its type and its
-// message (the worker's script_error). The worker keeps the five innermost
-// frames of each exception, and that is all that bounds the text: the
-// message is whatever the script, or a library it called, made of the data —
-// `raise Exception(text)` with the whole response, a KeyError or a
-// JSONDecodeError quoting it — a frame shows its source line however long
-// that is, and exceptions raised from one another are each written out, a
-// chain of four hundred in 119 kB. The text went whole into the transform's
-// error, and that, cut at the bound of every failure
-// (model.MaxFailureBytes), was the start of it: the first frames of the
-// first exception, and of a message as long as the response nothing but
-// "Traceback (most recent call last)" and its beginning.
+// A failed script answers with its traceback: the script's frames,
+// innermost last, then the exception's own line with its type and message
+// (the worker's script_error). The worker keeps the five innermost frames
+// of each exception, and nothing else bounds the text:
+//   - The message is whatever the script, or a library it called, made of
+//     the data: `raise Exception(text)` with the whole response, or a
+//     KeyError or JSONDecodeError quoting it.
+//   - A frame shows its source line however long it is.
+//   - Chained exceptions are each written out: a chain of four hundred
+//     took 119 kB.
 //
-// So a text longer than scriptErrorBytes is shown by what says most
-// (shownScriptError): the exception's own line and the frames before it,
-// the last of them first, each line by its start.
+// The whole text went into the transform's error. Cut at the limit of every
+// failure (model.MaxFailureBytes), only its start remained: the first
+// frames of the first exception, and, for a message as long as the
+// response, just "Traceback (most recent call last)" and its beginning.
+//
+// So a text longer than scriptErrorBytes is shown by its most telling
+// parts (shownScriptError): the exception's own line and the frames before
+// it, the last of them first, each line by its start.
 
 const (
 	// scriptErrorBytes is how long a script's error may be before it is
@@ -39,10 +41,10 @@ const (
 	scriptFrameLine = "  File "
 )
 
-// linesMark is what stands where lines of a script's error were left out:
-// how many lines that part of it had, as model.CutMark says how many bytes a
-// text had, and the mark of something measured in the text the failure is
-// recognised by.
+// linesMark is the text that replaces lines left out of a script's error.
+// It says how many lines that part had, as model.CutMark says how many
+// bytes a text had. In the text a failure is recognised by, it is the mark
+// of something measured.
 func linesMark(whole int, recognised bool) string {
 	if recognised {
 		return "... (" + model.MovingMark + " lines)"
@@ -50,28 +52,28 @@ func linesMark(whole int, recognised bool) string {
 	return "... (" + strconv.Itoa(whole) + " lines)"
 }
 
-// shownScriptError is the error a script failed with, text, as the
-// transform's error shows it: whole when it is no longer than
-// scriptErrorBytes, as nearly every traceback is, and otherwise
+// shownScriptError returns text, the error a script failed with, as the
+// transform's error shows it. It is whole when it is no longer than
+// scriptErrorBytes, as nearly every traceback is. Otherwise it shows:
 //
 //   - each line by its first scriptLineBytes bytes and its length;
-//   - of the lines from the exception's own on — its message, when that has
-//     several lines — as many of the first as half of scriptErrorBytes
-//     holds, and all of scriptErrorBytes where there is no frame before them;
-//   - of the lines before it, the frames and what Python says between the
-//     exceptions of a chain, as many of the last as the rest holds.
+//   - from the exception's own line on (its message, when that has several
+//     lines), as many of the first lines as fit in half of
+//     scriptErrorBytes, or in all of it when no frame precedes them;
+//   - of the lines before it (the frames, and what Python writes between
+//     the exceptions of a chain), as many of the last as the rest holds.
 //
-// Where lines are left out stands how many lines that part had. The
-// exception's own line is the first after the last frame that is not
-// indented, which is where Python writes it; a text with no frame, as the
-// message of fail() is none, is all message.
+// Where lines are left out, the text says how many lines that part had.
+// The exception's own line is the first unindented line after the last
+// frame, which is where Python writes it. A text with no frame, such as
+// fail()'s message, is all message.
 //
-// What is kept is decided by the lengths of the lines as the failure is
-// recognised by them, in which every length that was measured is the mark
-// (model.MovingMark): so the same failure of a longer message, or of a
-// longer chain that ends alike, is shown by the same lines and is one
-// failure to the log. The text itself is longer than that by the digits of
-// the lengths, a few bytes a line.
+// What is kept is decided by the line lengths as seen in the text the
+// failure is recognised by, where every measured length is the mark
+// (model.MovingMark). So the same failure with a longer message, or with a
+// longer chain that ends the same way, is shown by the same lines and is
+// one failure to the log. The text itself is longer than that by the
+// digits of the lengths, a few bytes per line.
 func shownScriptError(text string) model.QuotedValue {
 	if len(text) <= scriptErrorBytes {
 		return model.ShownAs(text, text).ForCaller(scriptCallerText(text))
@@ -141,24 +143,24 @@ func shownScriptError(text string) model.QuotedValue {
 	return model.ShownAs(said.String(), same.String()).ForCaller(scriptCallerText(text))
 }
 
-// shownByWorker is the error of a script that failed as the worker made it
-// ready to show, parts: the texts and the numbers of what shownScriptError
-// makes of the whole traceback, in their order. A traceback that may be
-// longer than limits.max_output_bytes is not sent whole to be shown here —
-// it was, and the line it made was refused as output over the limit, which
-// said nothing of the exception and cost the worker. The worker shows it by
-// the same rules (the launcher's cut; scripterrorcut_test.go compares the
-// two) and sends what is shown. Each number is one that was measured, the
-// length of a line or how many lines a part had, so it is written as it is
-// and is the mark in what the failure is recognised by.
+// shownByWorker returns the error of a failed script that the worker
+// prepared for display as parts: the texts and numbers that
+// shownScriptError makes of the whole traceback, in order. A traceback
+// that may be longer than limits.max_output_bytes is not sent whole to be
+// shown here. It used to be, and its line was refused as output over the
+// limit, which said nothing about the exception and cost the worker. The
+// worker applies the same rules (the launcher's cut;
+// scripterrorcut_test.go compares the two) and sends the result. Each
+// number was measured, either a line's length or a part's line count. So
+// it is written as is, and is the mark in the text the failure is
+// recognised by.
 //
-// Parts that come to more than a worker shows of any error
-// (shownByWorkerBytes) are no worker's: a script can write to the answers
-// itself, as it could always write an error of its own there, and one of a
-// megabyte in parts was a transform's error of a megabyte, where every
-// error a worker sent was cut here. Such a text is an error's text like
-// another and is shown as one is, so nothing this returns is longer than
-// that.
+// Parts that add up to more than a worker shows of any error
+// (shownByWorkerBytes) did not come from a worker. A script can write to
+// the answers itself, as it always could write its own error there. A
+// megabyte of parts became a megabyte transform error, while every error a
+// worker sent was cut here. Such a text is treated like any error's text,
+// so nothing this returns is longer than that.
 func shownByWorker(parts []any) model.QuotedValue {
 	var said, same strings.Builder
 	for _, part := range parts {
@@ -181,15 +183,15 @@ func shownByWorker(parts []any) model.QuotedValue {
 // worker compiles it.
 const scriptFrame = `"<collector-python>"`
 
-// scriptCallerText is what a probe's caller is told of a script's error,
-// text: the type of the exception and the line of the script it came from,
-// as in "ValueError at line 3 of the script". The message is not: it is
-// what the script, or a library it called, made of the data — a KeyError
-// quotes a key of the response, a JSONDecodeError the response itself — and
-// so are the lines of the frames, the script's source among them. An error
-// the exporter's worker raised after the script, which has no frame, is
-// told by its type alone; a text whose exception's line names no type, such
-// as fail()'s message, is withheld whole.
+// scriptCallerText returns what a probe's caller is told of a script's
+// error, text: the exception type and the script line it came from, as in
+// "ValueError at line 3 of the script". The message is withheld, because
+// it is what the script, or a library it called, made of the data: a
+// KeyError quotes a key of the response, a JSONDecodeError the response
+// itself. The frame lines, which include the script's source, are withheld
+// too. An error the exporter's worker raised after the script has no frame
+// and is reported by its type alone. A text whose exception line names no
+// type, such as fail()'s message, is withheld entirely.
 func scriptCallerText(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	own, scriptLine := -1, ""
@@ -249,34 +251,36 @@ func pythonName(s string) bool {
 	return true
 }
 
-// shownByWorkerBytes is how long what is shown of a script's error can be,
-// by shownScriptError and so by a worker: the lines it keeps take
-// scriptErrorBytes at most, each with its line break, which the last has
-// none of; before them and after them may stand how many lines a part had;
-// and each number, which takes one byte where the lines are counted, is as
-// many digits as a length has, nineteen at most. The numbers are those two
-// and the length of each line that is cut, which takes its first
-// scriptLineBytes bytes, or up to three fewer, and the mark of its length:
-// seven lines at most. That is 1,689 bytes.
+// shownByWorkerBytes is the maximum length of what is shown of a script's
+// error by shownScriptError, and so by a worker:
+//   - The kept lines take at most scriptErrorBytes, each with its line
+//     break, except the last.
+//   - Before and after them may stand a count of a part's lines.
+//   - Each number takes one byte where lines are counted, and as many
+//     digits as a length has, nineteen at most. The numbers are those two
+//     counts plus the length of each cut line. A cut line keeps its first
+//     scriptLineBytes bytes, or up to three fewer, plus the mark of its
+//     length: seven lines at most.
+//
+// That is 1,689 bytes.
 const shownByWorkerBytes = scriptErrorBytes - 1 + 2*len("... (# lines)\n") +
 	(2+scriptErrorBytes/(scriptLineBytes-utf8.UTFMax+1+len("... (# bytes)\n")))*(len("9223372036854775807")-len(model.MovingMark))
 
-// stderrShownBytes is how much of what a worker wrote to stderr an error
-// shows. The worker keeps the last pythonStderrTail bytes of it, 4,096, and
-// an error that ended with all of them was over the bound of every failure
-// (model.MaxFailureBytes) by itself: cut there, it lost the end of what
-// CPython wrote, which is where it says why it stopped, and the hint that
-// follows it about limits.max_script_memory (memoryHint). With the longest
-// of what the errors say before and after it, this much is within the
-// bound.
+// stderrShownBytes is how much of a worker's stderr an error shows. The
+// worker keeps the last pythonStderrTail bytes, 4,096. An error ending with
+// all of them exceeded the limit of every failure (model.MaxFailureBytes)
+// by itself. Cut there, it lost the end of what CPython wrote, which says
+// why it stopped, and the following hint about limits.max_script_memory
+// (memoryHint). With the longest text the errors put before and after it,
+// this amount fits within the limit.
 const stderrShownBytes = 1500
 
-// shownStderr is tail, the end of what a worker wrote to stderr, as an error
-// shows it: whole when it is no longer than stderrShownBytes, and otherwise
-// its last stderrShownBytes bytes, or up to three fewer from a character's
-// start, after "... ".
-// Nothing is said of how much stood before: the worker does not keep how
-// much it wrote, and a number there would be another on every run.
+// shownStderr returns tail, the end of a worker's stderr, as an error shows
+// it: whole when it is no longer than stderrShownBytes, otherwise its last
+// stderrShownBytes bytes (or up to three fewer, to start on a character),
+// after "... ".
+// It does not say how much came before: the worker does not track how much
+// it wrote, and a number there would differ on every run.
 func shownStderr(tail string) string {
 	if len(tail) <= stderrShownBytes {
 		return tail

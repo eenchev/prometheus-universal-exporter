@@ -16,12 +16,12 @@ type transformInput struct {
 	response string
 }
 
-// transformInputs is the one table of which transform reads which decoder's
-// document. A scrape checks the document it was handed against it
-// (validateTransformInput), and a configuration that names a decoder its
-// transform is not listed with is refused when it loads (CheckDecoder), so
-// the two never disagree. The python transform is not listed: its script is
-// handed whatever was decoded.
+// transformInputs is the single table of which transform reads which
+// decoder's document. A scrape checks the document it was handed against it
+// (validateTransformInput). A configuration that names a decoder not listed
+// for its transform is refused at load (CheckDecoder). So the two never
+// disagree. The python transform is not listed: its script gets whatever was
+// decoded.
 var transformInputs = map[string]transformInput{
 	"jq":         {[]string{"json", "yaml", "graphite", "ndjson", "logfmt", "toml", "ini", "influx", "binary", "protobuf", model.DecoderNone}, "a structured JSON/YAML"},
 	"yq":         {[]string{"json", "yaml", "graphite", "ndjson", "logfmt", "toml", "ini", "influx", "binary", "protobuf", model.DecoderNone}, "a structured JSON/YAML"},
@@ -57,13 +57,13 @@ func validateTransformInput(d *decode.Decoded, transformType string) error {
 	return fmt.Errorf("%s transform requires %s response, got %q", transformType, input.response, d.Kind)
 }
 
-// CheckDecoder refuses, when a configuration loads, a decoder.type the
-// collector's transform can never read: every scrape would fail whatever the
-// target answered. A decoder left to each response (auto) is checked on the
-// scrape instead. A jq or yq transform with a pre_script is let be: its rules
-// read the mapping or list the script leaves, whatever was decoded
-// (applyPreScript); for every other transform the script's result is read as
-// the decoder's own kind of document.
+// CheckDecoder refuses, at configuration load, a decoder.type that the
+// collector's transform can never read, since every scrape would fail
+// whatever the target answered. A decoder chosen per response (auto) is
+// checked at scrape time instead. A jq or yq transform with a pre_script is
+// not checked: its rules read the mapping or list the script leaves,
+// whatever was decoded (applyPreScript). For every other transform the
+// script's result is read as the decoder's own kind of document.
 func CheckDecoder(x *model.Collector) error {
 	input, listed := transformInputs[x.Transform.Type]
 	if !listed || x.Decoder.Type == "" || x.Decoder.Type == "auto" || slices.Contains(input.decoders, x.Decoder.Type) {

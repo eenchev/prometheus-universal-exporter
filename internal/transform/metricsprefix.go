@@ -57,10 +57,10 @@ func ValidateMetricsPrefix(c *model.Collector) error {
 	return nil
 }
 
-// ExportedMetricName is the name the series a rule of the collector names
-// name are exported under: the collector's metrics_prefix joined to it, and
-// the whole escaped as the collector's name_escaping escapes a name that is
-// not classic, as Transform does with every series, in that order.
+// ExportedMetricName is the name under which the series of a rule named
+// name are exported. The collector's metrics_prefix is joined to name, then
+// the whole is escaped as the collector's name_escaping escapes a
+// non-classic name. Transform does the same with every series, in that order.
 func ExportedMetricName(c *model.Collector, name string) string {
 	return escapeName(prefixedMetricName(c.MetricsPrefix, name), c.NameEscaping, true)
 }

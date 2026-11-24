@@ -13,15 +13,15 @@ import (
 
 // jq's debug and stderr write nothing in a scrape (expr.jqQuiet). In a
 // debug probe, whose context carries the logger of its report
-// (WithRuleLogger), each value they are given is a line of that report,
-// with the rule it was told in and the expression: what an expression made
-// part of the way is then seen without rewriting the rule. The report shows
-// the response already, so the values tell its reader nothing they could
-// not read there.
+// (WithRuleLogger), each value they receive becomes a line of that report,
+// with the rule it came from and the expression. This shows an
+// intermediate value of an expression without rewriting the rule. The
+// report already shows the response, so the values reveal nothing its
+// reader could not read there.
 //
-// A program that calls neither is the scrape's own. One that does is
-// compiled anew for the probe, once for each of its expressions, with
-// functions that tell this (expr.CompileJQTold).
+// A program that calls neither is the same one the scrape uses. One that
+// calls either is compiled anew for the probe, once per expression, with
+// functions that report to it (expr.CompileJQTold).
 
 // The most lines a transform's debug and stderr write, after which one line
 // says the rest are left out, and the most bytes of a value a line shows.

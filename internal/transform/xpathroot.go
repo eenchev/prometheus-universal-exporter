@@ -11,27 +11,28 @@ import (
 	"golang.org/x/net/html"
 )
 
-// A label's expression is evaluated at the node its rule selected, and an
-// absolute path in it — /status/@site, //status, a predicate that compares
-// with //y/@id — starts at the document, as XPath has it. The engine's
-// navigators (antchfx/xmlquery and htmlquery, as pinned in go.mod) do not:
-// one takes the node it was made at for its root, so that from a selected
-// node `/` and `//` meant that node, found nothing beneath it, and the label
-// was left off every series without a word, where ../@site and
-// ancestor::status/@site gave it.
+// A label's expression is evaluated at the node its rule selected. An
+// absolute path in it (/status/@site, //status, a predicate that compares
+// with //y/@id) starts at the document, as XPath defines. The engine's
+// navigators (antchfx/xmlquery and htmlquery, as pinned in go.mod) do not
+// do this. A navigator takes the node it was made at as its root. So from a
+// selected node, `/` and `//` meant that node and found nothing beneath it,
+// and the label was silently left off every series, while ../@site and
+// ancestor::status/@site worked.
 //
 // So a label that may reach the root is evaluated from a navigator whose
-// root is the document's (rootedXML, rootedHTML): the library's navigator,
-// whose every move but three is its own. MoveToRoot goes to the top of the
-// tree the node is in, Copy gives another of the same kind, and MoveTo takes
-// the other's place whole, which the library's refuses for a navigator with
-// another root. Nothing else in the engine (antchfx/xpath v1.3.9) asks a
-// navigator for its root: an absolute path is its one caller of MoveToRoot,
-// and the order of nodes is told by walking to the top through MoveToParent.
+// root is the document's root (rootedXML, rootedHTML). It is the library's
+// navigator with three moves replaced. MoveToRoot goes to the top of the
+// tree the node is in. Copy gives another navigator of the same kind. MoveTo
+// takes the other navigator's place whole; the library's version refuses
+// this for a navigator with another root. Nothing else in the engine
+// (antchfx/xpath v1.3.9) asks a navigator for its root. An absolute path is
+// the only caller of MoveToRoot, and node order is found by walking to the
+// top through MoveToParent.
 //
-// Whether a label may reach the root is decided once for the rule, from its
-// expression (xpathReachesRoot), and kept in its plan: every other label is
-// evaluated as it was, from the library's navigator, and costs what it cost.
+// Whether a label may reach the root is decided once per rule, from its
+// expression (xpathReachesRoot), and kept in its plan. Every other label is
+// evaluated as before, from the library's navigator, at the same cost.
 
 // rootedXML is xmlquery's navigator with the document for its root.
 type rootedXML struct{ xmlquery.NodeNavigator }
@@ -114,10 +115,10 @@ func rootedHTMLNavigator(node *html.Node) xpath.NodeNavigator {
 	return &rootedHTML{*htmlNavigator(node).(*htmlquery.NodeNavigator)}
 }
 
-// rootedHTMLOne is htmlNodes.one from a navigator with the document for its
+// rootedHTMLOne is htmlNodes.one using a navigator with the document as its
 // root. An attribute it selects is made by htmlSelected, with its element
-// for a parent, where htmlquery's own has none: nothing but its text is
-// read from the first node a label selects, which is the same of both.
+// as parent; htmlquery's own has no parent. Only the text of the first node
+// a label selects is read, and that is the same for both.
 func rootedHTMLOne(node *html.Node, e *xpath.Expr) (*html.Node, bool) {
 	it := e.Select(rootedHTMLNavigator(node))
 	if !it.MoveNext() {
@@ -139,21 +140,21 @@ func rootedXPathNodes[N comparable](nodes xpathNodes[N]) xpathNodes[N] {
 	return nodes
 }
 
-// xpathReachesRoot reports whether an XPath expression has an absolute
-// path in it, one that starts with / or //, anywhere: at its start, in a
-// predicate, an argument or an operand. It is told from the expression as
-// written, by the tokens the engine's parser reads (antchfx/xpath's
-// scanner): a slash starts an absolute path where an operand is expected —
-// at the start, after an operator, an opening bracket or a comma — and is a
-// step of the path before it after anything that ends one: a name, a
-// closing bracket, a dot, a number or a string. A `*` and the names and,
-// or, div and mod are operators where an operand has ended and names where
-// one is expected, so `../div/span` and `*/name` have no absolute path and
-// `a div /b` and `2*/b` have one. A slash inside a string is no path.
+// xpathReachesRoot reports whether an XPath expression contains an absolute
+// path (one that starts with / or //) anywhere: at its start, in a
+// predicate, an argument or an operand. It decides from the expression as
+// written, using the tokens the engine's parser reads (antchfx/xpath's
+// scanner). A slash starts an absolute path where an operand is expected:
+// at the start, or after an operator, an opening bracket or a comma. After
+// anything that ends an operand (a name, a closing bracket, a dot, a number
+// or a string) it is a step of the preceding path. A `*` and the names and,
+// or, div and mod are operators after an operand and names where an operand
+// is expected. So `../div/span` and `*/name` have no absolute path, and
+// `a div /b` and `2*/b` have one. A slash inside a string is not a path.
 //
-// Where the two could differ the answer is yes: an expression wrongly said
-// to reach the root is evaluated a little slower and gives what it gave,
-// and one wrongly said not to would lose its label.
+// When in doubt the answer is yes. An expression wrongly said to reach the
+// root is evaluated a little slower and gives the same result. One wrongly
+// said not to would lose its label.
 func xpathReachesRoot(expression string) bool {
 	// operand says the token before ended an operand, so a slash after it
 	// goes on with its path and a `*` or an operator's name is an operator.
@@ -240,10 +241,11 @@ func xpathReachesRoot(expression string) bool {
 	return false
 }
 
-// xpathNameStart reports whether a name starts with c, as the engine's
-// scanner has it: a letter or an underscore. Every character outside ASCII
-// is taken for one, a blank apart, which the caller asks after first: an
-// expression with one that is none does not compile.
+// xpathNameStart reports whether c can start a name, as the engine's
+// scanner decides: a letter or an underscore. Every non-ASCII character
+// counts as one, except a blank, which the caller checks first. An
+// expression with a non-ASCII character that is not a name start does not
+// compile.
 func xpathNameStart(c rune) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_' || c >= utf8.RuneSelf
 }

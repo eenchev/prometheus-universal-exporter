@@ -10,19 +10,21 @@ import (
 // left and the members on the right, each joined to it by a line. The
 // leader, the instance that asks the discovery sources, is drawn filled in
 // the accent colour and says "leader"; so is this instance when it runs
-// without --peers. A member's line says how long ago its last heartbeat
-// came, and a peer's how long ago this instance last checked it; a line is
-// dashed, and its text says why, for an overdue heartbeat, a member silent,
-// gone, shutting down or heartbeating from two exporters, and a peer whose
-// last check failed, down or never checked. Of more than topologyMost
-// members, those not well are drawn first (shownMembers). The members table
-// and the peers table say the same in text.
+// without --peers. The other allocator instances are purple, the members
+// grey. A member heartbeats every instance, so its line says how long ago
+// its last heartbeat to this instance came, on a follower's page as on the
+// leader's; a peer's line says how long ago this instance last checked it.
+// A line is dashed, and its text says why, for an overdue heartbeat, a
+// member silent, gone, shutting down or heartbeating from two exporters,
+// and a peer whose last check failed, down or never checked. Of more than
+// topologyMost members, those not well are drawn first (shownMembers). The
+// members table and the peers table say the same in text.
 
 // The diagram's sizes, in pixels: a node's box, the hub's, the gaps a line
 // spans between the peers and the hub and between the hub and the members,
 // and the latter when there are no peers (topologyAlone), a row's height
 // and the margin. Three columns fit the page's 860px. A member's line's
-// text, such as "shutting down, 14m59s ago", is longer than a peer's, so
+// text, such as "shutting down, 59m59s ago", is longer than a peer's, so
 // its gap is the wider. topologyMost is the most members drawn, and
 // topologyNameMax the most characters of a box's line.
 const (

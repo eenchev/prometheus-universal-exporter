@@ -55,8 +55,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 - **A diagram on the target allocator's status page.** The page draws the
   instance, its peers and the exporter replicas that heartbeat to it. The
-  leader is the filled box, and each line says how long ago the replica's
-  last heartbeat came, or how long ago the instance last checked the peer.
+  leader is the filled box, the other allocator instances purple and the
+  replicas grey. Each line says how long ago the replica's last heartbeat
+  to this instance came, or how long ago the instance last checked the
+  peer.
   A replica that is late, silent or shutting down, two replicas under one
   member name, or a peer that is down or whose last check failed, has a
   dashed red line. The diagram scrolls in a window of a fixed height and

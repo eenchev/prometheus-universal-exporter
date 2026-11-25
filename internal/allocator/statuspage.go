@@ -701,14 +701,16 @@ var statusFrame = `<!DOCTYPE html>
   // A wheel's delta is in pixels, lines or pages (deltaMode 0, 1 or 2);
   // Firefox gives a mouse's in lines.
   const wheelPixels = (event, box) => event.deltaY * [1, 16, box.clientHeight][event.deltaMode];
+  let pinchFrom = 0;
   content.addEventListener("wheel", (event) => {
     const box = event.ctrlKey && event.target.closest(".topology-window");
     if (!box) return;
     event.preventDefault();
+    // A pinch Safari sends as gesture events is zoomed by them alone.
+    if (pinchFrom) return;
     const edge = box.getBoundingClientRect();
     zoomDiagram(zoom * Math.exp(-wheelPixels(event, box) * 0.002), event.clientX - edge.left, event.clientY - edge.top);
   }, {passive: false});
-  let pinchFrom = 0;
   content.addEventListener("gesturestart", (event) => {
     if (!event.target.closest(".topology-window")) return;
     event.preventDefault();
@@ -880,7 +882,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}. Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
+<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}.{{if and $.Peers .HasMembers}} Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives.{{end}} Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

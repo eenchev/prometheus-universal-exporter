@@ -99,7 +99,7 @@ func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := b.String()
-	for _, want := range []string{"<figcaption>No instance leads yet; purple boxes are allocator instances, grey ones the exporters. Each line", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
+	for _, want := range []string{"<figcaption>No instance leads yet; purple boxes are allocator instances, grey ones the exporters. Each exporter heartbeats every allocator instance;", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
 		`<g class="node hub allocator"><title>` + address + `</title>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q", want)

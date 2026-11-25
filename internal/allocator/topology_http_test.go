@@ -48,7 +48,9 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 
 // Among peers the leader is the filled box: on the leader's page this
 // instance, on a follower's the peer that leads. The other allocator
-// instances are drawn apart from the members, in the allocator's colour. A peer's line says how
+// instances are drawn apart from the members, in the allocator's colour,
+// and the caption says each instance draws the heartbeats it receives,
+// every exporter heartbeating every instance. A peer's line says how
 // long ago this instance last checked it. A follower under
 // --peers.leader-only draws itself and its peers alone, and says the
 // members are on the leader's page.
@@ -60,7 +62,7 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderPage := ask(leader.a.Handler(""), "/", "").Body.String()
 	requireIn(t, leaderPage, `<g class="node hub master">`, `>this instance, leader</text>`,
 		`<g class="node allocator"><title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
-		"<figcaption>The filled box leads; purple boxes are the other allocator instances, grey ones the exporters. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
+		"<figcaption>The filled box leads; purple boxes are the other allocator instances, grey ones the exporters. Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
 		"Diagram: this instance, leader, 1 peer and 2 members;")
 	followerPage := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, followerPage, `<g class="node hub allocator">`, `>this instance, follower</text>`,
@@ -91,8 +93,9 @@ func memberOf(t *testing.T, s Status, id string) MemberStatus {
 // page without JavaScript has no dead buttons. The script scales the
 // drawing from the size the SVG keeps in data-width and data-height, by
 // steps or around the pointer under Ctrl and the wheel, a wheel's lines
-// counted in pixels, or Safari's pinch, and keeps the zoom and the scroll
-// over a refresh. At first and on Reset the window is scrolled to the
+// counted in pixels, or Safari's pinch, which its wheel events, if any,
+// do not zoom a second time, and keeps the zoom and the scroll over a
+// refresh. At first and on Reset the window is scrolled to the
 // leader's box, whose middle the SVG gives.
 func TestTheDiagramScrollsAndZooms(t *testing.T) {
 	a, _ := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), "")), "r1")
@@ -113,6 +116,7 @@ func TestTheDiagramScrollsAndZooms(t *testing.T) {
 		"const wheelPixels = (event, box) => event.deltaY * [1, 16, box.clientHeight][event.deltaMode];",
 		"zoomDiagram(zoom * Math.exp(-wheelPixels(event, box) * 0.002)",
 		`content.addEventListener("gesturechange", (event) => {`, "zoomDiagram(pinchFrom * event.scale,",
+		"if (pinchFrom) return;",
 		`if (step === "reset") {`+"\n      zoomDiagram(1);\n      onLeader(content.querySelector(\".topology-window\"));",
 		"if (!at) return onLeader(after);", "    zoomDiagram(1);\n    onLeader(first);")
 }

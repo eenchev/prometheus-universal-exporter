@@ -242,7 +242,7 @@ func checkSettingsApply(x *model.Collector) error {
 		return fmt.Errorf("collector %q sets transform.required_libs, which are imported for the collector's Python code, but it has neither a python transform nor a pre_script", x.Name)
 	}
 	csv := x.Response.CSV
-	if (csv.Header != nil || csv.Delimiter != "" || csv.TrimSpace) && x.Decoder.Type != "csv" && x.Decoder.Type != "auto" {
+	if (csv.Header != nil || csv.Delimiter != "" || csv.TrimSpace || csv.Comment != "") && x.Decoder.Type != "csv" && x.Decoder.Type != "auto" {
 		return fmt.Errorf("collector %q sets response.csv, which applies to the csv decoder, but its decoder is %s", x.Name, x.Decoder.Type)
 	}
 	if documents := x.Response.YAML.Documents; documents != "" {
@@ -261,7 +261,10 @@ func checkSettingsApply(x *model.Collector) error {
 	if len(x.Response.Namespaces) > 0 && t.Type != "xpath" {
 		return fmt.Errorf("collector %q sets response.namespaces, which name the prefixes of an xpath transform's expressions, but its transform is %s", x.Name, t.Type)
 	}
-	return checkCSVDelimiter(x)
+	if err := checkCSVDelimiter(x); err != nil {
+		return err
+	}
+	return checkCSVComment(x)
 }
 
 // checkCSVDelimiter requires response.csv.delimiter to be one character that
@@ -284,6 +287,26 @@ func checkCSVDelimiter(x *model.Collector) error {
 		written = strconv.Quote(delimiter)
 	}
 	return fmt.Errorf(`collector %q response.csv.delimiter %s must be one character, and not a double quote or a line break; for a tab, write delimiter: "\t" in double quotes, where YAML reads \t as the tab character`, x.Name, written)
+}
+
+// checkCSVComment requires response.csv.comment to be one character that is
+// not the delimiter, a double quote, white space or a control character. A
+// comment character that is white space would leave out every line that
+// begins with a blank.
+func checkCSVComment(x *model.Collector) error {
+	comment := x.Response.CSV.Comment
+	if comment == "" {
+		return nil
+	}
+	delimiter := x.Response.CSV.Delimiter
+	if delimiter == "" {
+		delimiter = ","
+	}
+	r, size := utf8.DecodeRuneInString(comment)
+	if size == len(comment) && r != '"' && r != utf8.RuneError && !unicode.IsSpace(r) && !unicode.IsControl(r) && comment != delimiter {
+		return nil
+	}
+	return fmt.Errorf("collector %q response.csv.comment %s must be one character that starts a comment line, such as #, and not the delimiter, a double quote, white space or a control character", x.Name, strconv.Quote(comment))
 }
 
 // checkProbeSeriesNames refuses, on a collector with report_failures, a rule

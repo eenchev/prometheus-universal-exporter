@@ -82,6 +82,22 @@ func TestSchemaAndExporterAgreeOnTheCSVDelimiter(t *testing.T) {
 	}
 }
 
+// response.csv.comment is one character, and not a double quote, white
+// space, a control character or the replacement character; left empty no
+// line is a comment.
+func TestSchemaAndExporterAgreeOnTheCSVComment(t *testing.T) {
+	schema := loadSchema(t)
+	commented := func(comment string) string {
+		return strings.Replace(csvCollector("';'"), "        delimiter: ';'\n", "        delimiter: ';'\n        comment: "+comment+"\n", 1)
+	}
+	for written, accepted := range map[string]bool{
+		`"#"`: true, `'!'`: true, `"%"`: true, `"€"`: true, `"😀"`: true, `""`: true,
+		`"##"`: false, `'"'`: false, `" "`: false, `"\t"`: false, `"\n"`: false, `"\r"`: false, `"\x00"`: false, `"\x7f"`: false, `"\u0085"`: false, `"\u00a0"`: false, `"\u3000"`: false, `"\uFFFD"`: false,
+	} {
+		agree(t, schema, "comment: "+written, commented(written), accepted)
+	}
+}
+
 // sizedDocument is a configuration whose otlp.batch_max_bytes, in a block
 // that is switched off, is as written: a size that is held to nothing but
 // being one, to both. limits.max_output_bytes, which the sizes below were

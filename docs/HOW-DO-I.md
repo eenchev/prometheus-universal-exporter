@@ -31,6 +31,7 @@ that covers it, usually with an example to copy. New here? Start with
 | Call an API that wants each request signed with a secret | [Signing requests](AUTHENTICATION.md#signing-requests) |
 | Read a Google API with a service account, or the GitHub API as an App | [A service account's key](AUTHENTICATION.md#a-service-accounts-key) |
 | Read InfluxDB line protocol, as Telegraf writes it to a file | [InfluxDB line protocol](CONFIGURATION.md#influxdb-line-protocol) |
+| Query InfluxDB with InfluxQL or Flux | [Querying InfluxDB](CONFIGURATION.md#querying-influxdb) |
 | Check that a SIP server or PBX answers | [SIP](SIP.md), in a build with the opt-in type |
 | Read how deep a RabbitMQ queue is when its management API is closed | [AMQP](AMQP.md), in a build with the opt-in type |
 | Watch a NATS server, and a JetStream consumer's lag | [NATS](NATS.md), in a build with the opt-in type |

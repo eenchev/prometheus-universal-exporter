@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
@@ -331,7 +332,16 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		delim = rr[0]
 	}
-	rows, err := readCSV(r.Body, delim, cfg.TrimSpace)
+	// Comment lines are taken out before anything else reads the body, so
+	// a quote in one is no quote of a field. Each leaves its line end, so
+	// every line keeps its number.
+	body := r.Body
+	var tables []int
+	if cfg.Comment != "" {
+		comment, _ := utf8.DecodeRuneInString(cfg.Comment)
+		body, tables = withoutCommentLines(body, comment, delim, cfg.TrimSpace)
+	}
+	rows, err := readCSV(body, delim, cfg.TrimSpace)
 	if err != nil {
 		// The line and the column the reader names are where in the body
 		// it stopped, which is no part of what the failure is to the log.
@@ -351,6 +361,11 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// The rows are the reader's own, each a line's cells: a row is not
 	// given an entry for a column it is short of (CSVRows).
 	if header {
+		// record is the record of the body that data row n is.
+		rows, record, err := withoutTableHeaders(body, delim, cfg.TrimSpace, rows, tables)
+		if err != nil {
+			return nil, err
+		}
 		heads := rows[0]
 		// A header that names one column twice, or leaves two unnamed, would
 		// let the later column silently overwrite the earlier in every row.
@@ -391,7 +406,7 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 			// the row.
 			if len(row) > len(heads) {
 				if i := len(heads) + firstValue(row[len(heads):], cfg.TrimSpace); i < len(row) {
-					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(r.Body, delim, cfg.TrimSpace, n+1, i)), model.Position(i+1))
+					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(body, delim, cfg.TrimSpace, record(n), i)), model.Position(i+1))
 				}
 				row = row[:len(heads)]
 				data[n] = row
@@ -410,6 +425,55 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 	}
 	return &Decoded{Kind: "csv", Data: &CSVRows{rows: rows}, Raw: r.Body}, nil
+}
+
+// withoutTableHeaders returns rows without the header of each table after the
+// first, at the records tables names (withoutCommentLines), and the record of
+// the body each data row is. A table's header that names the first table's
+// columns is the same header written again, as annotated CSV writes it for a
+// table of the same columns after comment lines. One that names other columns
+// fails the decode: its rows would be read by the first header's names, each
+// value under another column's name.
+func withoutTableHeaders(body []byte, delimiter rune, trimSpace bool, rows [][]string, tables []int) ([][]string, func(int) int, error) {
+	record := func(n int) int { return n + 1 }
+	if len(tables) == 0 {
+		return rows, record, nil
+	}
+	same := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			x, y := a[i], b[i]
+			if trimSpace {
+				x, y = strings.TrimSpace(x), strings.TrimSpace(y)
+			}
+			if x != y {
+				return false
+			}
+		}
+		return true
+	}
+	kept := make([][]string, 0, len(rows))
+	// records are the records of the rows kept after the header.
+	records := make([]int, 0, len(rows))
+	next := 0
+	for i, row := range rows {
+		if next < len(tables) && tables[next] == i {
+			next++
+			if i > 0 {
+				if !same(row, rows[0]) {
+					return nil, nil, model.Errorf("CSV line %d is the header of a new table, after comment lines, and names other columns than the first header; give every table the same columns, such as with keep() or pivot() in a Flux query", model.Position(csvFieldLine(body, delimiter, trimSpace, i, 0)))
+				}
+				continue
+			}
+		}
+		kept = append(kept, row)
+		if i > 0 {
+			records = append(records, i)
+		}
+	}
+	return kept, func(n int) int { return records[n] }, nil
 }
 
 // trimCells takes the blanks around each of cells off it, in place.

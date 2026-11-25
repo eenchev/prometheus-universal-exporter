@@ -45,6 +45,7 @@ This page is the reference for what the document may contain.
   - [NDJSON, logfmt, TOML and INI](#ndjson-logfmt-toml-and-ini)
   - [Binary answers](#binary-answers)
   - [InfluxDB line protocol](#influxdb-line-protocol)
+  - [Querying InfluxDB](#querying-influxdb)
   - [Protobuf responses](#protobuf-responses)
   - [Character encodings](#character-encodings)
   - [Reading CSV: what to expect](#reading-csv-what-to-expect)
@@ -647,6 +648,120 @@ service that answers with it. InfluxDB's own query API answers CSV, which an
 `http` collector reads with the [`csv` decoder](#reading-csv-what-to-expect).
 The exporter accepts no pushed data, so it cannot act as a Telegraf output.
 
+### Querying InfluxDB
+
+An `http` collector can send InfluxDB a query and turn the answer into
+metrics. This helps when you move from InfluxDB to Prometheus, or run both
+for a while. Each probe asks the query again, and Prometheus stamps what the
+query returns with the time of the scrape, not with the time InfluxDB holds.
+So ask for the latest value of a recent window, such as `last()` over the
+last 5 minutes.
+
+The token below is read from the environment with
+[`--config.expand-env`](FLAGS.md). InfluxDB 1.x without a token takes a
+username and password: use `basic_auth` or `basic_auth_file` in place of the
+`Authorization` header (see [Authentication](AUTHENTICATION.md)).
+
+**InfluxQL**, of InfluxDB 1.x and of the 1.x API of later versions:
+`/query` answers JSON, which the `jq` transform reads.
+
+```yaml
+collectors:
+  - name: influxql_cpu
+    request:
+      type: http
+      path: /query
+      query:
+        db: telegraf
+        q: SELECT last("usage_idle") AS "idle" FROM "cpu" WHERE time > now() - 5m GROUP BY "host"
+      headers:
+        Authorization: Token ${INFLUX_TOKEN}
+    transform:
+      type: jq
+    metrics:
+      - name: influx_cpu_idle_percent
+        type: gauge
+        items: .results[0].series[]?
+        expression: .values[0][1]
+        labels:
+          - name: host
+            expression: .tags.host
+```
+
+- The answer has one entry in `results` for each statement. Each entry has
+  one `series` for each group of `GROUP BY`, with the group's `tags`, the
+  `columns` and the `values`, one row per point:
+  `{"name": "cpu", "tags": {"host": "web01"}, "columns": ["time", "idle"],
+  "values": [["2026-11-25T10:00:00Z", 97.5]]}`.
+- A value is read by its place in the row. `time` is always first, so
+  `.values[0][1]` is the first column after it.
+- A query that finds nothing has no `series`, and the `?` after `[]` makes
+  that no items rather than an error. A query that InfluxDB cannot parse
+  answers an error status, which fails the probe. One that it parses but
+  cannot run, such as one of a database that does not exist, answers status
+  200 with an `error` in its entry of `results`, and has no items either. A
+  required rule then reports its value missing.
+
+**Flux**, of InfluxDB 2.x and InfluxDB Cloud: `/api/v2/query` answers
+annotated CSV, which the `csv` transform reads when
+`response.csv.comment` leaves out its annotation lines.
+
+```yaml
+collectors:
+  - name: flux_cpu
+    request:
+      type: http
+      method: POST
+      path: /api/v2/query
+      query:
+        org: example
+      headers:
+        Authorization: Token ${INFLUX_TOKEN}
+        Accept: application/csv
+        Content-Type: application/vnd.flux
+      body: |
+        from(bucket: "telegraf")
+          |> range(start: -5m)
+          |> filter(fn: (r) => r._measurement == "cpu" and r._field == "usage_idle")
+          |> last()
+          |> keep(columns: ["host", "_value"])
+    response:
+      csv:
+        comment: "#"
+    transform:
+      type: csv
+    metrics:
+      - name: influx_cpu_idle_percent
+        type: gauge
+        expression: _value
+        labels:
+          - name: host
+            expression: host
+```
+
+The answer looks like this. The lines that begin with `#` are annotations,
+and the first column has no name and is empty:
+
+```text
+#group,false,false,true,false
+#datatype,string,long,string,double
+#default,_result,,,
+,result,table,host,_value
+,,0,web01,97.5
+,,1,web02,88
+```
+
+- `comment: "#"` leaves out the annotation lines. The first column is
+  empty in every row, so it is left out, as any such column is.
+- Every row has the columns `result` and `table`. Rules read the columns
+  they need and leave those out.
+- Tables with the same columns share one header. When the columns change
+  from one table to the next, InfluxDB writes an empty line, new annotation
+  lines and a new header. A new header that names the first header's
+  columns is left out. One that names other columns fails the decode,
+  naming its line. So give every table the same columns:
+  `keep(columns: [...])` as above, or `pivot()` to make fields columns.
+
 ### Protobuf responses
 
 `decoder.type: protobuf` reads a body that is one protobuf message, as an API
@@ -1012,6 +1127,22 @@ Header and row shape:
   for any rule, so a required rule is
   [missing its value](#when-a-metric-cannot-be-extracted).
 
+Comment lines:
+
+- `response.csv.comment: "#"` leaves out every line that begins with `#`,
+  such as the annotation lines of InfluxDB's
+  [annotated CSV](#querying-influxdb). Only a line that begins with the
+  character is a comment. A line that begins with a blank, and a line inside
+  a quoted field, are not.
+- An empty line followed by comment lines starts a new table, as annotated
+  CSV does. The line after the comment lines is that table's header. It is
+  left out when it names the same columns as the first header, and fails
+  the decode when it names others, since its rows would be read under the
+  wrong names. With `header: false` no line is a header.
+- An error names a line by its number in the body, comment lines counted.
+- The comment character is one character. It cannot be the delimiter, a
+  double quote, white space or a control character.
+
 Line ends and quotes:
 
 - A line ends at a line feed, at a carriage return followed by a line feed,
@@ -1315,12 +1446,13 @@ table shows what a `csv` rule does with the variants:
 
 | The file | What happens | What to do |
 | --- | --- | --- |
-| Has a header line, and is read with `header: false` | The first line is a row of data like the others, so every rule fails on it, on every scrape: `value "used" is not a number`. | There is no setting that skips lines. Read the columns by name, or drop the row in a pre-script: `data = data[1:]`. |
+| Has a header line, and is read with `header: false` | The first line is a row of data like the others, so every rule fails on it, on every scrape: `value "used" is not a number`. | No setting skips a header line. Read the columns by name, or drop the row in a pre-script: `data = data[1:]`. |
 | Lacks a column a rule names | The rule's value: `CSV column "used" is not in the response, whose columns are "Used", "Host"; column names are matched exactly`, a missing value of every row. A label: the rule fails, once, with `metric "used" label "zone": CSV column "zone" is not in the response, …`, and makes no series. | See below. |
 | Has an empty cell in a column a rule names | A missing value of that row, `CSV column "used" is empty in row 3`, the rows counted from 1 without the header's line. A label read from it is left off that series. | `required: false` where that is expected. |
 | Has rows shorter than the header | The columns a row lacks are empty in it, so missing values. | `required: false` where that is expected. |
 | Has blank lines, or a last line without a line end | A blank line is no row, and the last line is read like the others. | Nothing. |
 | Has a line of blanks | It is a row, missing every value. | `required: false`, or drop it in a pre-script. |
+| Has comment lines, such as `# exported at 10:00`, or the annotation lines of InfluxDB's annotated CSV | Each is a row, or the header when it comes first. | `response.csv.comment: "#"`, which leaves them out. For InfluxDB, see [Querying InfluxDB](#querying-influxdb). |
 | Ends its lines with a carriage return alone, as a spreadsheet's "CSV (Macintosh)" and some instruments do | Each is a line end, as LF and CRLF are, and a file may end some lines one way and some another. Inside a quoted field a carriage return is the field's text, and one with a line feed after it is read as the line feed alone. | Nothing. |
 | Is tab-separated, with a field that starts with `"` | Quoting cannot be turned off: such a field is a quoted field and runs to its closing quote, over tabs and line ends, and one never closed fails the decode. A quote later in a field is text. | Write the quote doubled inside quotes, `"""big"" disk"`, or have the export put the field in quotes. |
 | Has columns aligned with spaces | With `delimiter: " "` alone every space is a delimiter and the header fails as an unnamed column. | `trim_space: true`, which makes one delimiter of a run of spaces; an empty field is then written `""`. |

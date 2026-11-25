@@ -204,6 +204,7 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].metrics[].labels[].expression", of: "of blanks beside a value, in a csv rule", document: strings.NewReplacer("type: jq", "type: csv", "expression: .v", "expression: v", "expression: .l\n", "value: x\n").Replace(jqCollector), at: label, setting: "            expression: %s\n", invalid: `"\t "`, absent: true, empty: true, emptyWas: refused},
 		// Free text of at most one character: "" was the default already.
 		{key: "collectors[].response.csv.delimiter", document: csvCollector("';'"), at: "    response:\n      csv:\n        delimiter: ';'\n", setting: "    response:\n      csv:\n        delimiter: %s\n", valid: "';'", invalid: "';;'", absent: true, empty: true},
+		{key: "collectors[].response.csv.comment", document: strings.Replace(csvCollector("';'"), "        delimiter: ';'\n", "        delimiter: ';'\n        # comment\n", 1), at: "        # comment\n", setting: "        comment: %s\n", valid: "'#'", invalid: "'##'", absent: true, empty: true},
 		// Entries of lists and keys of mappings: an empty one is refused by
 		// both, which the schema did not do for a target it may or may not
 		// reach.

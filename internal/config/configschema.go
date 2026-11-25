@@ -719,6 +719,16 @@ func collectorKeySchemaRules() map[string]map[string]any {
 			"not":         map[string]any{"enum": []string{`"`, "\r", "\n", "\x00", "\uFFFD"}},
 			"description": "csv decoder: the one character between fields, any but a double quote and a line break. Defaults to a comma. For a tab, write \"\\t\" in double quotes, where YAML reads \\t as the tab character.",
 		},
+		// What checkCSVComment refuses but the delimiter, which a schema
+		// cannot compare with another key's value: the characters listed,
+		// so that every validator reads them alike, which the classes of a
+		// pattern such as \s do not.
+		"collectors[].response.csv.comment": {
+			"type":        "string",
+			"maxLength":   1,
+			"not":         map[string]any{"enum": csvCommentRefused()},
+			"description": "csv decoder: the character that starts a comment line, which is left out, such as # for the annotation lines of InfluxDB's annotated CSV. Only a line that begins with it is a comment. One character, not the delimiter, a double quote, white space or a control character. Unset, no line is a comment.",
+		},
 		"collectors[].decoder.type": {
 			"enum":        optionalEnum(model.DecoderTypes),
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides. none reads no body: jq and yq rules read null, with $status and $headers, and a Python script's data is None. binary reads the answer of a binary protocol by the layout of response.binary, never chosen by auto.",
@@ -1432,4 +1442,18 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 		rules[login+"."+key] = rule
 	}
 	return rules
+}
+
+// csvCommentRefused are the characters checkCSVComment refuses as
+// response.csv.comment, the delimiter aside: a double quote, the replacement
+// character, and every character that is white space or a control
+// character.
+func csvCommentRefused() []string {
+	refused := []string{`"`, "\uFFFD"}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			refused = append(refused, string(r))
+		}
+	}
+	return refused
 }

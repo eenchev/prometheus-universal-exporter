@@ -929,6 +929,10 @@ type CSVConfig struct {
 	Header    *bool  `yaml:"header"`
 	Delimiter string `yaml:"delimiter"`
 	TrimSpace bool   `yaml:"trim_space"`
+	// Comment is the character that starts a comment line, which is left
+	// out, such as the # of the annotation lines of InfluxDB's annotated
+	// CSV. Unset, no line is a comment.
+	Comment string `yaml:"comment"`
 }
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that

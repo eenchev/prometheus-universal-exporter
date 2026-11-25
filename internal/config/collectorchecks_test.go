@@ -351,6 +351,47 @@ func TestASettingOfAnotherDecoderOrTransformIsRefused(t *testing.T) {
 	}
 }
 
+// response.csv.comment is one character that starts a comment line: two
+// characters, a double quote, white space, a control character and the
+// delimiter are refused when the configuration loads, and so is the key
+// beside a decoder other than csv; # and any other single character load.
+func TestTheCSVCommentIsOneCharacter(t *testing.T) {
+	document := func(csv string) string {
+		return "collectors:\n  - name: flux\n    request: {type: http}\n    response:\n      csv: {" + csv + "}\n    transform: {type: csv}\n    metrics:\n      - name: cpu\n        expression: cpu\n"
+	}
+	for name, csv := range map[string]string{
+		"two characters":            `comment: "##"`,
+		"a double quote":            `comment: '"'`,
+		"a space":                   `comment: " "`,
+		"a tab":                     `comment: "\t"`,
+		"a line feed":               `comment: "\n"`,
+		"the NUL":                   `comment: "\x00"`,
+		"the delimiter":             `comment: ";", delimiter: ";"`,
+		"the default delimiter":     `comment: ","`,
+		"the replacement character": `comment: "\uFFFD"`,
+	} {
+		_, err := Load(testutil.WriteFile(t, "config.yaml", document(csv)))
+		if err == nil || !strings.Contains(err.Error(), `collector "flux" response.csv.comment `) || !strings.Contains(err.Error(), "must be one character that starts a comment line") {
+			t.Errorf("%s: error %v", name, err)
+		}
+	}
+	for name, csv := range map[string]string{
+		"a hash":                  `comment: "#"`,
+		"a semicolon":             `comment: ";"`,
+		"a comma beside a tab":    `comment: ",", delimiter: "\t"`,
+		"a letter of three bytes": `comment: "€"`,
+		"left empty":              `comment: ""`,
+	} {
+		if _, err := Load(testutil.WriteFile(t, "config.yaml", document(csv))); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	json := "collectors:\n  - name: flux\n    request: {type: http}\n    decoder: {type: json}\n    response:\n      csv: {comment: \"#\"}\n    transform: {type: jq}\n    metrics:\n      - name: cpu\n        expression: .cpu\n"
+	if _, err := Load(testutil.WriteFile(t, "config.yaml", json)); err == nil || !strings.Contains(err.Error(), `collector "flux" sets response.csv, which applies to the csv decoder, but its decoder is json`) {
+		t.Errorf("with a json decoder: %v", err)
+	}
+}
+
 // response.csv.delimiter is one character the CSV reader can split on. More
 // than one, such as the two characters \t of a single-quoted '\t', a double
 // quote and a line break are refused when the configuration loads, saying

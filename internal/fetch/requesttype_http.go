@@ -38,6 +38,11 @@ type HTTPConfig struct {
 	// Version 4 (httpsigv4_keys.go).
 	Signature *SignatureConfig `yaml:"signature,omitempty"`
 	AWSSigV4  *SigV4Config     `yaml:"aws_sigv4,omitempty"`
+	// Extract and Then are request.extract and request.then, nil for none:
+	// the values read from this request's answer, and the requests made
+	// after it, to the same target (chain.go).
+	Extract map[string]model.ChainExtract `yaml:"extract,omitempty"`
+	Then    []model.ChainStep             `yaml:"then,omitempty"`
 }
 
 // httpRequest is an http collector's own request keys: the zero HTTPConfig
@@ -68,8 +73,10 @@ func init() {
 		},
 		Policy: func(c *model.Collector) RequestPolicy {
 			own := httpRequest(c)
-			return RequestPolicy{Pagination: own.Pagination, UnixSocket: c.Request.UnixSocket}
+			return RequestPolicy{Pagination: own.Pagination, UnixSocket: c.Request.UnixSocket, Chain: own.Then}
 		},
+		// The steps of a chain hold placeholders as the request does.
+		Templates: chainTemplates,
 		Overrides: []string{
 			"method", "path", "timeout", "body", "insecure_skip_verify",
 			"follow_redirects", "enable_http2", "new_connection", "ip_family", "retry_attempts", "retry_backoff",
@@ -142,7 +149,10 @@ func (httpRequester) Validate(c *model.Collector) error {
 	if err := validateUnixSocket(c, c.Request.UnixSocket); err != nil {
 		return err
 	}
-	return validatePagination(c)
+	if err := validatePagination(c); err != nil {
+		return err
+	}
+	return validateChain(c)
 }
 
 // Fetch performs one request of an http collector.
@@ -172,6 +182,9 @@ func httpKeyRules() map[string]map[string]any {
 		rules[key] = rule
 	}
 	for key, rule := range sigV4KeyRules() {
+		rules[key] = rule
+	}
+	for key, rule := range chainKeyRules() {
 		rules[key] = rule
 	}
 	return rules

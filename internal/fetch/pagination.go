@@ -266,9 +266,12 @@ func setPath(v any, path []any, value any) any {
 	return v
 }
 
-// fetchHTTP is the http type's fetch: one request, or the pages of
-// request.pagination.
+// fetchHTTP is the http type's fetch: one request, the pages of
+// request.pagination, or the requests of a chain (chain.go).
 func fetchHTTP(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+	if httpRequest(c).Then != nil {
+		return fetchChain(ctx, target, c, overrides, forwarded)
+	}
 	if httpRequest(c).Pagination == nil {
 		return fetch(ctx, target, c, overrides, forwarded)
 	}

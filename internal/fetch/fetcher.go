@@ -76,6 +76,9 @@ type HTTPResponse struct {
 	// collector does not accept, StatusCode, Headers and Body are that page's
 	// instead (pagination.go). Pages is nil without request.pagination.
 	Pages *PagesRead
+	// Chain is how the requests of an http collector's chain went, nil for
+	// a collector without request.then (chain.go).
+	Chain *ChainReport
 	// Conditional says the request carried the validators of a cached response
 	// (revalidate.go). NotModified says the target answered it with 304 Not
 	// Modified. The response is then the cached one, with its status and body,
@@ -778,6 +781,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if err != nil {
 		return nil, err
 	}
+	if trip := chainTripOf(ctx); trip != nil {
+		// The steps of a chain share the trip's cookies (chain.go).
+		client.Jar = trip.jar
+	}
 	// The collector's allowed_targets and denied_targets, checked here, on
 	// every redirect and on every connection the request makes, with the
 	// transport's own idea of what goes through a proxy.
@@ -1051,7 +1058,7 @@ func (t *httpTrip) send() (*HTTPResponse, error) {
 		// made within the request's deadline. A 401 from where a redirect led
 		// without the token, to another origin, refused no token, and is handled
 		// like any other answer.
-		if t.login.refuses(resp.StatusCode) && t.login.carried(resp.Request) {
+		if t.login.refuses(resp.StatusCode) && t.login.carried(resp.Request) && mayRelogin(t.ctx) {
 			again, err := t.login.again(t.ctx)
 			if err != nil {
 				return nil, err
@@ -1128,6 +1135,7 @@ func (t *httpTrip) request(ctx context.Context, attempt int) (*http.Request, err
 	traceRequest(t.ctx, req.Method, req.URL.String(), req.Header, req.Host, false)
 	traceSpanID(t.ctx, span)
 	traceAttempt(t.ctx, attempt)
+	countChainRequest(t.ctx)
 	traceRateLimitWait(t.ctx, waited, false)
 	return req, nil
 }

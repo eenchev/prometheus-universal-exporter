@@ -403,6 +403,9 @@ type RequestPolicy struct {
 	// UnixSocket is the http type's request.unix_socket, the socket every
 	// request of the collector is sent over (unixsocket.go), "" for none.
 	UnixSocket string
+	// Chain is the http type's request.then, nil for a collector that makes
+	// one request (chain.go).
+	Chain []model.ChainStep
 }
 
 // CollectorPolicy is what the request of c lets through that only its type

@@ -51,6 +51,10 @@ type TracedRequest struct {
 	// Page is the page of request.pagination the request asked for, from
 	// 1; 0 without request.pagination.
 	Page int
+	// Step is the step of a chain the request was made for, "" outside a
+	// chain, and Item its fan-out item, from 1, 0 for none (chain.go).
+	Step string
+	Item int
 	// Withheld names the headers of the first request that a redirect to a
 	// host the collector does not trust was not sent (redirecttrust.go),
 	// and WithheldWhy says why the redirect was not trusted.
@@ -171,6 +175,27 @@ func spanTraced(ctx context.Context) bool {
 	return ok && t.spans
 }
 
+// withItemTrace returns ctx for a request sent at once with others, as the
+// items of a fan-out are (chain.go). Its requests are recorded in a trace of
+// their own, since what is learned of a request is recorded on the last one
+// recorded. merge adds them to the trip's trace, after the request ended.
+// Without a trace, ctx is returned as it is.
+func withItemTrace(ctx context.Context) (_ context.Context, merge func()) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return ctx, func() {}
+	}
+	item := &RequestTrace{spans: t.spans}
+	return context.WithValue(ctx, requestTraceKey{}, item), func() {
+		item.mu.Lock()
+		requests := item.requests
+		item.mu.Unlock()
+		t.mu.Lock()
+		t.requests = append(t.requests, requests...)
+		t.mu.Unlock()
+	}
+}
+
 // tracePhases records phases on the last request recorded, the one being
 // sent, unless it has them already.
 func tracePhases(ctx context.Context, phases []TracedPhase) {
@@ -252,6 +277,9 @@ func traceRequestAt(ctx context.Context, method, url string, header http.Header,
 	defer t.mu.Unlock()
 	page, _ := ctx.Value(pageKey{}).(int)
 	request := TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()}
+	if step := chainStepOf(ctx); step != nil {
+		request.Step, request.Item = step.name, step.item
+	}
 	if t.pending != nil {
 		// The connection the request is the first sent on, made before it
 		// was recorded: its span begins with the connection.

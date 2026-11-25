@@ -449,7 +449,7 @@ func RequestParams(c *model.Collector) []RequestParam {
 	byName := map[string]*RequestParam{}
 	var names []string
 	for _, p := range placeholders {
-		if p.Clock != nil {
+		if p.Clock != nil || strings.HasPrefix(p.Name, chainParamPrefix) {
 			continue // no probe parameter fills it
 		}
 		param := byName[p.Name]

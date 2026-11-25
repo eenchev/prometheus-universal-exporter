@@ -39,7 +39,7 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 		`<text class="edge-label" x="`, `<title data-at="`+r1.LastHeartbeat+`">`+r1.LastHeartbeat+`, the last heartbeat</title>0s ago</text>`,
 		`<line class="edge late"`, `<title data-at="`+r2.LastHeartbeat+`">`+r2.LastHeartbeat+`, the last heartbeat; a heartbeat is overdue</title>7s ago, overdue</text>`,
 		`const tip = mark.localName === "title" ? "textContent" : "title";`,
-		`<line class="edge down"`, `>shutting down</text>`, `<g class="node down">`,
+		`<line class="edge down"`, `>shutting down, 0s ago</text>`, `<g class="node down">`,
 		`r&lt;img src=x&gt;`, "The filled box is the leader, this instance, which runs without peers.")
 	if strings.Contains(page, "<img src=x>") {
 		t.Error("a member's name is written unescaped")
@@ -66,7 +66,7 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderOnly(leader, follower)
 	partial := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, partial, `aria-label="Diagram: this instance, follower, 1 peer; the tables below list the same."`,
-		"the members are on the leader's page. A dashed line is a peer down or not yet checked.")
+		"the members are on the leader's page. A dashed line is a peer whose last check failed, down or not yet checked.")
 	if strings.Contains(partial, "member's line") {
 		t.Error("the follower's caption speaks of members' lines it does not draw")
 	}

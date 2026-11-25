@@ -10,7 +10,8 @@ import (
 // members, saying how many more there are. Every box is inside the
 // diagram, the columns do not overlap, and the lines' texts are far
 // enough apart to read. A peer that failed one check says so in the
-// singular.
+// singular; a live peer whose last check failed is marked, as a member
+// shutting down still says when its last heartbeat came.
 func TestTheDiagramFitsItsNodes(t *testing.T) {
 	if v := topologyOf(Status{Members: &MembersStatus{}}); v != nil {
 		t.Errorf("a diagram of nothing: %+v", v)
@@ -62,6 +63,12 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 	if _, tip, class := peerEdgeText(PeerStatus{LastCheck: "2026-01-01T00:00:00Z", Failures: 1}); tip != ", the last check; 1 failed check in a row" || class != "down" {
 		t.Errorf("a peer down after one failed check says %q, %q", tip, class)
 	}
+	if text, _, class := peerEdgeText(PeerStatus{LastCheck: "2026-01-01T00:00:00Z", LastCheckAgeSeconds: 3, Live: true, Failures: 2}); text != "3s ago, failed" || class != "late" {
+		t.Errorf("a live peer whose last check failed says %q, %q", text, class)
+	}
+	if text, _, _ := memberEdgeText(MemberStatus{ShuttingDown: true, Live: true, LastHeartbeatAgeSeconds: 4}); text != "shutting down, 4s ago" {
+		t.Errorf("a member shutting down says %q", text)
+	}
 }
 
 // Before the instances have chosen their leader no box is filled, and the
@@ -89,5 +96,34 @@ func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
 	}
 	if strings.Contains(page, "The filled box is the leader") {
 		t.Error("the caption points at a filled box no instance has")
+	}
+}
+
+// The longest text a line can have, at an age of 59m59s and 6.5px a
+// character (Chromium draws "shutting down, 59m59s ago" in the page's 12px
+// sans-serif 158px wide), fits between the hub and the box it ends short
+// of, beside peers and without them.
+func TestTheLongestLineTextFitsItsGap(t *testing.T) {
+	const old = 3599
+	member := []MemberStatus{{ShuttingDown: true, LastHeartbeatAgeSeconds: old}, {InList: true, LastHeartbeatAgeSeconds: old}, {LastHeartbeatAgeSeconds: old}, {Live: true, Late: true, LastHeartbeatAgeSeconds: old}}
+	peer := []PeerStatus{{LastCheck: "x", LastCheckAgeSeconds: old}, {LastCheck: "x", Live: true, Failures: 1, LastCheckAgeSeconds: old}, {}}
+	for _, gap := range []int{topologyMemberGap, topologyAlone, topologyPeerGap} {
+		var all []string
+		if gap == topologyPeerGap {
+			for _, p := range peer {
+				text, _, _ := peerEdgeText(p)
+				all = append(all, text)
+			}
+		} else {
+			for _, m := range member {
+				text, _, _ := memberEdgeText(m)
+				all = append(all, text)
+			}
+		}
+		for _, text := range all {
+			if width := 13 * len([]rune(text)) / 2; width > gap-2*topologyLabelGap {
+				t.Errorf("%q is about %dpx, wider than the %dpx gap leaves it", text, width, gap)
+			}
+		}
 	}
 }

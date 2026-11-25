@@ -781,7 +781,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>{{if .HasLeader}}The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{else}}No box is filled: the instances have not yet chosen their leader.{{end}}{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down or not yet checked{{end}}{{else}}a peer down or not yet checked{{end}}.</figcaption>
+<figcaption>{{if .HasLeader}}The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{else}}No box is filled: the instances have not yet chosen their leader.{{end}}{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer whose last check failed, down or not yet checked{{end}}{{else}}a peer whose last check failed, down or not yet checked{{end}}.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

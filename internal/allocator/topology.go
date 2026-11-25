@@ -13,25 +13,29 @@ import (
 // without --peers. A member's line says how long ago its last heartbeat
 // came, and a peer's how long ago this instance last checked it; a line is
 // dashed, and its text says why, for an overdue heartbeat, a member silent,
-// gone or shutting down, and a peer down or never checked. The members
+// gone or shutting down, and a peer whose last check failed, down or never
+// checked. The members
 // table and the peers table say the same in text.
 
-// The diagram's sizes, in pixels: a node's box, the hub's, the gap a line
-// spans between two columns, and between the hub and the members when there
-// are no peers (topologyAlone), a row's height and the margin. Three columns
-// fit the page's 860px. topologyMost is the most members drawn, and
+// The diagram's sizes, in pixels: a node's box, the hub's, the gaps a line
+// spans between the peers and the hub and between the hub and the members,
+// and the latter when there are no peers (topologyAlone), a row's height
+// and the margin. Three columns fit the page's 860px. A member's line's
+// text, such as "shutting down, 14m59s ago", is longer than a peer's, so
+// its gap is the wider. topologyMost is the most members drawn, and
 // topologyNameMax the most characters of a box's line.
 const (
-	topologyNodeW   = 170
-	topologyNodeH   = 36
-	topologyHubW    = 180
-	topologyHubH    = 64
-	topologyGap     = 150
-	topologyAlone   = 250
-	topologyRowH    = 44
-	topologyMargin  = 8
-	topologyMost    = 50
-	topologyNameMax = 22
+	topologyNodeW     = 170
+	topologyNodeH     = 36
+	topologyHubW      = 180
+	topologyHubH      = 64
+	topologyPeerGap   = 134
+	topologyMemberGap = 190
+	topologyAlone     = 250
+	topologyRowH      = 44
+	topologyMargin    = 8
+	topologyMost      = 50
+	topologyNameMax   = 22
 	// topologyLabelGap is the room between a line's text and the box it
 	// leads to.
 	topologyLabelGap = 8
@@ -129,8 +133,8 @@ func topologyOf(s Status) *topologyView {
 
 	hubX, membersX := topologyMargin, topologyMargin+topologyHubW+topologyAlone
 	if len(peers) > 0 {
-		hubX = topologyMargin + topologyNodeW + topologyGap
-		membersX = hubX + topologyHubW + topologyGap
+		hubX = topologyMargin + topologyNodeW + topologyPeerGap
+		membersX = hubX + topologyHubW + topologyMemberGap
 	}
 	v.Width = membersX + topologyNodeW + topologyMargin
 	if len(members) == 0 {
@@ -221,13 +225,14 @@ func edgeOf(x1, y1, x2, y2 int) *topologyEdge {
 }
 
 // memberEdgeText is a member's line's text, what its tooltip says after
-// the moment of the last heartbeat, and its class.
+// the moment of the last heartbeat, and its class. Each text says how long
+// ago the last heartbeat came.
 func memberEdgeText(m MemberStatus) (text, tip, class string) {
 	ago := age(m.LastHeartbeatAgeSeconds) + " ago"
 	tip = ", the last heartbeat"
 	switch {
 	case m.ShuttingDown:
-		return "shutting down", tip + "; the member said it is shutting down", "down"
+		return "shutting down, " + ago, tip + "; the member said it is shutting down", "down"
 	case !m.Live && m.InList:
 		return "silent, " + ago, tip + "; the member is silent and leaves the member list", "down"
 	case !m.Live:
@@ -239,15 +244,23 @@ func memberEdgeText(m MemberStatus) (text, tip, class string) {
 }
 
 // peerEdgeText is a peer's line's text, what its tooltip says after the
-// moment of the last check, and its class.
+// moment of the last check, and its class: late for a live peer whose last
+// check failed, down for one not live or never checked.
 func peerEdgeText(p PeerStatus) (text, tip, class string) {
 	if p.LastCheck == "" {
 		return "never checked", "this instance has not checked it yet", "down"
 	}
 	ago := age(p.LastCheckAgeSeconds) + " ago"
 	tip = ", the last check"
-	if !p.Live {
-		return "down, " + ago, tip + "; " + strconv.Itoa(p.Failures) + " failed check" + plural(p.Failures) + " in a row", "down"
+	failed := "; " + strconv.Itoa(p.Failures) + " failed check" + plural(p.Failures) + " in a row"
+	switch {
+	case !p.Live:
+		return "down, " + ago, tip + failed, "down"
+	case p.Failures > 0:
+		// A check is made whatever its outcome: one that failed is no
+		// answer, though the peer stays live until it fails
+		// FailureThreshold in a row.
+		return ago + ", failed", tip + failed, "late"
 	}
 	return ago, tip, ""
 }

@@ -1308,7 +1308,7 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     how long ago this instance last checked it;
   - a line is dashed and red, and its text says why, for an overdue
     heartbeat, a member that is silent, gone or shutting down, and a peer
-    that is down or not yet checked. The box of a member that is not live
+    whose last check failed, that is down or that is not yet checked. The box of a member that is not live
     or is shutting down, and of a peer that is not live, has a dashed red
     outline;
   - a member's box opens its view ([A member's targets](#a-members-targets)).

@@ -148,7 +148,7 @@ func (s *Server) logChainStep(ctx context.Context, rec statsRecorder, c *model.C
 			}
 		}
 	}
-	if !slog.Default().Enabled(ctx, slog.LevelDebug) && probeTraceFrom(ctx) == nil {
+	if !s.logger.Enabled(ctx, slog.LevelDebug) && probeTraceFrom(ctx) == nil {
 		return
 	}
 	if !step.ForEach {

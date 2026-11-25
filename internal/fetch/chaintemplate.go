@@ -16,11 +16,10 @@ import (
 // {{param__chain_token:}}, which the request's own code fills in and writes
 // as its place requires: path-escaped in the path, query-escaped in the
 // query, as JSON with |json in a body. A probe's parameter of the reserved
-// prefix is never passed to a step (chainParams), so a probe cannot set a
-// value the chain reads.
+// prefix is never passed to a step (chainRun.params), so a probe cannot set
+// a value the chain reads.
 
-// chainRef is a chain placeholder found in a step's text: what it names,
-// and where it is in the text.
+// chainRef is a chain placeholder found in a step's text: what it names.
 type chainRef struct {
 	// Kind is "chain", "each", "each_field" or "each_index".
 	Kind string

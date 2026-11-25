@@ -87,16 +87,17 @@ func TestSchemaAndExporterAgreeOnChains(t *testing.T) {
 		refusedByBoth(t, schema, name, chainDocument(d.request, d.extra), d.message)
 	}
 	alone := map[string]struct{ request, extra, message string }{
-		"a value never read":         {"extract:\n  id: {json: .id}\n  other: {json: .other}\nthen:\n  - {name: d, path: '/x/{{chain.id}}'}", "", `reads the value "other" in step "first", which no later step sends`},
-		"a value read later":         {"then:\n  - {name: a, path: '/x/{{chain.id}}', extract: {id: {json: .id}}}", "", "sends {{chain.id}}, which no step before it reads"},
-		"each outside a fan-out":     {step("path: '/x/{{each}}/{{chain.id}}'"), "", "sends {{each}}, which only a fan-out step has"},
-		"for_each over a header":     {"extract:\n  jobs: {header: X-Jobs}\nthen:\n  - {name: d, for_each: jobs, path: '/x/{{each}}'}", "answer: all", "is not a json value"},
-		"two fan-outs":               {extract + "then:\n  - {name: a, for_each: jobs, path: '/a/{{each}}', extract: {more: {json: '[.x]'}}}\n  - {name: b, for_each: more, path: '/b/{{each}}'}", "answer: all", "a chain has at most one fan-out"},
-		"a fan-out last under last":  {fanOut(""), "", `ends with the fan-out step "last_build" under answer: last`},
-		"a path with a host":         {step("path: '//x.com/{{chain.id}}'"), "", "names a scheme or a host"},
-		"a step setting credentials": {step("path: '/x/{{chain.id}}'\nheaders: {authorization: x}"), "", "sets Authorization, which carries the collector's credentials"},
-		"a chain value in the first": {"query: {x: '{{chain.id}}'}\n" + step("path: '/x/{{chain.id}}'"), "", "it is the chain's first request"},
-		"two steps of one name":      {idExtract + "then:\n  - {name: a, path: '/x/{{chain.id}}'}\n  - {name: a, path: /y}", "", `two steps named "a"`},
+		"a value never read":                {"extract:\n  id: {json: .id}\n  other: {json: .other}\nthen:\n  - {name: d, path: '/x/{{chain.id}}'}", "", `reads the value "other" in step "first", which no later step sends`},
+		"a value read later":                {"then:\n  - {name: a, path: '/x/{{chain.id}}', extract: {id: {json: .id}}}", "", "sends {{chain.id}}, which no step before it reads"},
+		"each outside a fan-out":            {step("path: '/x/{{each}}/{{chain.id}}'"), "", "sends {{each}}, which only a fan-out step has"},
+		"for_each over a header":            {"extract:\n  jobs: {header: X-Jobs}\nthen:\n  - {name: d, for_each: jobs, path: '/x/{{each}}'}", "answer: all", "is not a json value"},
+		"two fan-outs":                      {extract + "then:\n  - {name: a, for_each: jobs, path: '/a/{{each}}', extract: {more: {json: '[.x]'}}}\n  - {name: b, for_each: more, path: '/b/{{each}}'}", "answer: all", "a chain has at most one fan-out"},
+		"a fan-out last under last":         {fanOut(""), "", `ends with the fan-out step "last_build" under answer: last`},
+		"a path with a host":                {step("path: '//x.com/{{chain.id}}'"), "", "names a scheme or a host"},
+		"a step setting credentials":        {step("path: '/x/{{chain.id}}'\nheaders: {authorization: x}"), "", "sets Authorization, which carries the collector's credentials"},
+		"a chain value in the first":        {"query: {x: '{{chain.id}}'}\n" + step("path: '/x/{{chain.id}}'"), "", "it is the chain's first request"},
+		"a header value that breaks a line": {step("path: '/x/{{chain.id}}'\nheaders: {X-A: \"a\\nb\"}"), "", "has the control character"},
+		"two steps of one name":             {idExtract + "then:\n  - {name: a, path: '/x/{{chain.id}}'}\n  - {name: a, path: /y}", "", `two steps named "a"`},
 	}
 	for name, d := range alone {
 		loadersAlone(t, schema, name, chainDocument(d.request, d.extra), d.message)

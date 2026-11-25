@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -981,9 +982,24 @@ func init() { pastedChain = runPastedChain }
 // used for every item. No request is sent. The report shows the URLs the
 // chain would ask target for.
 func runPastedChain(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, first *HTTPResponse, steps map[string]*HTTPResponse) (*HTTPResponse, error) {
+	if target == "" {
+		target = pastedTarget(c)
+	}
 	pasted := map[string]*HTTPResponse{model.ChainFirst: first}
 	for name, answer := range steps {
 		pasted[name] = answer
 	}
 	return runChain(ctx, target, c, overrides, nil, pasted)
+}
+
+// pastedTarget is the target the URLs of a chain run on pasted answers
+// without one are shown on: a name that is no host's, under the first
+// scheme the collector's allowed_schemes takes, http when it sets none or
+// takes http.
+func pastedTarget(c *model.Collector) string {
+	scheme := "http"
+	if schemes := c.Request.AllowedSchemes; len(schemes) > 0 && !slices.ContainsFunc(schemes, func(s string) bool { return strings.EqualFold(s, "http") }) {
+		scheme = strings.ToLower(schemes[0])
+	}
+	return scheme + "://target.invalid"
 }

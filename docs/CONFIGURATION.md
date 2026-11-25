@@ -7894,7 +7894,10 @@ A name that the configuration does not have is answered `404` with `error`.
 
 - the collector: `collector` (the YAML) or `configured` (a name);
 - the response, as one of:
-  - `body` with `content_type`, `status` and `headers`;
+  - `body` with `content_type`, `status` and `headers`, and for a
+    [chain](REQUESTS.md#chained-requests) `steps`: the answer pasted for
+    each step after the first, a JSON body by step name, a fan-out step's
+    used for every item;
   - `target` with `params` and, for `collector`, `request_from`: the
     configured collector to fetch through, which the page fills with the one
     the playground was copied from;
@@ -7915,7 +7918,11 @@ refuses it.
   each with its `name` (a histogram's or summary's with its suffix),
   `metric` (the metric's name, as a lint finding names it), `type`, `labels`
   and `value` (as the text writes it, so `NaN` and `+Inf` are strings);
-- `requests`, `response`, `stages` and `notes`;
+- `requests`, `response`, `stages` and `notes`; a request a chain made has
+  its `step`, and a fan-out item's its `item`;
+- for a chain, `chain`: `diagram`, the workflow diagram as the elements the
+  page makes of it (each a `tag`, its `attrs`, `text` and `children`), and
+  `steps`, each step's details by its `id`, `title` and `lines`;
 - `lint`, the findings of the [metric lint](#metric-lint), each with its
   `collector`, `rule`, `metric` and `message`;
 - `report`, the text report;
@@ -8542,12 +8549,17 @@ The `config` entry's `details` also list:
   `request_policies` shows them as they will be applied.
 - **`details.request_policies`**: each collector that sets
   `allowed_targets`, `denied_targets`, `accept_status`, `accept_codes`,
-  `retry.statuses`, `retry.retry_after`, `pagination`, `login` or
+  `retry.statuses`, `retry.retry_after`, `pagination`, `then`, `login` or
   `rate_limit`, by name, with those settings as they will be applied:
   - `2XX` as `2xx`, and `not_found` as `NOT_FOUND`;
   - `retry.statuses` as `retry_statuses`, including `[]`;
   - `retry.retry_after` as `retry_after: true`;
   - a `pagination` with its defaults, including `max_pages: 10`;
+  - a [chain](REQUESTS.md#chained-requests) as `chain`: its `answer`, and
+    each request in order, the first included, with its `name`, `method`,
+    `path` or `url`, a fan-out's `for_each`, `concurrency`, `max_items`
+    and `on_item_error`, a step's `forwarded_headers` when it sets it, and
+    the values it `reads` and `sends`;
   - a `login` with the `header` and `prefix` that its token is sent with;
   - a `rate_limit` with its `burst`.
 

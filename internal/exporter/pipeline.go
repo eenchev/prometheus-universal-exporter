@@ -393,7 +393,7 @@ func (t *collectTrip) fetch() (*fetch.HTTPResponse, *collected) {
 		if err == nil {
 			// A chain reads the answers pasted for its steps, after the
 			// first, and shows the URLs it would have asked.
-			if chained, ok, chainErr := fetch.PastedChain(t.ctx, pastedTarget(j.target), requester, j.overrides, response, j.pastedSteps); ok {
+			if chained, ok, chainErr := fetch.PastedChain(t.ctx, j.target, requester, j.overrides, response, j.pastedSteps); ok {
 				response, err = chained, chainErr
 			}
 		}
@@ -921,13 +921,4 @@ func chainFailedStep(report *fetch.ChainReport) string {
 		return ""
 	}
 	return report.FailedStep
-}
-
-// pastedTarget is the target the URLs of a chain run on pasted answers are
-// shown on: the run's, or a name that is no host's when it has none.
-func pastedTarget(target string) string {
-	if target == "" {
-		return "http://target.invalid"
-	}
-	return target
 }

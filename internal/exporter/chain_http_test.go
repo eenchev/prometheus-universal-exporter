@@ -3,7 +3,9 @@
 package exporter
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -292,5 +294,35 @@ func TestAReloadForgetsAChainsLastTrip(t *testing.T) {
 	selfMetrics(t, server)
 	if _, ok := server.chains.ofCollector("chained"); ok {
 		t.Fatal("the trip of the old definition is still drawn")
+	}
+}
+
+// At debug level, each request of a chain is logged by the exporter's own
+// logger, with its step, method, URL, status and duration.
+func TestEachRequestOfAChainIsLoggedAtDebugLevel(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	server := modeServer(t, jenkinsCollector("logged", model.ChainItemSkip, false))
+	var lines bytes.Buffer
+	server.logger = slog.New(slog.NewJSONHandler(&lines, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if r := probeOnce(t, server, "/probe?collector=logged&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	if n := strings.Count(lines.String(), `"msg":"chain request"`); n != 4 || !strings.Contains(lines.String(), `"step":"last_build","item":2,"items":3,"method":"GET"`) {
+		t.Fatalf("%d request lines:\n%s", n, lines.String())
+	}
+}
+
+// A chain run on pasted answers shows its URLs under a scheme the
+// collector allows: https for a collector that takes https alone.
+func TestAPastedChainKeepsToTheCollectorsSchemes(t *testing.T) {
+	collector := jenkinsCollector("secure", "", false)
+	collector.Request.AllowedSchemes = []string{"https"}
+	page := debugPageServer(t, &model.Config{Collectors: []model.Collector{collector}})
+	run := pastedTo("secure", `{"jobs":[{"name":"api"}]}`)
+	run["steps"] = map[string]string{"last_build": `{"duration": 1000}`}
+	answer := postRun(t, page, run, http.StatusOK)
+	if shown := chainShown(t, answer); !answer.OK || !strings.Contains(shown, "https://target.invalid/job/api/lastBuild/api/json") {
+		t.Fatalf("the run on pasted answers: %s\n%s", answer.Verdict, shown)
 	}
 }

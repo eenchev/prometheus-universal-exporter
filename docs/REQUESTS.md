@@ -2694,7 +2694,7 @@ keyed by step name:
 | `extract` | none | The values read from this step's answer. |
 | `for_each` | none | The name of a list value read earlier: one request per entry. |
 | `concurrency` | `4` | With `for_each`: how many of its requests run at once, 1 to 16. |
-| `max_items` | `100` | With `for_each`: how many entries are asked for, 1 to 1000. |
+| `max_items` | `100` | With `for_each`: how many entries are asked for, 1 to 1000. The rest are left out, counted and logged; the trip still succeeds. |
 | `on_item_error` | `fail` | With `for_each`: `fail` ends the trip at an item that fails; `skip` keeps the item in the document as an error and goes on. |
 
 Every step uses the collector's TLS settings, proxy, `ip_family`,
@@ -2734,6 +2734,9 @@ entry that is an object, and `{{each_index}}` its place, from 0. The values
 a fan-out step reads are lists, one entry per item. `{{param_<name>}}` and
 the [clock placeholders](#dates-and-times) work in every step.
 
+A fan-out over an empty list makes no request, and is a step that went
+through. A `for_each` value that is not a list fails the step.
+
 The load refuses a value that a step sends before a step reads it, a value
 that no step sends or fans out over, and `{{each}}` outside a fan-out step.
 A value lives for one trip.
@@ -2747,11 +2750,11 @@ port of the first request's URL.
   the configuration loads.
 - A step's `url` is a link read from an answer, resolved against the URL of
   that answer. A link to another origin fails the step in the
-  `target_policy` stage, unless it names the virtual host the request's
-  `Host` header asks for, which is asked of the target's address with that
-  `Host`, as a [next page](#pagination) is: `step "detail": the link "https://x.com/a" leads
+  `target_policy` stage: `step "detail": the link "https://x.com/a" leads
   to another origin than the target's, https://api.example; a chain asks
-  one target only`.
+  one target only`. The one exception is a link that names the virtual
+  host the request's `Host` header asks for, which is asked of the
+  target's address with that `Host`, as a [next page](#pagination) is.
 - In a collector with `request.then`, every request, the first included,
   follows a [redirect](#redirects-and-http2) only to the target's origin,
   and `request.redirect_trusted_hosts` is refused.
@@ -2810,10 +2813,12 @@ revalidated: one answer's validators cannot speak for the others. A static
 target cannot set `then`, `extract` or `answer`.
 
 A probe's parameters that change the request, such as `path`, `method` and
-`body`, change the first request alone. `param_<name>` values fill every
-step. Forwarded headers, `header_<name>` among them, go with every step
-but one that sets `forwarded_headers: false`, such as a step of an API
-that refuses a header the first request needs. The cache, shared trips and `failure_backoff` work on the whole
+`body`, change the first request alone, and `path` also the steps that
+leave `path` and `url` out, which ask the first request's path.
+`param_<name>` values fill every step. Forwarded headers, `header_<name>`
+among them, go with every step but one that sets `forwarded_headers:
+false`, such as a step of an API that refuses a header the first request
+needs. The cache, shared trips and `failure_backoff` work on the whole
 chain, which is one trip.
 
 ### Errors, self-metrics and the debug report
@@ -2822,7 +2827,8 @@ A failed step fails the trip in the stage a request's failure has, and the
 error starts with the step, and for a fan-out item with its place: `step
 "last_build" item 3 of 40 ("web"): received HTTP status 404`. The log line
 adds `step`, `item` and `items`. Under `on_item_error: skip`, the items
-that failed are summed in one warning per trip. With `report_failures`,
+that failed are summed in one warning, `step "last_build": 3 of 40 items
+failed and were skipped`, logged once and then sparingly while it repeats. With `report_failures`,
 `http_exporter_probe_failed_stage` has a `step` label.
 
 The [self-metrics](SELF-METRICS.md#chained-requests) count each step by

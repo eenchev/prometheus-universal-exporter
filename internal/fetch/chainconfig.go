@@ -325,6 +325,9 @@ func checkStepHeaders(c *model.Collector, headers map[string]string, at string) 
 		if strings.Contains(name, "{{") {
 			return fmt.Errorf("collector %q %s.headers name %q has a placeholder; placeholders stand only in header values", c.Name, at, name)
 		}
+		if err := checkHeaderValue(headers[name]); err != nil {
+			return fmt.Errorf("collector %q %s.headers %s %w", c.Name, at, name, err)
+		}
 		canonical := http.CanonicalHeaderKey(name)
 		if canonical == "Authorization" || canonical == tokenHeader {
 			return fmt.Errorf("collector %q %s.headers sets %s, which carries the collector's credentials; every step sends the collector's own", c.Name, at, canonical)
@@ -403,8 +406,9 @@ func (f stepField) check() error {
 }
 
 // stepFields lists the parts of a step that may hold placeholders, each
-// rewritten (rewriteChainRefs). The path's kind is "path", the url's
-// "url"; form and json values are written as the body's are.
+// rewritten (rewriteChainRefs). The path's kind is "path" and the url's
+// "url"; a form value's is "query" and a json value's "arg", each filled
+// in as text, which the step's body then encodes (stepBody).
 func stepFields(step model.ChainStep, at string) ([]stepField, error) {
 	var out []stepField
 	add := func(where, text, kind string) error {
@@ -481,7 +485,7 @@ func chainKeyRules() map[string]map[string]any {
 			prefix + ".*.header":   {"description": "A header of the answer."},
 			prefix + ".*.cookie":   {"description": "The value of a cookie the answer sets."},
 			prefix + ".*.optional": {"description": "A value not found, or empty, is the empty text instead of failing the step."},
-			prefix + ".*.secret":   {"description": "The value is shown as *** in the debug report and never quoted in an error."},
+			prefix + ".*.secret":   {"description": "The value is shown as *** wherever the exporter shows it: the debug report and the workflow diagram, a step's URL and headers, an error and a span."},
 		}
 	}
 	rules := extract("extract", "http, with request.then: the values read from the first request's answer, by name, at most 16, each from exactly one of regex, json, form, header and cookie. A step sends one as {{chain.<name>}}. See docs/REQUESTS.md#chained-requests.")

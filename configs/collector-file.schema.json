@@ -3445,7 +3445,7 @@
                       ]
                     },
                     "secret": {
-                      "description": "The value is shown as *** in the debug report and never quoted in an error.",
+                      "description": "The value is shown as *** wherever the exporter shows it: the debug report and the workflow diagram, a step's URL and headers, an error and a span.",
                       "type": "boolean"
                     }
                   },
@@ -7418,7 +7418,7 @@
                             ]
                           },
                           "secret": {
-                            "description": "The value is shown as *** in the debug report and never quoted in an error.",
+                            "description": "The value is shown as *** wherever the exporter shows it: the debug report and the workflow diagram, a step's URL and headers, an error and a span.",
                             "type": "boolean"
                           }
                         },

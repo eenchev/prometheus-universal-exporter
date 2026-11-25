@@ -756,8 +756,10 @@ and the first column has no name and is empty:
 - Every row has the columns `result` and `table`. Rules read the columns
   they need and leave those out.
 - Tables with the same columns share one header. When the columns change
-  from one table to the next, InfluxDB writes a blank line and a new header,
-  which the decoder reads as a row. So give every table the same columns:
+  from one table to the next, InfluxDB writes an empty line, new annotation
+  lines and a new header. A new header that names the first header's
+  columns is left out. One that names other columns fails the decode,
+  naming its line. So give every table the same columns:
   `keep(columns: [...])` as above, or `pivot()` to make fields columns.
 
 ### Protobuf responses
@@ -1132,6 +1134,11 @@ Comment lines:
   [annotated CSV](#querying-influxdb). Only a line that begins with the
   character is a comment. A line that begins with a blank, and a line inside
   a quoted field, are not.
+- An empty line followed by comment lines starts a new table, as annotated
+  CSV does. The line after the comment lines is that table's header. It is
+  left out when it names the same columns as the first header, and fails
+  the decode when it names others, since its rows would be read under the
+  wrong names. With `header: false` no line is a header.
 - An error names a line by its number in the body, comment lines counted.
 - The comment character is one character. It cannot be the delimiter, a
   double quote, white space or a control character.
@@ -1439,12 +1446,13 @@ table shows what a `csv` rule does with the variants:
 
 | The file | What happens | What to do |
 | --- | --- | --- |
-| Has a header line, and is read with `header: false` | The first line is a row of data like the others, so every rule fails on it, on every scrape: `value "used" is not a number`. | There is no setting that skips lines. Read the columns by name, or drop the row in a pre-script: `data = data[1:]`. |
+| Has a header line, and is read with `header: false` | The first line is a row of data like the others, so every rule fails on it, on every scrape: `value "used" is not a number`. | No setting skips a header line. Read the columns by name, or drop the row in a pre-script: `data = data[1:]`. |
 | Lacks a column a rule names | The rule's value: `CSV column "used" is not in the response, whose columns are "Used", "Host"; column names are matched exactly`, a missing value of every row. A label: the rule fails, once, with `metric "used" label "zone": CSV column "zone" is not in the response, …`, and makes no series. | See below. |
 | Has an empty cell in a column a rule names | A missing value of that row, `CSV column "used" is empty in row 3`, the rows counted from 1 without the header's line. A label read from it is left off that series. | `required: false` where that is expected. |
 | Has rows shorter than the header | The columns a row lacks are empty in it, so missing values. | `required: false` where that is expected. |
 | Has blank lines, or a last line without a line end | A blank line is no row, and the last line is read like the others. | Nothing. |
 | Has a line of blanks | It is a row, missing every value. | `required: false`, or drop it in a pre-script. |
+| Has comment lines, such as `# exported at 10:00`, or the annotation lines of InfluxDB's annotated CSV | Each is a row, or the header when it comes first. | `response.csv.comment: "#"`, which leaves them out. For InfluxDB, see [Querying InfluxDB](#querying-influxdb). |
 | Ends its lines with a carriage return alone, as a spreadsheet's "CSV (Macintosh)" and some instruments do | Each is a line end, as LF and CRLF are, and a file may end some lines one way and some another. Inside a quoted field a carriage return is the field's text, and one with a line feed after it is read as the line feed alone. | Nothing. |
 | Is tab-separated, with a field that starts with `"` | Quoting cannot be turned off: such a field is a quoted field and runs to its closing quote, over tabs and line ends, and one never closed fails the decode. A quote later in a field is text. | Write the quote doubled inside quotes, `"""big"" disk"`, or have the export put the field in quotes. |
 | Has columns aligned with spaces | With `delimiter: " "` alone every space is a delimiter and the header fails as an unnamed column. | `trim_space: true`, which makes one delimiter of a run of spaces; an empty field is then written `""`. |

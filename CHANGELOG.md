@@ -57,7 +57,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   or a Flux query and read the answer: the JSON of `/query` with the `jq`
   transform, and the annotated CSV of `/api/v2/query` with the `csv`
   transform. The new `response.csv.comment` leaves out the lines that begin
-  with a character, such as the `#` of the annotation lines. See
+  with a character, such as the `#` of the annotation lines, and reads the
+  header that annotated CSV writes again for a later table. See
   [Querying InfluxDB](docs/CONFIGURATION.md#querying-influxdb).
 - **Getting started and How do I….** [Getting started](docs/GETTING-STARTED.md)
   takes you from nothing to Prometheus scraping a first metric in about 15

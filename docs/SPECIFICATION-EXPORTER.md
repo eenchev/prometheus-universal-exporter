@@ -2777,7 +2777,12 @@ begins MUST be left out, as InfluxDB's annotated CSV needs for its
 `#datatype`, `#group` and `#default` lines. A line that begins with a blank
 before the character, and a line inside a quoted field, MUST NOT be. A
 quote in a comment line MUST NOT open a field. The lines an error names
-MUST be the body's own, comment lines counted. The memory the decoded rows take MUST
+MUST be the body's own, comment lines counted. With a header row, the first
+record after comment lines that follow an empty line after a record MUST be
+read as the header of a new table, as annotated CSV writes one: it MUST be
+left out when it names the first header's columns, and MUST fail the decode
+naming its line when it names others, rather than its table's rows being
+read under the first header's names. The memory the decoded rows take MUST
 grow with the fields the body holds, not with the header's columns times the
 rows: the empty text of a column a short row lacks MUST be what a rule, a
 script and an error read in it without being stored in each row, so that a

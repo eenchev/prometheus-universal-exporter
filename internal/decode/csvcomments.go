@@ -21,13 +21,21 @@ import (
 // line ends at a line feed, and at a carriage return alone, which the reader
 // is later given as a line feed. A comment line's quotes are then no quotes
 // of a field for anything that reads the body after this.
-func withoutCommentLines(body []byte, comment, delimiter rune, trimSpace bool) []byte {
+//
+// tables are the records, counted from 0 as the reader returns them, that
+// begin a new table: the first record after comment lines that follow an
+// empty line after a record. That is how annotated CSV begins a table whose
+// columns differ from the table's before it, with its own annotation lines
+// and header.
+func withoutCommentLines(body []byte, comment, delimiter rune, trimSpace bool) (out []byte, tables []int) {
 	if !bytes.ContainsRune(body, comment) {
-		return body
+		return body, nil
 	}
-	var out []byte
 	// kept is how much of body is in out, or would be were one made.
 	kept := 0
+	// records counts the records read; blank says an empty line came after
+	// the last of them, and annotated that comment lines came after that.
+	records, blank, annotated := 0, false, false
 	// lineEnd is where the line that holds body[i] ends: at its line feed
 	// or carriage return, or at the end of the body.
 	lineEnd := func(i int) int {
@@ -37,21 +45,32 @@ func withoutCommentLines(body []byte, comment, delimiter rune, trimSpace bool) [
 		return len(body)
 	}
 	for i := 0; i < len(body); {
-		// A record begins at i.
-		if r, width := utf8.DecodeRune(body[i:]); r == comment && width > 0 {
+		// A record begins at i, unless the line is empty, which the reader
+		// skips.
+		switch r, width := utf8.DecodeRune(body[i:]); {
+		case r == '\n' || r == '\r':
+			blank = records > 0
+		case r == comment && width > 0:
 			end := lineEnd(i)
 			if out == nil {
 				out = make([]byte, 0, len(body))
 			}
 			out = append(out, body[kept:i]...)
 			kept, i = end, end
+			annotated = blank
+		default:
+			if annotated {
+				tables = append(tables, records)
+			}
+			records++
+			blank, annotated = false, false
 		}
 		i = recordEnd(body, i, delimiter, trimSpace)
 	}
 	if out == nil {
-		return body
+		return body, tables
 	}
-	return append(out, body[kept:]...)
+	return append(out, body[kept:]...), tables
 }
 
 // recordEnd is where the record that begins at i ends: after the line end

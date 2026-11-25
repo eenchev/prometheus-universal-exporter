@@ -103,8 +103,39 @@ func TestCSVCommentLinesKeepTheLineNumbers(t *testing.T) {
 func TestCSVBodyWithoutCommentLinesIsNotCopied(t *testing.T) {
 	for _, body := range []string{"host,cpu\nweb01,1\n", "host,cpu\nweb#01,1\n"} {
 		in := []byte(body)
-		if out := withoutCommentLines(in, '#', ',', false); &out[0] != &in[0] || string(out) != body {
+		if out, _ := withoutCommentLines(in, '#', ',', false); &out[0] != &in[0] || string(out) != body {
 			t.Errorf("%q was copied or changed: %q", body, out)
 		}
+	}
+}
+
+// A table of annotated CSV that follows an empty line and comment lines has
+// a header of its own. When it names the first header's columns it is that
+// header written again and is left out; when it names others, the decode
+// fails naming its line, rather than its rows being read by the first
+// header's names. Comment lines between rows without an empty line before
+// them begin no table, and a row after a header left out is still named by
+// its own line.
+func TestCSVTablesAfterCommentLines(t *testing.T) {
+	second := "\n#group,false,false,true,false\n#datatype,string,long,string,double\n#default,_result,,,\n"
+	same := strings.TrimSuffix(fluxAnswer, "\r\n") + second + ",result,table,host,_value\n,,2,web03,7\n"
+	got, err := decodedCSV(t, same, model.CSVConfig{Comment: "#"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := got.([]any); len(rows) != 3 || rows[2].(map[string]any)["host"] != "web03" {
+		t.Fatalf("got %v, want the rows of both tables and no header among them", got)
+	}
+	other := strings.TrimSuffix(fluxAnswer, "\r\n") + second + ",result,table,region,_value\n,,2,eu,7\n"
+	if _, err := decodedCSV(t, other, model.CSVConfig{Comment: "#"}); err == nil || !strings.Contains(err.Error(), "CSV line 11 is the header of a new table, after comment lines, and names other columns than the first header") {
+		t.Fatalf("error %v, want it to name line 11", err)
+	}
+	got, err = decodedCSV(t, "host,cpu\nweb01,1\n# a note\nweb02,2\n", model.CSVConfig{Comment: "#"})
+	if err != nil || len(got.([]any)) != 2 {
+		t.Fatalf("a comment between rows: %v, %v", got, err)
+	}
+	extra := same + ",,3,web04,8,surplus\n"
+	if _, err := decodedCSV(t, extra, model.CSVConfig{Comment: "#"}); err == nil || !strings.Contains(err.Error(), "CSV line 13 has a value in column 6") {
+		t.Fatalf("error %v, want it to name line 13", err)
 	}
 }

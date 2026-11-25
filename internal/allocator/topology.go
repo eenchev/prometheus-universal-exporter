@@ -13,9 +13,10 @@ import (
 // without --peers. A member's line says how long ago its last heartbeat
 // came, and a peer's how long ago this instance last checked it; a line is
 // dashed, and its text says why, for an overdue heartbeat, a member silent,
-// gone or shutting down, and a peer whose last check failed, down or never
-// checked. The members
-// table and the peers table say the same in text.
+// gone, shutting down or heartbeating from two exporters, and a peer whose
+// last check failed, down or never checked. Of more than topologyMost
+// members, those not well are drawn first (shownMembers). The members table
+// and the peers table say the same in text.
 
 // The diagram's sizes, in pixels: a node's box, the hub's, the gaps a line
 // spans between the peers and the hub and between the hub and the members,
@@ -43,15 +44,17 @@ const (
 
 // topologyView is the diagram: its size, its hub (this instance), and a
 // node and a line for each peer and member. MoreMembers are the members
-// beyond the first topologyMost, which the table lists.
+// left out beyond topologyMost, which the table lists, and MoreNotWell how
+// many of them are not well.
 type topologyView struct {
 	Width, Height int
 	Hub           topologyNode
 	Peers         []topologyNode
 	Members       []topologyNode
 	MoreMembers   int
+	MoreNotWell   int
 	// MoreX and MoreY are where the text saying how many more members
-	// there are goes.
+	// there are ends.
 	MoreX, MoreY int
 	// Label is the diagram's text alternative. HasMembers says the page
 	// has the members, which a follower under --peers.leader-only leaves
@@ -65,10 +68,12 @@ type topologyView struct {
 
 // topologyNode is a box of the diagram and the line that joins it to the
 // hub. Name is its first line, cut to topologyNameMax characters, and
-// FullName what it was cut from, the hub's its whole address. Sub is its second line, and Note the
-// hub's third, this instance's address. Member is the member's ID, whose
-// view the box opens, "" for the hub and a peer. Master marks the leader,
-// and Down a peer or member not live, or shutting down.
+// FullName, its tooltip, what it was cut from; the hub's Name is "Target
+// allocator" and its FullName this instance's whole address. Sub is its
+// second line, and Note the hub's third, this instance's address cut to
+// fit. Member is the member's ID, whose view the box opens, "" for the hub
+// and a peer. Master marks the leader, and Down a peer or member not live,
+// or shutting down.
 type topologyNode struct {
 	X, Y, W, H     int
 	Name, FullName string
@@ -81,10 +86,10 @@ type topologyNode struct {
 // topologyEdge is a line from the hub to a node, and its text, put along
 // it near the node, where the lines are furthest apart (edgeOf). LX and LY
 // are where the text is anchored and Anchor how, start or end, so that it
-// ends short of the node's box. Class is "", late or down. At is the moment of the last heartbeat or check, RFC 3339 in
-// UTC, "" for a peer never checked, and Tip what the tooltip says after
-// it; the page's script writes the moment in the browser's time
-// (pagekit.LocalTimesScript).
+// ends short of the node's box. Class is "", late or down. At is the
+// moment of the last heartbeat or check, RFC 3339 in UTC, "" for a peer
+// never checked, and Tip what the tooltip says after it; the page's script
+// writes the moment in the browser's time (pagekit.LocalTimesScript).
 type topologyEdge struct {
 	X1, Y1, X2, Y2 int
 	LX, LY         int
@@ -119,9 +124,17 @@ func topologyOf(s Status) *topologyView {
 		return nil
 	}
 	v := &topologyView{}
-	shown := members
-	if len(shown) > topologyMost {
-		shown, v.MoreMembers = shown[:topologyMost], len(shown)-topologyMost
+	shown := shownMembers(members)
+	v.MoreMembers = len(members) - len(shown)
+	for _, m := range members {
+		if !memberWell(m) {
+			v.MoreNotWell++
+		}
+	}
+	for _, m := range shown {
+		if !memberWell(m) {
+			v.MoreNotWell--
+		}
 	}
 	memberRows := len(shown)
 	if v.MoreMembers > 0 {
@@ -179,7 +192,9 @@ func topologyOf(s Status) *topologyView {
 		v.Members = append(v.Members, n)
 	}
 	if v.MoreMembers > 0 {
-		v.MoreX, v.MoreY = membersX+8, rowY(len(shown), memberRows)+topologyNodeH/2+4
+		// The text, longer than a box is wide, ends at the diagram's right
+		// edge, below the last member's box, where no line runs.
+		v.MoreX, v.MoreY = v.Width-topologyMargin, rowY(len(shown), memberRows)+topologyNodeH/2+4
 	}
 	v.Label = topologyLabel(s, len(peers), len(members))
 	v.HasMembers = s.Members != nil
@@ -239,8 +254,43 @@ func memberEdgeText(m MemberStatus) (text, tip, class string) {
 		return "gone, " + ago, tip + "; the member has gone", "down"
 	case m.Late:
 		return ago + ", overdue", tip + "; a heartbeat is overdue", "late"
+	case m.SameName:
+		return ago + ", two exporters", tip + "; two exporters heartbeat under this member name, and each scrapes its share", "late"
 	}
 	return ago, tip, ""
+}
+
+// memberWell says a member's line is drawn plain, neither late nor down.
+func memberWell(m MemberStatus) bool {
+	_, _, class := memberEdgeText(m)
+	return class == ""
+}
+
+// shownMembers are the members the diagram draws, in their order: all of
+// them up to topologyMost, and of more, those not well first, so that the
+// members left out, which only the table lists, are well while at most
+// topologyMost are not.
+func shownMembers(members []MemberStatus) []MemberStatus {
+	if len(members) <= topologyMost {
+		return members
+	}
+	keep := make([]bool, len(members))
+	n := 0
+	for _, well := range []bool{false, true} {
+		for i, m := range members {
+			if n < topologyMost && !keep[i] && memberWell(m) == well {
+				keep[i] = true
+				n++
+			}
+		}
+	}
+	shown := make([]MemberStatus, 0, topologyMost)
+	for i, m := range members {
+		if keep[i] {
+			shown = append(shown, m)
+		}
+	}
+	return shown
 }
 
 // peerEdgeText is a peer's line's text, what its tooltip says after the

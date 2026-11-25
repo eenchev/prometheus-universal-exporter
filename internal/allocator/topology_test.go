@@ -1,6 +1,7 @@
 package allocator
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +37,9 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 	}
 	if v.Peers[0].X+v.Peers[0].W >= v.Hub.X || v.Hub.X+v.Hub.W >= v.Members[0].X {
 		t.Errorf("the columns overlap: peer %+v, hub %+v, member %+v", v.Peers[0], v.Hub, v.Members[0])
+	}
+	if v.MoreX != v.Width-topologyMargin {
+		t.Errorf("the more text ends at %d, not at the diagram's right edge, %d", v.MoreX, v.Width)
 	}
 	if v.MoreY <= v.Members[49].Y+v.Members[49].H || v.MoreY > v.Height {
 		t.Errorf("the more text is at %d, the last member ends at %d", v.MoreY, v.Members[49].Y+v.Members[49].H)
@@ -105,7 +109,7 @@ func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
 // of, beside peers and without them.
 func TestTheLongestLineTextFitsItsGap(t *testing.T) {
 	const old = 3599
-	member := []MemberStatus{{ShuttingDown: true, LastHeartbeatAgeSeconds: old}, {InList: true, LastHeartbeatAgeSeconds: old}, {LastHeartbeatAgeSeconds: old}, {Live: true, Late: true, LastHeartbeatAgeSeconds: old}}
+	member := []MemberStatus{{ShuttingDown: true, LastHeartbeatAgeSeconds: old}, {InList: true, LastHeartbeatAgeSeconds: old}, {LastHeartbeatAgeSeconds: old}, {Live: true, Late: true, LastHeartbeatAgeSeconds: old}, {Live: true, SameName: true, LastHeartbeatAgeSeconds: old}}
 	peer := []PeerStatus{{LastCheck: "x", LastCheckAgeSeconds: old}, {LastCheck: "x", Live: true, Failures: 1, LastCheckAgeSeconds: old}, {}}
 	for _, gap := range []int{topologyMemberGap, topologyAlone, topologyPeerGap} {
 		var all []string
@@ -125,5 +129,40 @@ func TestTheLongestLineTextFitsItsGap(t *testing.T) {
 				t.Errorf("%q is about %dpx, wider than the %dpx gap leaves it", text, width, gap)
 			}
 		}
+	}
+}
+
+// Of more than 50 members, the diagram draws those not well first, in the
+// members' order, and says how many more there are and how many of those
+// are not well. Two exporters under one member name are not well.
+func TestTheDiagramDrawsTheMembersNotWellFirst(t *testing.T) {
+	members := func(notWell int) []MemberStatus {
+		list := make([]MemberStatus, 60)
+		for i := range list {
+			list[i] = MemberStatus{ID: fmt.Sprintf("exporter-%02d", i), Live: true, InList: true}
+			if i >= 60-notWell {
+				list[i].Live = false
+			}
+		}
+		list[3].SameName = true
+		return list
+	}
+	v := topologyOf(Status{Members: &MembersStatus{List: members(5)}})
+	if len(v.Members) != 50 || v.MoreMembers != 10 || v.MoreNotWell != 0 {
+		t.Fatalf("%d drawn, %d more, %d of them not well", len(v.Members), v.MoreMembers, v.MoreNotWell)
+	}
+	var drawn []string
+	for _, n := range v.Members {
+		drawn = append(drawn, n.Member)
+	}
+	if drawn[3] != "exporter-03" || drawn[45] != "exporter-55" || drawn[49] != "exporter-59" || v.Members[3].Edge.Text != "0s ago, two exporters" || v.Members[3].Edge.Class != "late" {
+		t.Errorf("drawn %v, exporter-03's line %+v", drawn, v.Members[3].Edge)
+	}
+	var b strings.Builder
+	if err := statusContentTemplate.Execute(&b, statusPageOf(Status{Members: &MembersStatus{List: members(55)}})); err != nil {
+		t.Fatal(err)
+	}
+	if want := ">and 10 more in the table below, 6 of them not well</text>"; !strings.Contains(b.String(), want) {
+		t.Errorf("missing %q", want)
 	}
 }

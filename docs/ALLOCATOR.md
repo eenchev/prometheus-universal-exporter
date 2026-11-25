@@ -1307,12 +1307,15 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
   - a member's line says how long ago its last heartbeat came, and a peer's
     how long ago this instance last checked it;
   - a line is dashed and red, and its text says why, for an overdue
-    heartbeat, a member that is silent, gone or shutting down, and a peer
-    whose last check failed, that is down or that is not yet checked. The box of a member that is not live
+    heartbeat, a member that is silent, gone or shutting down or whose name
+    two exporters heartbeat under, and a peer whose last check failed, that
+    is down or that is not yet checked. The box of a member that is not live
     or is shutting down, and of a peer that is not live, has a dashed red
     outline;
   - a member's box opens its view ([A member's targets](#a-members-targets)).
-    The diagram draws the first 50 members; the members table lists all;
+    Of more than 50 members, the diagram draws 50, those whose line is
+    dashed first, and says how many more there are and how many of them are
+    not well; the members table lists all;
   - a follower under `--peers.leader-only` draws itself and its peers
     alone: the members are on the leader's page;
 - with `--peers`:

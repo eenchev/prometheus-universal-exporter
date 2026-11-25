@@ -112,6 +112,29 @@ Every counter ends in `_total` and nothing else does. The self-metrics path
 and OTLP are built from the same definitions, so a family has the same type,
 help and value in both.
 
+## Chained requests
+
+An `http` collector with [`request.then`](REQUESTS.md#chained-requests)
+has four more families, labelled `collector` and `step`: the step's name,
+or `first` for the collector's own request. A collector has at most 13
+steps, so the series stay few; the URLs of a fan-out never become label
+values. The collector's own series keep describing the trip:
+`http_exporter_scrape_http_status_code` and
+`http_exporter_scrape_response_bytes` describe the response, the last
+step's answer under `answer: last` and the document under `answer: all`.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_chain_requests_total` | counter | The requests each step sent, each fan-out item and retry counted, in trips that reached the step. |
+| `http_exporter_chain_step_failures_total` | counter | The trips that failed at the step, and under `on_item_error: skip` the fan-out items that failed. |
+| `http_exporter_chain_items` | gauge | A fan-out step only: the entries its last fan-out had, before `max_items` cut them. |
+| `http_exporter_chain_items_cut_total` | counter | A fan-out step only: the fan-outs that `max_items` cut. Each is logged at warn level, once and then sparingly while it repeats. |
+
+[Verbose mode](#verbose-per-request-self-metrics) adds
+`http_exporter_chain_step_duration_seconds`, a histogram of each step's
+duration, its fan-out items together, by `collector` and `step`. A debug run
+counts in none of them.
+
 ## Probe durations
 
 `http_exporter_scrape_duration_seconds` only holds the last probe's

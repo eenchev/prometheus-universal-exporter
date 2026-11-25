@@ -73,7 +73,7 @@ func init() {
 		},
 		Policy: func(c *model.Collector) RequestPolicy {
 			own := httpRequest(c)
-			return RequestPolicy{Pagination: own.Pagination, UnixSocket: c.Request.UnixSocket, Chain: own.Then}
+			return RequestPolicy{Pagination: own.Pagination, UnixSocket: c.Request.UnixSocket, Chain: own.Then, ChainReads: model.SortedKeys(own.Extract)}
 		},
 		// The steps of a chain hold placeholders as the request does.
 		Templates: chainTemplates,

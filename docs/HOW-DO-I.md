@@ -17,6 +17,7 @@ that covers it, usually with an example to copy. New here? Start with
 | Use a date or a time as the value | [Reading a date or a time as the value](CONFIGURATION.md#reading-a-date-or-a-time-as-the-value) |
 | Do something no expression can | [Python](PYTHON.md) |
 | Read a paged API | [Pagination](REQUESTS.md#pagination) |
+| Send a value from one answer in a second request, or ask for each entry of a list | [Chained requests](REQUESTS.md#chained-requests) |
 | Read a file on this host | [Local files](LOCALFILE.md) |
 | Read a file on another host | [Files over SSH](SSHFILE.md) |
 | Run a command on another host and read its output | [Commands over SSH](SSHEXEC.md) |

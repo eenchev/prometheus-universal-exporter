@@ -892,3 +892,26 @@ func TestTheDangerousDebugModeNeedsFullAndIsWarnedOf(t *testing.T) {
 		t.Errorf("/debug %d; the exporter did not warn of dangerous mode:\n%s", resp.StatusCode, p.logs.String())
 	}
 }
+
+// --dry-run lists a chain as it will be made: each request in order, its
+// defaults filled in, with the values it reads and those it sends; and
+// refuses one startup refuses, as startup words it.
+func TestDryRunReportsAChain(t *testing.T) {
+	chained := func(then string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: chained\n    request:\n      type: http\n      path: /api/json\n      extract: {jobs: {json: '[.jobs[].name]'}}\n      then: "+then+"\n    answer: all\n    transform: {type: jq}\n    metrics: [{name: v, expression: length}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+chained("[{name: last_build, for_each: jobs, path: '/job/{{each}}'}]"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	policy, _ := policies["chained"].(map[string]any)
+	want := map[string]any{"answer": "all", "steps": []any{
+		map[string]any{"name": "first", "method": "GET", "path": "/api/json", "reads": []any{"jobs"}},
+		map[string]any{"name": "last_build", "method": "GET", "path": "/job/{{each}}", "for_each": "jobs", "concurrency": float64(4), "max_items": float64(100), "on_item_error": "fail", "sends": []any{"jobs"}},
+	}}
+	if check.code != 0 || !reflect.DeepEqual(policy["chain"], want) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	out := runCheckCLI(t, "--config.file="+chained("[{name: last_build, path: '/job/{{each}}'}]"))
+	if result := out.result(t, "config"); out.code != 1 || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "sends {{each}}, which only a fan-out step has") {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+}

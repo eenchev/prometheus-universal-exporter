@@ -2000,6 +2000,39 @@ item is simply absent on that series.
   since the epoch. `$last_success` is `null` while there is none
   ([What a script has](PYTHON.md#what-a-script-has)), so
   `$scrape_time - $last_success` is how long ago that was.
+- `$steps`: each request of an `http` collector's [chain](REQUESTS.md#chained-requests),
+  by step name, `null` without one (see [Steps of a chain](#steps-of-a-chain)).
+
+#### Steps of a chain
+
+A collector with `request.then` makes a chain of requests per trip. The
+rules read the trip's response as one answer: with `answer: last`, the
+default, the last step's answer, and with `answer: all`, one JSON document
+of every answer, keyed by step name. `$timings`, `$tls`, `$url`,
+`$redirects`, `$http_version` and `$remote_ip` describe the last step under
+`answer: last`, and the first request under `answer: all`.
+
+`$steps` describes each request by step name, the first being `first`:
+
+| Field | What it is |
+| --- | --- |
+| `status` | The answer's HTTP status, `null` for none. |
+| `headers` | The answer's headers by lower-case name, as `$headers` has them. |
+| `duration_seconds` | How long the step took. |
+| `url` | The URL the step was sent to, its query values masked. |
+| `error` | For a fan-out item that failed, its error. |
+
+A fan-out step is a list of these, one per item, in order. A step that was
+not reached is left out. A Python script reads the same as `steps`, a dict,
+`None` without a chain:
+
+```python
+metric('jenkins_first_status', value=steps['first']['status'])
+```
+
+A `pre_script` runs once, on the whole response. The values that the steps
+read are not handed to the transform: a value a rule needs is in the answer
+it came from.
 
 ### Labels from an object
 

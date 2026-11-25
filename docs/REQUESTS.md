@@ -48,6 +48,15 @@ monitor's `params` map renders into.
   - [Compared with blackbox_exporter](#compared-with-blackbox_exporter)
 - [One connection per scrape](#one-connection-per-scrape)
 - [Pagination](#pagination)
+- [Chained requests](#chained-requests)
+  - [The keys of a step](#the-keys-of-a-step)
+  - [Values and placeholders](#values-and-placeholders)
+  - [One target only](#one-target-only)
+  - [The answer](#the-answer)
+  - [Time, retries and the response limit](#time-retries-and-the-response-limit)
+  - [Credentials, logins and cookies](#credentials-logins-and-cookies)
+  - [What a chain does not take](#what-a-chain-does-not-take)
+  - [Errors, self-metrics and the debug report](#errors-self-metrics-and-the-debug-report)
 - [Rate limiting](#rate-limiting)
   - [Rate limits per host](#rate-limits-per-host)
 - [TLS](#tls)
@@ -2588,6 +2597,239 @@ from and whether the pages stopped at `max_pages`. A static target of the
 collector pages through its own target and path in the same way.
 `request.pagination` belongs to the collector: a static target cannot set
 it, and a probe parameter cannot change it.
+
+## Chained requests
+
+Some APIs need more than one request for one answer: a request reads an
+ID, and a second request sends it; or a list request reads names, and one
+more request is made for each name. With `request.then`, an `http`
+collector makes up to 13 requests per trip, all to its one target: its own
+request, which is the chain's first and is named `first`, then up to 12
+steps in order. A request can send values read from the answers before
+it.
+
+```yaml
+collectors:
+  - name: gitlab_pipeline
+    request:
+      type: http
+      path: /api/v4/projects/{{param_project}}
+      extract:
+        id: {json: .id}
+      then:
+        - name: pipelines
+          path: /api/v4/projects/{{chain.id}}/pipelines
+          query:
+            ref: main
+            per_page: "1"
+    transform:
+      type: jq
+    metrics:
+      - name: gitlab_last_pipeline_success
+        description: 1 when the last pipeline of main succeeded.
+        expression: 'if .[0].status == "success" then 1 else 0 end'
+```
+
+Probed with `param_project=group%2Fapp`, the collector asks
+`/api/v4/projects/group%2Fapp`, reads the project's numeric `id` from the
+answer, then asks `/api/v4/projects/42/pipelines?per_page=1&ref=main`. The
+last step's answer is the response, which the decoder and the rules read
+as any `http` answer.
+
+A step with `for_each` is a fan-out: it makes one request per entry of a
+list read earlier. This collector reads every Jenkins job, then each job's
+last build:
+
+```yaml
+collectors:
+  - name: jenkins_jobs
+    request:
+      type: http
+      path: /api/json
+      query: {tree: "jobs[name]"}
+      extract:
+        jobs: {json: '[.jobs[].name]'}
+      then:
+        - name: last_build
+          for_each: jobs
+          path: /job/{{each}}/lastBuild/api/json
+          concurrency: 4
+          max_items: 200
+          on_item_error: skip
+    answer: all
+    transform:
+      type: jq
+    metrics:
+      - name: jenkins_last_build_seconds
+        description: Duration of each job's last build.
+        items: .last_build[] | select(.body)
+        expression: .body.duration / 1000
+        labels:
+          - name: job
+            expression: .each
+```
+
+With `answer: all`, the response is one JSON document of every answer,
+keyed by step name:
+
+```json
+{"first": {"status": 200, "body": {"jobs": [{"name": "api"}, {"name": "web"}]}},
+ "last_build": [{"each": "api", "status": 200, "body": {"duration": 81000}},
+                {"each": "web", "error": "received HTTP status 404"}]}
+```
+
+### The keys of a step
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `name` | required | Unique in the collector: lower-case letters, digits and `_`, not `first`. It names the step in errors, self-metrics and the document. |
+| `method` | `GET`, or `POST` with a body | `GET`, `HEAD`, `POST`, `PUT` or `PATCH`. |
+| `path` | the first request's path | A path on the target, joined to it as `request.path` is. It names no scheme and no host. |
+| `url` | none | One placeholder of a link a step read, alone, such as `"{{chain.next}}"`, in place of `path`. |
+| `query` | none | The step's query parameters. The collector's `request.query` is the first request's alone. |
+| `headers` | the collector's | Added to the collector's headers, each replacing one of the same name. Not `Authorization`, nor the header a login sends its token in. |
+| `body`, `form`, `json` | none | At most one: a body written as `request.body` is, a form, or a JSON object of text values. |
+| `accept_status` | the collector's | The statuses that count as an answer for this step. |
+| `extract` | none | The values read from this step's answer. |
+| `for_each` | none | The name of a list value read earlier: one request per entry. |
+| `concurrency` | `4` | With `for_each`: how many of its requests run at once, 1 to 16. |
+| `max_items` | `100` | With `for_each`: how many entries are asked for, 1 to 1000. |
+| `on_item_error` | `fail` | With `for_each`: `fail` ends the trip at an item that fails; `skip` keeps the item in the document as an error and goes on. |
+
+Every step uses the collector's TLS settings, proxy, `ip_family`,
+`new_connection`, retries, rate limit and credentials. A step sets none of
+them itself.
+
+### Values and placeholders
+
+`request.extract`, and a step's `extract`, read named values from an
+answer, at most 16 per step. A value is read as a [steps
+login](AUTHENTICATION.md) reads one, from exactly one place:
+
+| Key | The value is |
+| --- | --- |
+| `regex` | the first group of the first match on the body, or the whole match without a group |
+| `json` | what a jq expression gives of the body read as JSON: text, a number, or a list, which `for_each` goes over |
+| `form` | a field of the body read as a form |
+| `header` | a header of the answer |
+| `cookie` | the value of a cookie the answer sets |
+
+A value that is not found, or is empty, fails the step that reads it:
+`step "first": value "id" was not found in the answer`. With `optional:
+true` it is the empty text instead. With `secret: true` the debug report
+shows it as `***`. No value is ever written to the log.
+
+A later step sends a value as `{{chain.<name>}}`, in its `path`, `query`,
+`headers`, `body`, `form` and `json` values, and its `url`. A value is
+escaped as its place needs: as one path segment in `path`, as a query value
+in `query`, as written in a header, and in `body` as its filter says, such
+as `{{chain.id|json}}`. A list value is written as its JSON text. In a
+fan-out step, `{{each}}` is the entry, `{{each.<field>}}` a field of an
+entry that is an object, and `{{each_index}}` its place, from 0. The values
+a fan-out step reads are lists, one entry per item. `{{param_<name>}}` and
+the [clock placeholders](#dates-and-times) work in every step.
+
+The load refuses a value that a step sends before a step reads it, a value
+that no step sends or fans out over, and `{{each}}` outside a fan-out step.
+A value lives for one trip.
+
+### One target only
+
+Every request of a chain goes to the target's origin: the scheme, host and
+port of the first request's URL.
+
+- A step's `path` names no scheme and no host; `//x.com/a` is refused when
+  the configuration loads.
+- A step's `url` is a link read from an answer, resolved against the URL of
+  that answer. A link to another origin fails the step in the
+  `target_policy` stage: `step "detail": the link "https://x.com/a" leads
+  to another origin than the target's, https://api.example; a chain asks
+  one target only`.
+- In a collector with `request.then`, every request, the first included,
+  follows a [redirect](#redirects-and-http2) only to the target's origin,
+  and `request.redirect_trusted_hosts` is refused.
+- A target given by its address with a `Host` header keeps that `Host` on
+  every step.
+- `allowed_targets` and `denied_targets` are checked for the target and
+  apply to every step.
+- A `request.login` still goes to its own `url`, such as a sign-on host. It
+  is authentication, not a step of the chain.
+
+### The answer
+
+`answer: last`, the default, makes the last step's answer the response:
+its status, headers and body, read by any decoder. The earlier steps only
+give values. A fan-out step cannot be the last step under `answer: last`.
+
+`answer: all` makes one JSON document of every answer. The decoder is
+`json`; another is refused. Each answer must be JSON, or the step fails. A
+step is `{"status": …, "body": …}`, a `HEAD` step's body is `null`, and a
+fan-out step is a list in item order of `{"each": …, "status": …, "body":
+…}` or `{"each": …, "error": "…"}`. `$status` and `$headers` are the first
+request's.
+
+### Time, retries and the response limit
+
+The whole chain shares one budget: the probe's deadline, or a static
+target's interval. A probe's `timeout` bounds the chain, not each request.
+A fan-out that the deadline cuts short fails saying how far it got: `step
+"last_build": the trip's deadline came after 12 of 40 items`. For a fan-out
+of more than a few dozen items, scrape a [static
+target](STATIC-TARGETS.md) with `cache.ttl` rather than a probe, which
+Prometheus's scrape timeout bounds.
+
+Retries are per request. A `POST`, `PUT` or `PATCH` step is retried only
+with `retry.non_idempotent`. The collector's rate limits count every
+request. `max_response_bytes` bounds each answer, and the document of
+`answer: all` as it is built.
+
+### Credentials, logins and cookies
+
+Every step sends the collector's credentials, signed with
+`request.signature` or `request.aws_sigv4` when the collector signs. A
+`request.login` logs in once per trip, as for one request. A `401`, or a
+status in `login.relogin_on`, at any step logs in again and sends that
+request once more, at most once per trip. The steps of a trip share a
+cookie jar: a cookie that one answer sets is sent with the later steps. The
+jar starts empty at each trip.
+
+### What a chain does not take
+
+`request.then` is refused beside `request.pagination`,
+`request.redirect_trusted_hosts` and `cache.revalidate: true`, and in any
+request type but `http`. A chained collector's cached result is never
+revalidated: one answer's validators cannot speak for the others. A static
+target cannot set `then`, `extract` or `answer`.
+
+A probe's parameters that change the request, such as `path`, `method` and
+`body`, change the first request alone. `param_<name>` values fill every
+step, and forwarded headers, `header_<name>` among them, go with every
+step. The cache, shared trips and `failure_backoff` work on the whole
+chain, which is one trip.
+
+### Errors, self-metrics and the debug report
+
+A failed step fails the trip in the stage a request's failure has, and the
+error starts with the step, and for a fan-out item with its place: `step
+"last_build" item 3 of 40 ("web"): received HTTP status 404`. The log line
+adds `step`, `item` and `items`. Under `on_item_error: skip`, the items
+that failed are summed in one warning per trip. With `report_failures`,
+`http_exporter_probe_failed_stage` has a `step` label.
+
+The [self-metrics](SELF-METRICS.md#chained-requests) count each step by
+name. jq and yq read each request as `$steps`, and a Python script as
+`steps` (see [CONFIGURATION](CONFIGURATION.md#steps-of-a-chain)).
+
+A [debug probe](CONFIGURATION.md#debug-probes) lists the chain, one line
+per step, with the values each read; a value marked `secret` shows as
+`***`. The debug page and the status page draw it as a workflow: a block
+per step, with arrows between them. A step that went through is green; one
+that failed or timed out is red, with its error inside; a fan-out is a
+stacked block, amber when its failed items were skipped; a step not reached
+is grey and dashed. Each block also says its state in words. On the debug
+page, each block links to its step's details, and a pasted response takes
+one text area per step for the answers of the steps; `--dry-run` lists each
+step with the values it reads and sends.
 
 ## Rate limiting
 

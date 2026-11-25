@@ -1029,6 +1029,7 @@ list the opt-in types.
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings, or `any` as the only entry, which MUST accept every status from 100 to 599 and no other; any other entry, `any` beside another entry and `any` in another case MUST be refused at load, naming the collector or the static target, and the schemas MUST refuse them too. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, and MUST be taken exactly when the schemas' pattern `^[1-5][xX][xX]$|^[1-5][0-9][0-9]$` takes it: a status's three digits or a class in either case; `"503.0"`, and text with a sign, leading zeros or blanks (`"0503"`, `"+503"`, `" 503 "`), MUST be refused at load with a message naming the entry and that form. The same holds for `retry.statuses`, a collector's and a static target's. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 | `pagination` | none | Fetch the further pages of a paginated answer and merge them into one document (below). |
+| `extract`, `then` | none | Read values from the answer, and make up to 12 more requests to the same target that send them (Chained requests, below). |
 | `rate_limit` | none | The most requests a second sent to one origin of the collector's targets (below). |
 | `proxy_url` | the environment's | The proxy every request of the collector goes through, or `direct` (§ 42.15b). |
 | `proxy_basic_auth_file` | none | The files of the username and the password sent to `proxy_url` (§ 42.15b). |
@@ -1132,6 +1133,84 @@ the page. An answer of one page MUST be the page byte for byte; the merged
 document of several MUST be written again as JSON, each number as it was
 written, the first page's status and headers, without its
 `Content-Length`.
+
+##### Chained requests
+
+`request.then` MUST make, after the collector's own request, the chain's
+first, named `first`, 1 to 12 more requests in order, all to the target's
+origin, each able to send values read from the answers before it. It is the
+`http` type's alone; any other type MUST refuse it, and neither a static
+target nor a probe parameter MAY set or change `then`, `extract` or
+`answer`.
+
+A step's keys are `name` (required, `^[a-z_][a-z0-9_]*$`, unique, not
+`first`), `method` (`GET`, `HEAD`, `POST`, `PUT` or `PATCH`; `GET`, or
+`POST` with a body, when left out), `path` or `url`, `query`, `headers`,
+at most one of `body`, `form` and `json`, `accept_status`, `extract`, and
+for a fan-out `for_each`, `concurrency` (1 to 16, 4), `max_items` (1 to
+1000, 100) and `on_item_error` (`fail` or `skip`, `fail`). The load MUST
+refuse, naming the collector, the step and the key: a step past the
+twelfth; a name taken twice or not of the pattern; a `path` with a scheme
+or a host; a `url` that is not one `{{chain.<name>}}` placeholder alone;
+two bodies; `concurrency`, `max_items` or `on_item_error` without
+`for_each`; a second step with `for_each`; `for_each` naming a value that is
+not a `json` value of an earlier step; a header named `Authorization` or
+the one the login sends its token in; more than 16 values in a step's
+`extract`, a value read twice, and a value read from more than one place;
+a `{{chain.<name>}}` sent before a step reads the value, and a value no
+step sends or fans out over; `{{each}}`, `{{each.<field>}}` and
+`{{each_index}}` outside a fan-out step; `then` beside `pagination`,
+`redirect_trusted_hosts` or `cache.revalidate: true`; and `answer` without
+`then`. The schemas MUST refuse the same where JSON Schema can say it. The
+same checks MUST run under `--dry-run`, which MUST list each step with the
+values it reads and sends.
+
+A value MUST be read as a `steps` login reads one (`regex`, `json`, `form`,
+`header` or `cookie`), a `json` value MAY also be a list. A value not found
+or empty MUST fail the step naming the step and the value, unless it is
+`optional`, when it MUST be the empty text. A value MUST be written into
+its place escaped as that place needs, as a probe parameter's is: one path
+segment in `path`, a query value in `query`, as written in a header, by its
+filter in `body`. No value MAY be written to the log, and a `secret` one
+MUST be shown as `***` in a debug report and never quoted in an error.
+
+Every request of a chain, redirects included, MUST go to the target's
+origin. A link a step sends as its `url` MUST be resolved against the URL of
+the answer it came from, and one to another origin MUST fail the step in
+the `target_policy` stage. A redirect to another origin MUST be refused the
+same way, for the first request too. A `request.login` MAY go to its own
+URL.
+
+A fan-out MUST make one request per entry, no more than `concurrency` at
+once and of the first `max_items` entries; a cut MUST NOT fail the trip,
+and MUST be counted in `http_exporter_chain_items_cut_total` and logged at
+warn level through the failure log. Under `fail`, the first item that fails
+MUST fail the trip, and the items still running MUST be cancelled; under
+`skip`, it MUST be kept in the document as `{"each": …, "error": …}` and
+counted, and the items that failed MUST be summed in one warning per trip.
+An empty list MUST make no request.
+
+The trip's response MUST be the last step's answer under `answer: last`,
+the default, and under `answer: all` one JSON document keyed by step name,
+each `{"status": …, "body": …}` or for a fan-out a list in item order; the
+decoder MUST then be `json`, and `$status` and `$headers` the first
+request's. A fan-out MUST NOT be the last step under `answer: last`.
+
+The chain MUST share one budget, the trip's deadline; a probe's `timeout`
+MUST bound the chain. A step that fails MUST fail the trip in the stage its
+request's failure has, its error starting with `step "<name>"`, and for a
+fan-out item with its place, entry and the number of items. Every request
+MUST carry the collector's credentials and be signed as the collector signs;
+a login MUST log in again for a refused token at most once per trip; the
+steps of a trip MUST share a cookie jar that starts empty. A chain MUST be
+one trip to the cache, shared probes and `failure_backoff`, and its result
+MUST NOT be revalidated. Each step MUST be counted by `collector` and `step`
+in `http_exporter_chain_requests_total`,
+`http_exporter_chain_step_failures_total` and, for a fan-out,
+`http_exporter_chain_items` (§ 22), and in verbose mode
+`http_exporter_chain_step_duration_seconds`. The debug report, the debug
+page and the status page MUST show the chain step by step, the page as a
+workflow diagram in which each state has its word as well as its colour.
 
 ##### Rate limiting
 

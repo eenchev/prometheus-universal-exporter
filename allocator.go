@@ -266,7 +266,7 @@ func loadCached(configFile, targetsFile, pythonPath string, loadOptions, staticT
 
 // exists reports whether there is a file at path.
 func exists(path string) bool {
-	_, err := os.Stat(path)
+	_, err := os.Stat(path) // #nosec G703 -- a file of --allocator.cache-dir, which the command line names
 	return err == nil
 }
 

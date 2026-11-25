@@ -90,7 +90,7 @@ func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request, utf8Names 
 		w.Header()[key] = append([]string(nil), values...)
 	}
 	w.WriteHeader(p.status)
-	_, _ = w.Write(p.body)
+	_, _ = w.Write(p.body) // #nosec G705 -- the answer the probe wrote, with the headers it set: the exporter's own text, not markup
 }
 
 // probeRecorder is the http.ResponseWriter the shared work writes into.

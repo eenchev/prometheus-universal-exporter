@@ -437,8 +437,10 @@ func (r *chainRun) stepRequest(step model.ChainStep, params map[string]string) (
 	if err != nil {
 		return nil, overrides, err
 	}
-	if contentType != "" && !hasHeader(sc.Request.Headers, "Content-Type") {
-		sc.Request.Headers["Content-Type"] = contentType
+	if contentType != "" && !hasHeader(headers, "Content-Type") {
+		// A form or a JSON body says what it is, over a Content-Type the
+		// collector sets for its own body; the step's own header wins.
+		sc.Request.Headers = mergedHeaders(sc.Request.Headers, map[string]string{"Content-Type": contentType})
 	}
 	if body != "" {
 		overrides.Body = &body

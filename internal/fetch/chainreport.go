@@ -296,3 +296,25 @@ func jqStep(status int, header http.Header, duration time.Duration, shown string
 	}
 	return map[string]any{"status": statusValue, "headers": headers, "duration_seconds": duration.Seconds(), "url": shown}
 }
+
+// Summary is a copy of the report with what a workflow diagram shows and no
+// more: no answer's body, start, headers or trip, which a report kept after
+// its trip, such as the status page's of the last trip, need not hold. A
+// fan-out of 1000 items answered with 1 MiB each would keep 1 GiB.
+func (r *ChainReport) Summary() *ChainReport {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.Steps = make([]ChainStepReport, len(r.Steps))
+	for i, step := range r.Steps {
+		step.Headers, step.Trip, step.Excerpt = nil, nil, ""
+		items := make([]ChainItemReport, len(step.Items))
+		for j, item := range step.Items {
+			items[j] = ChainItemReport{Index: item.Index, Each: item.Each, URL: item.URL, Status: item.Status, Bytes: item.Bytes, Duration: item.Duration, Error: item.Error}
+		}
+		step.Items = items
+		out.Steps[i] = step
+	}
+	return &out
+}

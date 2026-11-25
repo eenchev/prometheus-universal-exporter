@@ -88,3 +88,16 @@ func TestTheChainLinesOfTheTextReport(t *testing.T) {
 		}
 	}
 }
+
+// Past 100 items of a fan-out, the items' requests have no span, and the
+// last span the step keeps says how many items were left out.
+func TestAFanOutsSpansStopAtAHundredItems(t *testing.T) {
+	requests := []fetch.TracedRequest{{Step: "first"}}
+	for item := 1; item <= 103; item++ {
+		requests = append(requests, fetch.TracedRequest{Step: "each", Item: item})
+	}
+	untraced, last := chainItemsUntraced(requests)
+	if untraced["each"] != 3 || untraced["first"] != 0 || last["each"] != 100 {
+		t.Fatalf("untraced %v, last kept %v", untraced, last)
+	}
+}

@@ -285,7 +285,7 @@ func blanksOrPlaceholder() map[string]any {
 // headerNameChars are the characters of a header name, an HTTP token
 // (RFC 9110), as a regular expression class; httpguts.ValidHeaderFieldName,
 // which the exporter asks, takes these and no others.
-const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
+const headerNameChars = fetch.SchemaHeaderNameChars
 
 // caseless is a regular expression of text matched without regard to case
 // (fetch.SchemaCaseless).
@@ -297,12 +297,7 @@ func caseless(text string) string { return fetch.SchemaCaseless(text) }
 // any case, since the exporter sets that one itself. Only the exporter
 // refuses two names that are one header in different case: a schema sees
 // each name on its own.
-func headerNames() map[string]any {
-	return map[string]any{
-		"pattern": "^[" + headerNameChars + "]+$",
-		"not":     map[string]any{"pattern": "^" + caseless("Accept-Encoding") + "$"},
-	}
-}
+func headerNames() map[string]any { return fetch.SchemaHeaderNames() }
 
 // forwardHeaderEntry is what the exporter accepts as an entry of
 // request.forward_headers (fetch.checkForwardHeaders): a header name, with or
@@ -325,9 +320,7 @@ func forwardHeaderEntry() map[string]any {
 // queryNames is what the exporter takes as a name of request.query
 // (fetch.checkQueryNames): one of at least a character, none of them a
 // control character. Any other is sent escaped.
-func queryNames() map[string]any {
-	return map[string]any{"minLength": 1, "pattern": `^[^\x00-\x1F\x7F]*$`}
-}
+func queryNames() map[string]any { return fetch.SchemaQueryNames() }
 
 // leastResponseRule is the rule of request.max_response_bytes and
 // limits.max_response_bytes. Besides the rule for every size, the value is

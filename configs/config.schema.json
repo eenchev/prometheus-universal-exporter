@@ -7493,7 +7493,22 @@
                           "boolean"
                         ]
                       },
-                      "description": "Headers added to the collector's, each replacing one of the same name, with placeholders. Not Authorization, nor the header a login sends its token in.",
+                      "description": "Headers added to the collector's, each replacing one of the same name, with placeholders. A name is an HTTP token, not Accept-Encoding, and not Authorization nor the header a login sends its token in, which carry the collector's credentials.",
+                      "propertyNames": {
+                        "allOf": [
+                          {
+                            "not": {
+                              "pattern": "^[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"
+                            },
+                            "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
+                          },
+                          {
+                            "not": {
+                              "pattern": "^[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"
+                            }
+                          }
+                        ]
+                      },
                       "type": "object"
                     },
                     "json": {
@@ -7563,9 +7578,10 @@
                           "boolean"
                         ]
                       },
-                      "description": "Query parameters of the step, with placeholders.",
+                      "description": "Query parameters of the step, with placeholders. A name is not empty and holds no control character.",
                       "propertyNames": {
-                        "minLength": 1
+                        "minLength": 1,
+                        "pattern": "^[^\\x00-\\x1F\\x7F]*$"
                       },
                       "type": "object"
                     },

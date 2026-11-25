@@ -40,6 +40,7 @@ func chainSchemaKeys() []schemaKey {
 		{key: "collectors[].request.then[].method", document: chainedCollector, at: step, setting: "          method: %s\n", valid: "head", invalid: "delete", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.then[].url", document: chainedCollector, at: "          path: /x/{{chain.id}}\n", setting: "          url: %s\n", valid: "'{{chain.id}}'", invalid: "'/x/{{chain.id}}'", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.then[].accept_status[]", document: chainedCollector, at: step, setting: "          accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
+		{key: "collectors[].request.then[].headers{}", document: chainedCollector, at: step, setting: "          headers: {%s: v}\n", valid: "X-Tenant", invalid: "Authorization", absent: true},
 		{key: "collectors[].request.then[].query{}", document: fanOutCollector, at: step, setting: "          query: {%s: v}\n", valid: "page", absent: true},
 		{key: "collectors[].request.then[].on_item_error", document: fanOutCollector, at: step, setting: "          on_item_error: %s\n", valid: "skip", invalid: "retry", absent: true, empty: true, emptyWas: refused},
 	}

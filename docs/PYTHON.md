@@ -26,6 +26,7 @@ names, and whatever it imports:
 | `params` | The [probe's parameters](REQUESTS.md#in-expressions), a dict of each `param_<name>` that was given, by its name, as text; empty when there is none. jq's `$params`. |
 | `scrape_time` | When the scrape began, in seconds since the epoch, a float as `time.time()` gives one; the same moment the request's [clock placeholders](REQUESTS.md#dates-and-times) were filled from. jq's `$scrape_time`. |
 | `last_success` | When the last scrape of the same collector, target and parameters that succeeded began, in the same seconds; `None` at the first scrape after a start, and for a new target. jq's `$last_success`. |
+| `steps` | Of an `http` collector with [`request.then`](REQUESTS.md#chained-requests), each request of the chain by step name, a dict of its `status`, `headers`, `duration_seconds` and `url`, a fan-out step a list of them; `None` without a chain. jq's `$steps` ([Steps of a chain](CONFIGURATION.md#steps-of-a-chain)). |
 | `state` | With `transform.state: true`, a dict kept between the script's runs ([State between runs](#state-between-runs)). |
 | `metric(...)`, `fail(message)` | Make a series; fail the scrape with a message. |
 | `log(message, level="info")` | Write a line of the exporter's log, at `debug`, `info`, `warning` or `error`. |

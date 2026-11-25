@@ -92,7 +92,7 @@ func (s *Server) noteChain(ctx context.Context, report *fetch.ChainReport, c *mo
 		// The status pages draw each chained collector's last trip and
 		// each static target's last scrape; a debug run is in its own
 		// report alone.
-		s.chains.note(c.Name, staticName, report, time.Now())
+		s.chains.note(c.Name, staticName, report.Summary(), time.Now())
 	}
 	verbose := s.verboseSelfMetrics()
 	rec.update(func(x *serverStats) {

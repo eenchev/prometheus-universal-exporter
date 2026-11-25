@@ -10632,10 +10632,13 @@ it. `otlp.traces` is a block `enabled` switches (§ 42.1), as
   span within the transform of the scripts' time, and under the fetch's a
   CLIENT span, named by its method, for each request sent — each attempt of
   `request.retry`, each redirect, each page of `request.pagination`,
+  each request of a chain and of the first 100 items of its fan-out,
   `request.login`'s login — with `http.request.method`, `url.full`,
   `server.address`, `server.port`, `http.response.status_code`,
   `http.request.resend_count`, `retry.attempt`, `pagination.page`,
-  `redirect` and `login`, ERROR for a request that got no answer, or an
+  `pue.chain.step` and `pue.chain.item`, `redirect` and `login`, the last
+  kept span of a step whose items were left out with
+  `pue.chain.items_not_traced`, ERROR for a request that got no answer, or an
   answer its request type takes for a failure, or an HTTP answer of 400 or
   more, and a `rate_limit` span before a request that waited for its
   turn. Under an http, graphite or kubernetes request's CLIENT span (a

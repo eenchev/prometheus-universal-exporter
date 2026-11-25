@@ -235,6 +235,10 @@ func TestTheStatusPagesDrawAChainsLastTrip(t *testing.T) {
 	assertContains(t, status, `<h2 id="chains">Chained collectors</h2>`, `id="chain-chained"`, "4 requests per trip", "<svg", "failed items skipped")
 	collectors := getPath(server, http.MethodGet, "/collectors").Body.String()
 	assertContains(t, collectors, "a chain of 2 requests; the last trip sent 4 requests")
+	// What is kept of the trip is what the diagram shows, not the answers.
+	if trip, ok := server.chains.ofCollector("chained"); !ok || trip.report.Steps[1].Items[0].Body != nil || trip.report.Steps[0].Excerpt != "" {
+		t.Fatal("the status page keeps the answers of the last trip")
+	}
 }
 
 // chainShown is the chain a debug page's run answered, as its JSON.
@@ -325,4 +329,15 @@ func TestAPastedChainKeepsToTheCollectorsSchemes(t *testing.T) {
 	if shown := chainShown(t, answer); !answer.OK || !strings.Contains(shown, "https://target.invalid/job/api/lastBuild/api/json") {
 		t.Fatalf("the run on pasted answers: %s\n%s", answer.Verdict, shown)
 	}
+}
+
+// The debug page finds the steps of a chain to give each a text area of its
+// own, written as a block list or as a list on the line of then:.
+func TestTheDebugPageFindsTheStepsOfAChain(t *testing.T) {
+	page := getPage(t, debugPageServer(t, &model.Config{Collectors: []model.Collector{jenkinsCollector("pasted", "", false)}}), "/debug")
+	requireContains(t, page,
+		`if (/^\s*then\s*:\s*$/.test(line)) thenAt = indent;`,
+		`const flow = /^\s*then\s*:\s*\[(.*)$/.exec(line);`,
+		`<div id="steps-part" role="group" aria-labelledby="steps-title" hidden>`,
+		`if (Object.keys(steps).length > 0) request.steps = steps;`)
 }

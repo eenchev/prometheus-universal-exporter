@@ -81,6 +81,8 @@ func TestSchemaAndExporterAgreeOnChains(t *testing.T) {
 		"pagination beside then":       {step("path: '/x/{{chain.id}}'") + "pagination: {type: link, items: .}", "", "request.pagination beside request.then"},
 		"trusted hosts beside then":    {step("path: '/x/{{chain.id}}'") + "follow_redirects: true\nredirect_trusted_hosts: [sso.example]", "", "redirect_trusted_hosts beside request.then"},
 		"revalidate beside then":       {step("path: '/x/{{chain.id}}'"), "cache: {ttl: 30s, revalidate: true}", "cache.revalidate beside request.then"},
+		"a step setting credentials":   {step("path: '/x/{{chain.id}}'\nheaders: {authorization: x}"), "", "sets Authorization, which carries the collector's credentials"},
+		"a step's header name":         {step("path: '/x/{{chain.id}}'\nheaders: {'X Tenant': x}"), "", `"X Tenant" is not a header name`},
 		"answer all and xml":           {step("path: '/x/{{chain.id}}'"), "answer: all\ndecoder: {type: xml}", "answer: all makes one JSON document"},
 	}
 	for name, d := range refused {
@@ -94,7 +96,6 @@ func TestSchemaAndExporterAgreeOnChains(t *testing.T) {
 		"two fan-outs":                      {extract + "then:\n  - {name: a, for_each: jobs, path: '/a/{{each}}', extract: {more: {json: '[.x]'}}}\n  - {name: b, for_each: more, path: '/b/{{each}}'}", "answer: all", "a chain has at most one fan-out"},
 		"a fan-out last under last":         {fanOut(""), "", `ends with the fan-out step "last_build" under answer: last`},
 		"a path with a host":                {step("path: '//x.com/{{chain.id}}'"), "", "names a scheme or a host"},
-		"a step setting credentials":        {step("path: '/x/{{chain.id}}'\nheaders: {authorization: x}"), "", "sets Authorization, which carries the collector's credentials"},
 		"a chain value in the first":        {"query: {x: '{{chain.id}}'}\n" + step("path: '/x/{{chain.id}}'"), "", "it is the chain's first request"},
 		"a header value that breaks a line": {step("path: '/x/{{chain.id}}'\nheaders: {X-A: \"a\\nb\"}"), "", "has the control character"},
 		"two steps of one name":             {idExtract + "then:\n  - {name: a, path: '/x/{{chain.id}}'}\n  - {name: a, path: /y}", "", `two steps named "a"`},

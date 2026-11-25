@@ -851,7 +851,8 @@ function showParams(through) {
   params.validate();
 }
 // The names of the steps of a chain, in the request.then of a collector's
-// YAML, as - name: x, a step's name key under its dash, or - {name: x}.
+// YAML, as - name: x, a step's name key under its dash, or - {name: x}, or
+// in a list written on the line of then:, then: [{name: x}, {name: y}].
 function stepNamesOf(text) {
   const names = [];
   let thenAt = -1, dashAt = -1;
@@ -860,6 +861,12 @@ function stepNamesOf(text) {
     if (line.trim() === "") continue;
     const indent = line.length - line.trimStart().length;
     if (thenAt < 0) {
+      // then: [{name: a, ...}, {name: b, ...}], a list in flow style.
+      const flow = /^\s*then\s*:\s*\[(.*)$/.exec(line);
+      if (flow) {
+        for (const m of flow[1].matchAll(/(?:^|[{,]\s*)name\s*:\s*["']?([a-z_][a-z0-9_]*)/g)) if (!names.includes(m[1])) names.push(m[1]);
+        return names;
+      }
       if (/^\s*then\s*:\s*$/.test(line)) thenAt = indent;
       continue;
     }

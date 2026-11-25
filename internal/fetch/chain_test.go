@@ -449,3 +449,47 @@ func TestAStepMayLeaveTheForwardedHeadersOut(t *testing.T) {
 		t.Fatalf("the requests carried %v, want %v", seen, want)
 	}
 }
+
+// A report's summary keeps what a diagram shows and none of the answers:
+// a fan-out's items keep their entry and error, not their bodies.
+func TestAChainReportsSummaryHoldsNoAnswer(t *testing.T) {
+	report := &ChainReport{Steps: []ChainStepReport{{Name: "first", Headers: http.Header{"X": {"y"}}, Excerpt: "{}", Trip: &HTTPTrip{}, Status: 200},
+		{Name: "each", ForEach: true, Items: []ChainItemReport{{Index: 0, Each: "a", Body: []byte(`{"big":1}`), Entry: "a", Headers: http.Header{"X": {"y"}}, Trip: &HTTPTrip{}, Status: 200}}}}}
+	summary := report.Summary()
+	first, item := summary.Steps[0], summary.Steps[1].Items[0]
+	if first.Headers != nil || first.Trip != nil || first.Excerpt != "" || first.Status != 200 || item.Body != nil || item.Entry != nil || item.Headers != nil || item.Trip != nil || item.Each != "a" {
+		t.Fatalf("the summary holds %+v and %+v", first, item)
+	}
+	if report.Steps[1].Items[0].Body == nil {
+		t.Fatal("the summary changed the report")
+	}
+}
+
+// A step's form or JSON body is sent with its own Content-Type, over the
+// one the collector sets for its own body, unless the step sets one.
+func TestAStepsBodySaysWhatItIs(t *testing.T) {
+	types := map[string]string{}
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		types[r.URL.Path] = r.Header.Get("Content-Type")
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"id": 1}`))
+	}))
+	t.Cleanup(server.Close)
+	c := chainCollector(t, "/first", map[string]model.ChainExtract{"id": jsonValue(".id")}, []model.ChainStep{
+		{Name: "json", Path: "/json", JSON: map[string]string{"id": "{{chain.id}}"}},
+		{Name: "form", Path: "/form", Form: map[string]string{"id": "{{chain.id}}"}},
+		{Name: "own", Path: "/own", JSON: map[string]string{"id": "{{chain.id}}"}, Headers: map[string]string{"content-type": "application/vnd.api+json"}},
+	}, func(c *model.Collector) {
+		c.Request.Headers = map[string]string{"Content-Type": "text/plain"}
+		editHTTP(c, func(r *HTTPConfig) { r.Method, r.Body = http.MethodPost, "hello" })
+	})
+	if _, err := fetchChained(c, server.URL, RequestOverrides{}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"/first": "text/plain", "/json": "application/json", "/form": "application/x-www-form-urlencoded", "/own": "application/vnd.api+json"}
+	if fmt.Sprint(types) != fmt.Sprint(want) {
+		t.Fatalf("the steps were sent %v, want %v", types, want)
+	}
+}

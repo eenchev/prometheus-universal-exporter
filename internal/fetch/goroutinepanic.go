@@ -10,24 +10,30 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A panic of a trip is recovered where the trip's goroutine starts: a
+// A panic in a trip is recovered where the trip's goroutine starts. A
 // probe's flight and a static target's scrape answer it as a scrape that
-// panicked and log it, and the exporter serves on. A goroutine the fetch
-// starts itself is outside that recovery: the servers of an ntp scrape and
-// the addresses of an icmp one asked at once, the reader of an ICMP socket,
-// the ports of a tcp check, the requests of a kubernetes scrape, the read
-// of a file or a directory and the run of a command over SSH, which a
-// deadline may leave behind, a login and a gRPC reflection question shared
-// by the requests waiting for them. A panic
-// there, in code that reads what a target answered, would end the process,
-// with every other scrape, every token and every result served stale.
+// panicked and log it, and the exporter keeps serving. Goroutines the fetch
+// starts itself are outside that recovery:
+//   - the servers of an ntp scrape and the addresses of an icmp one, asked
+//     at once;
+//   - the reader of an ICMP socket;
+//   - the ports of a tcp check;
+//   - the requests of a kubernetes scrape;
+//   - the read of a file or a directory and the run of a command over SSH,
+//     which a deadline may leave behind;
+//   - a login and a gRPC reflection question, shared by the requests
+//     waiting for them.
+//
+// A panic there, in code that reads a target's answer, would end the
+// process, along with every other scrape, every token and every result
+// served stale.
 //
 // Each such goroutine recovers its panic, logs it with its own stack, and
-// hands it to the trip: goroutinePanics keeps it for the goroutine that
-// waits for the others and raises it there; panicToError makes it the
-// error of work whose error is what its goroutine hands over, which
-// FetchCollector raises on the trip's goroutine. Either way the trip
-// panics where its recovery is, and is answered and counted as one.
+// hands it to the trip. goroutinePanics keeps it for the goroutine that
+// waits for the others, and raises it there. panicToError turns it into
+// the error of work whose goroutine hands over an error, and
+// FetchCollector raises that on the trip's goroutine. Either way the trip
+// panics where its recovery is, and is answered and counted as a panic.
 
 // goroutinePanic is the panic of a goroutine a trip started, as the value
 // the trip panics with and as the error that carries it there.
@@ -39,10 +45,10 @@ func (p *goroutinePanic) Error() string {
 	return "a goroutine of the scrape panicked: " + p.text
 }
 
-// recoveredPanic logs a panic a goroutine of a trip recovered, with the
-// stack it had, which the trip's own recovery no longer has, and returns
-// it to be raised on the trip's goroutine. Its text is cut as any
-// failure's is: a panic says whatever its code had at hand.
+// recoveredPanic logs a panic recovered by a goroutine of a trip, with the
+// goroutine's stack, which the trip's own recovery no longer has. It
+// returns the panic to be raised on the trip's goroutine. Its text is cut
+// like any failure's, since a panic says whatever its code had at hand.
 func recoveredPanic(recovered any) *goroutinePanic {
 	// One raised here already, by a goroutine that waited for others, is
 	// logged and is passed on as it is.

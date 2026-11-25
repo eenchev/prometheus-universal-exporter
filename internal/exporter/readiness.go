@@ -6,26 +6,26 @@ import (
 	"strings"
 )
 
-// /health says the process is alive; /ready says whether it should be sent
+// /health says the process is alive. /ready says whether it should be sent
 // probes. A rejected reload, of the configuration or of the static target
 // file, leaves it ready: it keeps answering probes with the configuration in
-// force, and a pod that is not ready is taken out of its Service. Every
-// replica rejects the same ConfigMap edit, so making them unready would leave
-// the Service without endpoints and fail every probe the exporter could
-// still answer. The rejection is reported where it is seen without that cost:
+// force. A pod that is not ready is taken out of its Service. Every replica
+// rejects the same ConfigMap edit, so making them unready would leave the
+// Service without endpoints and fail every probe the exporter could still
+// answer. The rejection is reported where it can be seen without that cost:
 // http_exporter_config_last_reload_successful is 0, the ERROR log line, and
 // /-/reload's 500.
 //
-// An exporter whose OTLP exports keep failing is delivering nothing to its
-// backend, but it still answers probes, and a pod that is not ready is taken
-// out of its Service, which would stop those too. So failing exports make it
-// unready only when otlp.unready_after_failures asks for it, as it should for
-// an exporter that exists to deliver its targets over OTLP; ready again
-// at the next export that gets through.
+// An exporter whose OTLP exports keep failing delivers nothing to its
+// backend, but it still answers probes. Making it unready would take it out
+// of its Service and stop those too. So failing exports make it unready only
+// when otlp.unready_after_failures asks for it. That suits an exporter that
+// exists to deliver its targets over OTLP. It becomes ready again at the
+// next export that gets through.
 //
 // The reasons are listed in the body, one per line, for whoever looks. They
-// never include an error's text: /ready is not authenticated, and an error can
-// quote a path, a URL or a line of the configuration.
+// never include an error's text: /ready is not authenticated, and an error
+// can quote a path, a URL or a line of the configuration.
 
 // shuttingDownReason is the one reason /ready gives while the exporter stops.
 const shuttingDownReason = "the exporter is shutting down"

@@ -10,32 +10,31 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The binary decoder reads the answer of a binary protocol — a Modbus TCP
-// read, a game server's query, a device's status frame — by the layout
-// response.binary writes, as a small reader of its own: its document is a
-// mapping of each field's name to its value, so that a jq rule reads
-// .registers[0] and a Python script data["players"], and the rules never
-// take bytes apart themselves.
+// The binary decoder reads the answer of a binary protocol (a Modbus TCP
+// read, a game server's query, a device's status frame) by the layout in
+// response.binary, with a small reader of its own. Its document maps each
+// field's name to its value, so that a jq rule reads .registers[0] and a
+// Python script data["players"], and the rules never take bytes apart
+// themselves.
 //
-//   - The fields are read in order, each from the byte after the field
-//     before it, or from its offset, counted from the start of the body,
-//     when it writes one: a layout may jump ahead, or back to read a byte
-//     again.
+//   - The fields are read in order, each from the byte after the previous
+//     field, or from its offset when it gives one, counted from the start of
+//     the body. A layout may jump ahead, or back to read a byte again.
 //   - u8 to u64 and i8 to i64 are integers of 1 to 8 bytes, unsigned and
-//     two's complement, f32 and f64 IEEE 754 floats, each in the field's
-//     byte order, or the layout's, big by default, as network protocols
-//     write numbers. An integer is an int in the document, as the json
-//     decoder makes a whole number, but for a u64 past what an int holds,
-//     which is a float64, as a float is.
-//   - string is length bytes of text, and cstring the text up to a NUL byte,
-//     the NUL read but not kept, at most length bytes when length is set:
-//     bytes that are not UTF-8 are each read as U+FFFD, since a document
-//     holds text. skip passes length bytes over and is in no document.
+//     two's complement. f32 and f64 are IEEE 754 floats. Each is in the
+//     field's byte order, or else the layout's, big-endian by default, as
+//     network protocols write numbers. An integer is an int in the document,
+//     as the json decoder makes a whole number. A u64 past what an int holds
+//     is a float64, like a float.
+//   - string is length bytes of text. cstring is the text up to a NUL byte,
+//     at most length bytes when length is set; the NUL is read but not kept.
+//     Bytes that are not UTF-8 are each read as U+FFFD, since a document
+//     holds text. skip skips length bytes and is in no document.
 //   - count makes the field a list of that many values of its type, read one
 //     after the other, as a run of registers is.
 //   - A field that runs past the end of the body fails the decode, naming the
-//     field and the bytes the body has; bytes after the last field are left
-//     unread, as an answer longer than its layout often is.
+//     field and the bytes the body has. Bytes after the last field are left
+//     unread, as an answer is often longer than its layout.
 
 // decodeBinary decodes body by layout.
 func decodeBinary(body []byte, layout model.BinaryConfig) (map[string]any, error) {
@@ -132,8 +131,8 @@ func binarySize(kind string) int {
 }
 
 // binaryNumber reads a number of the type from b, which is as long as the
-// type is: an integer as an int, as the json decoder makes a whole number,
-// but a u64 past what an int holds, which is a float64, and a float as a
+// type. An integer is an int, as the json decoder makes a whole number,
+// except a u64 past what an int holds, which is a float64. A float is a
 // float64.
 func binaryNumber(kind string, order binary.ByteOrder, b []byte) any {
 	switch kind {

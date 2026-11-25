@@ -11,28 +11,29 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A script that counts what is new since it last ran, lines of a log, the
-// tickets after the last it saw, has to remember where it was, and a
+// A script that counts what is new since it last ran (lines of a log, the
+// tickets after the last one it saw) has to remember where it was. But a
 // script's names are gone when it ends: a worker runs the scripts of every
 // target of its collector in turn, and is stopped and started as the
 // exporter sees fit. So a collector with transform.state: true gives each
 // of its scripts a dict named state, which the exporter keeps from one run
-// to the next: what the script left in it is what its next run for the
+// to the next. What the script leaves in it is what its next run for the
 // same target finds there.
 //
-// The state is the exporter's, in its memory, by collector, script, target
-// and the probe's parameters: a pre-script and a transform have each their
-// own, and so has each target, and each set of parameters it is probed with. It is JSON, of at most MaxPythonStateBytes written out,
-// which a script that leaves more, or what JSON cannot carry, fails for;
-// what a failed script left is not kept, and neither is what the script of
-// a debug probe left, which reads the state and changes nothing. A scrape
-// answered from the response cache runs no script, and so changes none.
+// The state lives in the exporter's memory, keyed by collector, script,
+// target and the probe's parameters. A pre-script and a transform each have
+// their own, as does each target and each set of parameters it is probed
+// with. It is JSON of at most MaxPythonStateBytes when written out. A script
+// that leaves more, or leaves what JSON cannot carry, fails. What a failed
+// script left is not kept. Neither is what the script of a debug probe
+// left, which reads the state and changes nothing. A scrape answered from
+// the response cache runs no script, so it changes no state.
 //
 // It is not kept across a restart, and in allocator mode each replica has
-// its own: a script has to make do with an empty one, as on its first run.
-// The exporter keeps the states of at most pythonStatesKept targets, the
-// ones used last, and at most pythonStateBytesKept bytes of them, so
-// targets that are gone do not stay and the states of many do not add up.
+// its own. A script has to cope with an empty one, as on its first run. The
+// exporter keeps the states of at most pythonStatesKept targets (the ones
+// used last) and at most pythonStateBytesKept bytes of them. So targets that
+// are gone do not stay, and the states of many targets do not add up.
 
 // MaxPythonStateBytes is the most a script's state may be, as JSON.
 const MaxPythonStateBytes = 64 << 10
@@ -144,12 +145,12 @@ func (s *pythonStateStore) put(key pythonStateKey, state string) {
 	}
 }
 
-// FollowPythonStates tells the states which collectors are in force now:
-// the states of a collector that is gone, or no longer sets
-// transform.state, are dropped with their count, so one added again under
-// the name starts from an empty state and from zero. The states of a
-// collector a reload kept stay, whatever of its definition changed: a
-// script that was edited finds what the one before it left.
+// FollowPythonStates tells the states which collectors are in force now.
+// The states of a collector that is gone, or no longer sets
+// transform.state, are dropped with their count. So a collector added again
+// under that name starts from an empty state and from zero. The states of a
+// collector that a reload kept stay, whatever changed in its definition: an
+// edited script finds what the previous one left.
 func FollowPythonStates(collectors []model.Collector) {
 	keeping := map[string]bool{}
 	for i := range collectors {
@@ -175,10 +176,10 @@ func FollowPythonStates(collectors []model.Collector) {
 }
 
 // PythonStateCount is what the exporter keeps of the states of a
-// collector's scripts (transform.state): how many, of each script, target
-// and parameters, their bytes as JSON together, and how many it has dropped
-// to stay within the bounds of all the states, each of which left a script
-// to start from an empty state.
+// collector's scripts (transform.state): how many there are (one per
+// script, target and parameters), their total bytes as JSON, and how many
+// it has dropped to stay within the bounds for all states. Each dropped
+// state left a script to start from an empty one.
 type PythonStateCount struct {
 	States, Bytes int
 	Dropped       uint64
@@ -205,10 +206,10 @@ func PythonStateCounts() map[string]PythonStateCount {
 	return counts
 }
 
-// checkPythonState says what is wrong with the state a script left, as the
-// worker wrote it: it is a JSON object within MaxPythonStateBytes, which
-// the worker has seen to, and is checked here as anything read from a
-// worker is.
+// checkPythonState reports what is wrong with the state a script left, as
+// the worker wrote it. It must be a JSON object within MaxPythonStateBytes.
+// The worker has ensured this, but it is checked here like anything read
+// from a worker.
 func checkPythonState(c *model.Collector, what, state string) error {
 	if len(state) > MaxPythonStateBytes {
 		return fmt.Errorf("python %s of collector %q left a state of %d bytes as JSON, and one may be %d; keep less in state", what, c.Name, len(state), MaxPythonStateBytes)

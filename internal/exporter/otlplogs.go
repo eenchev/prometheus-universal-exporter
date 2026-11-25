@@ -18,25 +18,24 @@ import (
 )
 
 // The exporter's own log is forwarded over OTLP, with otlp.logs, to the
-// collector its metrics go to: every line at or above otlp.logs.level, as
-// OTLP log records, besides the JSON lines on stderr, which go on as they
-// were. The export is OTLP/HTTP with a JSON body, sent as the metrics are
-// (deliverOTLPOf), with the otlp block's headers, TLS, compression, timeout
-// and retries, under the exporter-wide resource.
+// collector its metrics go to. Every line at or above otlp.logs.level is sent
+// as an OTLP log record. The JSON lines on stderr go on as before. The export
+// is OTLP/HTTP with a JSON body, sent like the metrics (deliverOTLPOf), with
+// the otlp block's headers, TLS, compression, timeout and retries, under the
+// exporter-wide resource.
 //
-// Logging must never wait for the export. A line is taken by the handler
-// that writes it to stderr (OTLPLogs.Handler), encoded as a record and put
-// in a queue under a lock held for no more than that, and a line that finds
-// the queue at otlp.logs.max_pending_records is dropped and counted rather
-// than waited for. The queue is sent every otlp.logs.interval, in the
-// background.
+// Logging must never wait for the export. The handler that writes a line to
+// stderr (OTLPLogs.Handler) also takes it, encodes it as a record and puts it
+// in a queue, under a lock held for no more than that. A line that finds the
+// queue at otlp.logs.max_pending_records is dropped and counted, not waited
+// for. The queue is sent every otlp.logs.interval, in the background.
 //
 // The export logs what becomes of it, and those lines are never exported:
-// they are written with the handler beneath the tee, to stderr alone. A
-// collector that is down would otherwise have each failed export queue a
-// line about itself for the next, which fails too. They are a repeated
-// failure (failurelog.go) besides, so a collector down for hours is a line
-// every five minutes on stderr, not one an interval.
+// they are written with the handler beneath the tee, to stderr alone.
+// Otherwise a collector that is down would have each failed export queue a
+// line about itself for the next export, which fails too. They are also a
+// repeated failure (failurelog.go), so a collector down for hours gives one
+// line every five minutes on stderr, not one per interval.
 //
 // Readiness does not depend on the log export: a log that cannot be
 // delivered is no reason to stop answering probes.
@@ -67,10 +66,10 @@ type OTLPLogs struct {
 	history  otlpLogsHistory
 }
 
-// otlpQueuedRecord is a record waiting: the JSON of one OTLP LogRecord, and
-// the trace of the probe or the scrape it was logged in, with the time it
-// was logged at, which the record is linked to when it is drained, if that
-// trace was exported by then (linkedRecord).
+// otlpQueuedRecord is a waiting record: the JSON of one OTLP LogRecord, and
+// the trace of the probe or scrape it was logged in, with the time it was
+// logged. When the record is drained, it is linked to that trace if the trace
+// was exported by then (linkedRecord).
 type otlpQueuedRecord struct {
 	raw  []byte
 	link *traceLink
@@ -194,10 +193,10 @@ func (l *OTLPLogs) drain() [][]byte {
 	return records
 }
 
-// linkedRecord is a record's JSON, with the trace id and the span id of the
-// span running when it was logged, and the sampled flag, where it was
-// logged in a trace that was exported: an OTLP LogRecord's traceId, spanId
-// and flags, the low byte of which are the W3C trace flags.
+// linkedRecord is a record's JSON with the trace id, the span id of the span
+// running when it was logged, and the sampled flag, when it was logged in a
+// trace that was exported. These are an OTLP LogRecord's traceId, spanId and
+// flags; the low byte of flags holds the W3C trace flags.
 func linkedRecord(q otlpQueuedRecord) []byte {
 	trace, span, ok := q.link.spanAt(q.at)
 	if !ok || len(q.raw) == 0 || q.raw[len(q.raw)-1] != '}' {
@@ -213,9 +212,9 @@ func linkedRecord(q otlpQueuedRecord) []byte {
 }
 
 // requeue puts records an export could not deliver back before those queued
-// since, still within the bound, the oldest dropped first past it. Nothing
-// is put back while the log export is off. They were linked when they were
-// drained, and are put back as they are.
+// since, within the bound. Past the bound, the oldest are dropped first.
+// Nothing is put back while the log export is off. The records were linked
+// when they were drained, and are put back as they are.
 func (l *OTLPLogs) requeue(records [][]byte) {
 	taking := l.taking.Load()
 	if taking == nil || len(records) == 0 {
@@ -276,14 +275,14 @@ func (l *OTLPLogs) record(endpoint string, started time.Time, records, sent int,
 	h.errorText, h.failedAt = shownOTLPError(err), started
 }
 
-// otlpLogHandler is the tee: every line goes to base as it did, and those
-// the log export takes to its queue too. attrs are the attributes WithAttrs
-// gave it, as the record carries them, and prefix the groups WithGroup
-// opened, each name followed by a dot.
+// otlpLogHandler is the tee: every line goes to base as before, and the lines
+// the log export takes also go to its queue. attrs are the attributes
+// WithAttrs gave it, as the record carries them. prefix holds the groups
+// WithGroup opened, each name followed by a dot.
 //
-// A debug run's log goes through one too, with run in place of logs: it
+// A debug run's log also goes through one, with run in place of logs. It
 // takes every line the run logs, as the record it would be, with its level,
-// for the debug page to show which would be exported (debugotlp.go), and
+// so the debug page can show which would be exported (debugotlp.go). It
 // queues nothing.
 type otlpLogHandler struct {
 	logs   *OTLPLogs
@@ -304,10 +303,10 @@ func (h *otlpLogHandler) Handle(ctx context.Context, r slog.Record) error {
 	if h.base.Enabled(ctx, r.Level) {
 		err = h.base.Handle(ctx, r)
 	}
-	// The line is linked to the trace of the probe or the scrape it was
-	// logged in, which ctx carries while otlp.traces is on
-	// (otlptraceslink.go); stderr's line is written now, before the trace
-	// is decided, and is not.
+	// The line is linked to the trace of the probe or scrape it was logged
+	// in, which ctx carries while otlp.traces is on (otlptraceslink.go).
+	// stderr's line is written now, before the trace is decided, so it is
+	// not linked.
 	switch {
 	case h.run != nil:
 		h.run.add(r.Level, h.encode(r), traceLinkFrom(ctx), r.Time)
@@ -340,10 +339,10 @@ func (h *otlpLogHandler) WithGroup(name string) slog.Handler {
 	return &out
 }
 
-// otlpLogRecord is an OTLP LogRecord as OTLP/JSON writes it. The tee
-// writes no trace id, span id or flags: those are added when the record is
-// drained, of a trace exported by then (linkedRecord), and read here only by
-// the tests and the debug page.
+// otlpLogRecord is an OTLP LogRecord as OTLP/JSON writes it. The tee writes
+// no trace id, span id or flags. Those are added when the record is drained,
+// if its trace was exported by then (linkedRecord). Here they are read only
+// by the tests and the debug page.
 type otlpLogRecord struct {
 	TimeUnixNano         string             `json:"timeUnixNano,omitempty"`
 	ObservedTimeUnixNano string             `json:"observedTimeUnixNano"`
@@ -411,9 +410,10 @@ func otlpSeverity(level slog.Level) int {
 }
 
 // appendLogAttribute appends a, under prefix, to attrs as slog's handlers
-// write it: a group's attributes each under the group's name and a dot, a
-// group without a name inline, an empty group and an empty attribute not at
-// all, and a value that resolves to another (slog.LogValuer) as that one.
+// write it. A group's attributes go each under the group's name and a dot. A
+// group without a name goes inline. An empty group or an empty attribute is
+// not written. A value that resolves to another (slog.LogValuer) is written
+// as that one.
 func appendLogAttribute(attrs []otlpAnyAttribute, prefix string, a slog.Attr) []otlpAnyAttribute {
 	a.Value = a.Value.Resolve()
 	if a.Equal(slog.Attr{}) {
@@ -433,10 +433,10 @@ func appendLogAttribute(attrs []otlpAnyAttribute, prefix string, a slog.Attr) []
 }
 
 // lastOfEachKey is attrs with each key once, as an OTLP record's attributes
-// must have it: the value given last, which is the record's own over one
-// the logger was given with With, where the key was first given. attrs is
-// returned as it is when no key is given twice, as nearly always, and is
-// never changed: it may be the handler's own.
+// must have it. It keeps the value given last: the record's own wins over one
+// given to the logger with With, where the key was first given. attrs is
+// returned as it is when no key is given twice, as nearly always. It is never
+// changed, since it may be the handler's own.
 func lastOfEachKey(attrs []otlpAnyAttribute) []otlpAnyAttribute {
 	twice := false
 	for i := 1; i < len(attrs) && !twice; i++ {
@@ -464,10 +464,10 @@ func lastOfEachKey(attrs []otlpAnyAttribute) []otlpAnyAttribute {
 }
 
 // otlpLogValue is an attribute's value with its type: a string, an integer,
-// a double or a boolean. An unsigned integer past int64 is written as text,
-// as are a double that is not a number or infinite, which JSON has no
-// number for, a duration, as the exporter logs durations, a time in
-// RFC 3339, and any other value as stderr's JSON writes it.
+// a double or a boolean. These are written as text: an unsigned integer past
+// int64; a double that is not a number or infinite, which JSON has no number
+// for; a duration, as the exporter logs durations; a time, in RFC 3339; and
+// any other value, as stderr's JSON writes it.
 func otlpLogValue(v slog.Value) otlpAnyValue {
 	switch v.Kind() {
 	case slog.KindString:
@@ -497,10 +497,10 @@ func otlpLogValue(v slog.Value) otlpAnyValue {
 }
 
 // otlpAnyLogValue is the text of a value of no kind of slog's own: its error
-// text, its String, or its JSON. A method that panics — the Error of a nil
-// *T whose method does not guard against nil, most often — is written as
-// slog's handlers write it, <nil> for a nil pointer and !PANIC: and the
-// panic otherwise, rather than taking the exporter down with the log line.
+// text, its String, or its JSON. A method may panic, most often the Error of
+// a nil *T whose method does not guard against nil. Such a value is written
+// as slog's handlers write it, rather than taking the exporter down with the
+// log line: <nil> for a nil pointer, and otherwise !PANIC: and the panic.
 func otlpAnyLogValue(value any) (out otlpAnyValue) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -530,12 +530,12 @@ type otlpLogRequest struct {
 	from, to int
 }
 
-// otlpLogRequests makes the requests that send records to the endpoint
-// under the exporter-wide resource, which the debug page shows of a run's
-// records too (debugotlp.go): each of at most otlp.batch_max_size
-// records and otlp.batch_max_bytes bytes of JSON, as the metrics' requests
-// are bounded, a record larger alone in a request of its own. The records
-// are JSON already, so a request is made by writing them into the envelope
+// otlpLogRequests makes the requests that send records to the endpoint under
+// the exporter-wide resource. The debug page shows them for a run's records
+// too (debugotlp.go). Each request has at most otlp.batch_max_size records
+// and otlp.batch_max_bytes bytes of JSON, bounded like the metrics' requests.
+// A record larger than that goes alone in a request of its own. The records
+// are already JSON, so a request is made by writing them into the envelope
 // one after another, and its size is known as it is filled.
 func otlpLogRequests(cfg model.OTLPConfig, records [][]byte) ([]otlpLogRequest, error) {
 	resource, err := json.Marshal(otlpResource{Attributes: defaultResourceIdentity(cfg).attributes()})
@@ -589,10 +589,10 @@ func (s *Server) SetOTLPLogs(logs *OTLPLogs) {
 	s.manager.OnInstall(func() { logs.configure(s.manager.Get().OTLP) })
 }
 
-// unexportedLogger is the logger of the lines the log export never takes:
-// stderr's alone while the exporter logs through the tee, and the server's
-// otherwise. The debug page logs that it served a run or an endpoint test
-// with it, as a run is never seen by the export (debugotlp.go).
+// unexportedLogger is the logger for lines the log export never takes: the
+// stderr-only logger while the exporter logs through the tee, and the
+// server's otherwise. The debug page uses it to log that it served a run or
+// an endpoint test, since a run is never seen by the export (debugotlp.go).
 func (s *Server) unexportedLogger() *slog.Logger {
 	if s.otlpLogsLogger != nil {
 		return s.otlpLogsLogger
@@ -617,10 +617,10 @@ func (s *Server) OTLPLogExportLoop(ctx context.Context) {
 	})
 }
 
-// flushOTLPLogs makes the last log export at shutdown, until deadline and
-// for at least otlpLogsLastAttempt: what is left of otlp.timeout after the
-// metrics' last export, which the lines it logged are among. The tee takes
-// nothing after it.
+// flushOTLPLogs makes the last log export at shutdown, until deadline and for
+// at least otlpLogsLastAttempt: what is left of otlp.timeout after the
+// metrics' last export. The lines that export logged are among those sent.
+// The tee takes nothing after it.
 func (s *Server) flushOTLPLogs(cfg model.OTLPConfig, deadline time.Time) {
 	if s.otlpLogs == nil {
 		return
@@ -633,14 +633,15 @@ func (s *Server) flushOTLPLogs(cfg model.OTLPConfig, deadline time.Time) {
 // given, however long the metrics' took.
 const otlpLogsLastAttempt = time.Second
 
-// exportOTLPLogs sends every record waiting, retrying within budget, in as
-// many requests as otlp.batch_max_size and otlp.batch_max_bytes make of
-// them, one after another. As the metrics' export: what could not be
-// delivered for a reason worth retrying waits for the next export, before
-// the records queued since; what the endpoint refused outright is dropped
-// and counted, and the export goes on with the next request; and at
-// shutdown, when last says there is no next export, what is left is
-// dropped and counted.
+// exportOTLPLogs sends every waiting record, retrying within budget, in as
+// many requests as otlp.batch_max_size and otlp.batch_max_bytes make of them,
+// one after another. It works like the metrics' export:
+//   - what could not be delivered for a reason worth retrying waits for the
+//     next export, before the records queued since;
+//   - what the endpoint refused outright is dropped and counted, and the
+//     export goes on with the next request;
+//   - at shutdown, when last says there is no next export, what is left is
+//     dropped and counted.
 func (s *Server) exportOTLPLogs(ctx context.Context, cfg model.OTLPConfig, budget time.Duration, last bool) {
 	l := s.otlpLogs
 	records := l.drain()

@@ -21,34 +21,38 @@ import (
 )
 
 // grpc calls reuse their connections, as HTTP requests reuse their
-// transports (transport.go): one grpc.ClientConn per target and TLS
-// settings, kept across probes, which multiplexes every call to that target
+// transports (transport.go). There is one grpc.ClientConn per target and TLS
+// settings, kept across probes, and it multiplexes every call to that target
 // over one HTTP/2 connection. A certificate or key replaced on disk gets a
-// new connection at the next call, and a connection no call has held for
-// transportIdleTTL, 5 minutes, is closed and forgotten, by a timer of its
-// own: grpc-go goes on reconnecting a connection whose server is gone, every
-// few seconds (grpcBackoff), so one left to the next call to its target
-// would redial a target nobody asks about any more for as long as no call
-// came. At most maxGRPCConnections are kept: a probe chooses its target, so
+// new connection at the next call.
+//
+// A connection no call has held for transportIdleTTL, 5 minutes, is closed
+// and forgotten by a timer of its own. grpc-go keeps reconnecting a
+// connection whose server is gone, every few seconds (grpcBackoff). Left to
+// the next call to its target, such a connection would redial a target
+// nobody asks about any more for as long as no call came.
+//
+// At most maxGRPCConnections are kept. A probe chooses its target, so
 // without a bound every target ever probed would be redialled until its
 // timer ends. A new connection past the bound closes the one no call has
-// held for longest; one a call holds is never closed under it, so while
-// calls hold more than the bound, as many are kept.
+// held for longest. A connection a call holds is never closed under it, so
+// while calls hold more than the bound, that many are kept.
 //
-// A connection can die without a word: a node that lost power, a firewall or
-// a NAT that dropped its entry, sends neither FIN nor RST, and grpc-go goes on
-// believing the connection ready. Every call on it would wait out its whole
-// deadline. So a call that its own deadline ended on a connection grpc-go
-// calls ready drops the connection (drop), and the next probe makes a new
-// one, as an http request that timed out has its connection closed. Client
-// keepalive pings would find the dead connection too, but a server with
-// grpc-go's default enforcement policy answers pings more often than every
-// five minutes with GOAWAY, so they are not sent.
+// A connection can die silently. A node that lost power, or a firewall or
+// NAT that dropped its entry, sends neither FIN nor RST, and grpc-go keeps
+// believing the connection is ready. Every call on it would wait out its
+// whole deadline. So when a call's own deadline ends it on a connection
+// grpc-go calls ready, the call drops the connection (drop), and the next
+// probe makes a new one. An http request that timed out has its connection
+// closed the same way. Client keepalive pings would find the dead
+// connection too. But a server with grpc-go's default enforcement policy
+// answers pings sent more often than every five minutes with GOAWAY, so
+// they are not sent.
 //
 // A connection is shared by the probes calling its target at the same time,
-// so one the cache forgets is not closed under them: each call holds it
-// (get) until it ends (release), as does a reflection question in flight, and
-// a forgotten connection is closed when the last of them has ended.
+// so one the cache forgets is not closed under them. Each call holds it
+// (get) until it ends (release), as does a reflection question in flight. A
+// forgotten connection is closed when the last of them has ended.
 //
 // A connection is made through the proxy the environment names
 // (HTTPS_PROXY, NO_PROXY), which grpc-go reads itself.
@@ -79,9 +83,9 @@ type grpcConnEntry struct {
 	calls   int
 	retired bool
 	// idle closes the connection when no call has held it for the cache's
-	// idle time; it runs while no call holds it. released counts the times
-	// the last hold ended, so that a timer that fires as a call takes the
-	// connection, and that call has let it go again, leaves it be.
+	// idle time. It runs while no call holds it. released counts the times
+	// the last hold ended. So a timer that fires as a call takes the
+	// connection leaves it be, even once that call has let it go again.
 	idle     *time.Timer
 	released uint64
 	// phases are those of the connection grpc-go last made, its dial and
@@ -90,9 +94,10 @@ type grpcConnEntry struct {
 }
 
 // grpcPhases are the phases of a connection grpc-go makes, timed by the
-// dialer and the credentials the exporter gives it, which the next call
-// on it takes as its own: the call that made grpc-go connect. The name's
-// lookup is grpc-go's resolver's, apart from any call, and not among them.
+// dialer and the credentials the exporter gives it. The next call on the
+// connection takes them as its own: it is the call that made grpc-go
+// connect. The name's lookup is done by grpc-go's resolver, apart from any
+// call, and is not among them.
 type grpcPhases struct {
 	mu      sync.Mutex
 	pending []TracedPhase
@@ -172,10 +177,11 @@ const maxGRPCConnections = 1000
 
 var grpcConns = &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 
-// get returns the connection for key, making it when there is none or when
-// a TLS file changed since it was made, and holds it for the caller, who
-// calls release when its call has ended. grpc.NewClient does not dial: the
-// connection is made at the first call, and made again after it breaks.
+// get returns the connection for key and holds it for the caller, who calls
+// release when its call has ended. It makes the connection when there is
+// none, or when a TLS file changed since it was made. grpc.NewClient does
+// not dial: the connection is made at the first call, and made again after
+// it breaks.
 func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, error) {
 	stamp := ""
 	if key.tls {
@@ -206,10 +212,10 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 		}
 		creds = timedCredentials{TransportCredentials: credentials.NewTLS(cfg), phases: phases}
 	}
-	// An answer's headers, and its trailers, are each held to the bound an
-	// http answer's headers are, where grpc-go's own is 16 MiB, all of it
-	// kept as the response's headers: the connection advertises it, and
-	// stops reading an answer past it (headerListTooLarge).
+	// An answer's headers and its trailers are each held to the bound an
+	// http answer's headers are held to. grpc-go's own bound is 16 MiB, all
+	// of it kept as the response's headers. The connection advertises the
+	// bound and stops reading an answer past it (headerListTooLarge).
 	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpc.WithConnectParams(grpcConnectParams()), grpc.WithMaxHeaderListSize(maxResponseHeaderBytes)}
 	// Behind a proxy grpc-go's own dialer connects through it, which a
 	// dialer of the exporter's would bypass; the call resolved and checked
@@ -227,10 +233,10 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 	}
 	// grpc-go is always handed the dns:/// form. A bare host:port is read
 	// as a URL first, so unix:8443, unix-abstract:8443 or passthrough:8443
-	// would pick grpc-go's resolver of that name: a unix socket, dialled by
-	// grpc-go itself whenever the exporter's dialer is not in use, behind
-	// a proxy or with no allowed_targets. Under dns:/// the host is only
-	// ever a name looked up over DNS, the name the policy checked.
+	// would pick grpc-go's resolver of that name. That means a unix socket,
+	// dialled by grpc-go itself whenever the exporter's dialer is not in use:
+	// behind a proxy or with no allowed_targets. Under dns:/// the host is
+	// only ever a name looked up over DNS, the name the policy checked.
 	conn, err := grpc.NewClient("dns:///"+key.dial, options...)
 	if err != nil {
 		return nil, err
@@ -285,10 +291,10 @@ func (c *grpcConnCache) idleEnded(entry *grpcConnEntry, released uint64) {
 	c.forgetLocked(entry)
 }
 
-// trimLocked closes, while the cache keeps more connections than its bound,
-// the one no call holds that was used longest ago. Connections calls hold
-// are not counted out: they are closed when the last call ends, if the cache
-// still keeps too many then.
+// trimLocked closes connections while the cache keeps more than its bound,
+// each time the one no call holds that was used longest ago. Connections
+// that calls hold are not counted out. They are closed when the last call
+// ends, if the cache still keeps too many then.
 func (c *grpcConnCache) trimLocked() {
 	most := c.most
 	if most <= 0 {
@@ -406,20 +412,20 @@ func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Poi
 
 // grpcBackoff keeps the wait between attempts to reconnect short. grpc-go's
 // default grows to two minutes, and a connection that is waiting fails every
-// call at once, so after a long outage a server that is back would go on
-// being reported down for up to two minutes. Five seconds at most is as
-// often as a probe could matter; a probe that finds the connection waiting
-// also ends the wait, and so does each of its retries (reconnectNow). It is
-// a variable for the tests of what ends that wait, which make it an hour.
+// call at once. So after a long outage, a server that is back would still be
+// reported down for up to two minutes. Five seconds at most is as often as a
+// probe could matter. A probe that finds the connection waiting also ends
+// the wait, and so does each of its retries (reconnectNow). It is a variable
+// for the tests of what ends that wait, which make it an hour.
 var grpcBackoff = backoff.Config{BaseDelay: time.Second, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second}
 
 // grpcConnectTimeout is how long an attempt to connect to a target may
 // take: the TCP connection, the TLS handshake and the server's answer to the
 // HTTP/2 preface. A target that takes the connection and then says nothing
-// is given up after it, and the calls waiting for the connection fail. It
-// is grpc-go's least time for an attempt, which gives one the longer of this
-// and the wait before the next, so under grpcBackoff it is what an attempt
-// has.
+// is given up after it, and the calls waiting for the connection fail.
+// grpc-go treats it as the least time for an attempt: an attempt gets the
+// longer of this and the wait before the next one. Under grpcBackoff, this
+// is therefore what an attempt has.
 const grpcConnectTimeout = 20 * time.Second
 
 // grpcConnectParams are how a connection made now connects and connects

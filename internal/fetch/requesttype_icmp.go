@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -25,11 +24,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The icmp request type pings a host: it sends ICMP echo requests, as ping
-// does, and hands the transforms a JSON document of how many came back and
-// how long each took, so a rule alerts on a host that stopped answering,
-// or on its round trips, where the other types can reach a host only by a
-// connection to one of its ports.
+// The icmp request type pings a host. Like ping, it sends ICMP echo
+// requests. It hands the transforms a JSON document with how many replies
+// came back and how long each took. A rule can then alert on a host that
+// stopped answering, or on its round trips. The other types can reach a
+// host only through a connection to one of its ports.
 //
 //	request:
 //	  type: icmp
@@ -38,38 +37,42 @@ import (
 //	  reply_timeout: 1s   # how long the last echo's reply is waited for
 //	  payload_bytes: 56   # bytes of data each echo carries
 //
-// The probe's target is a host, a name or an address, with no port. Its
-// name is looked up when the scrape is made, and the first address of the
-// family request.ip_family asks for, or of either, is pinged; the target
-// policy holds the name before the lookup and the address on the socket,
-// which is connected to it, as an ntp request's is.
+// The probe's target is a host (a name or an address) with no port. The
+// name is looked up at scrape time. The first address of the family that
+// request.ip_family asks for (or of either family) is pinged. As with an
+// ntp request, the target policy checks the name before the lookup and
+// the address on the socket, which is connected to that address.
 //
 // The echoes go on an unprivileged ICMP datagram socket (SOCK_DGRAM,
-// IPPROTO_ICMP), which Linux opens for a process whose group is in
-// net.ipv4.ping_group_range, a namespaced sysctl Docker, containerd and
-// systemd set to every group, and macOS for every process: no raw socket,
-// so neither root nor CAP_NET_RAW. A system that refuses the socket fails
-// the scrape, naming the sysctl. Linux sets the echo's identifier to the
-// socket's own and hands it only the replies to it, so the exporter tells
-// its echoes apart by their sequence and a random token in their data, and
-// passes over a reply that holds neither, as a late reply to an echo of
-// another scrape would.
+// IPPROTO_ICMP). No raw socket is used, so neither root nor CAP_NET_RAW is
+// needed:
+//   - Linux opens this socket for a process whose group is in
+//     net.ipv4.ping_group_range. This is a namespaced sysctl that Docker,
+//     containerd and systemd set to every group.
+//   - macOS opens it for every process.
 //
-// The echoes are sent interval apart, and the replies read as they come,
-// each matched to its echo; once the last is sent, its reply is waited for
-// reply_timeout, and the scrape answers then, or at its deadline, what came.
-// A host that answered none is no failure: the document says that it sent
-// count and received 0, a loss of 1, which is what a rule alerts on. What
-// fails the scrape is not being able to ask: a name that does not resolve,
-// an address the target policy refuses, a socket the system does not open.
+// If the system refuses the socket, the scrape fails and the error names
+// the sysctl. Linux sets the echo's identifier to the socket's own and
+// delivers only the replies to it. So the exporter tells its echoes apart
+// by their sequence and a random token in their data. It skips a reply
+// that holds neither, such as a late reply to an echo of another scrape.
+//
+// The echoes are sent interval apart. Replies are read as they arrive and
+// each is matched to its echo. After the last echo is sent, its reply is
+// waited for up to reply_timeout. The scrape then answers with what came,
+// or at its deadline. A host that answered none is not a failure: the
+// document says it sent count and received 0, a loss of 1, and a rule
+// alerts on that. The scrape fails only when it cannot ask: a name that
+// does not resolve, an address the target policy refuses, or a socket the
+// system does not open.
 //
 // The type pings on Linux and macOS, and imports nothing outside the
 // standard library.
 
 // ICMPConfig is an icmp collector's own request keys: how many echoes a
-// scrape sends, 3 when left out, how long apart, 1s, how long the last
-// one's reply is waited for, 1s, and how many bytes of data each carries,
-// 56, as ping's.
+// scrape sends (3 by default), how far apart (1s), how long the last
+// echo's reply is waited for (1s), and how many bytes of data each echo
+// carries (56, as with ping).
 type ICMPConfig struct {
 	Count        int            `yaml:"count,omitempty"`
 	Interval     model.Duration `yaml:"interval,omitempty"`
@@ -136,7 +139,19 @@ func init() {
 }
 
 // icmpRequester is the icmp request type's Requester.
-type icmpRequester struct{}
+type icmpRequester struct{ parsedTarget[icmpTarget] }
+
+// icmpTarget reads an icmp target: label returns the url label of a
+// request of it.
+type icmpTarget struct{}
+
+func (icmpTarget) label(target string) (string, error) {
+	host, err := parseICMPTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "icmp://" + host, nil
+}
 
 // Validate checks an icmp collector's request and fills in its defaults.
 func (icmpRequester) Validate(c *model.Collector) error {
@@ -177,32 +192,8 @@ func (icmpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchICMP(ctx, target, c, overrides)
 }
 
-// CheckTarget checks an icmp collector's target.
-func (icmpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseICMPTarget(target)
-	return err
-}
-
-// Label is the url label of an icmp request: icmp:// and the host.
-func (icmpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	host, err := parseICMPTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "icmp://" + host, nil
-}
-
 // Method is the http_method label of an icmp request.
 func (icmpRequester) Method(*model.Collector, RequestOverrides) string { return icmpMethod }
-
-// Display renders an icmp target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (icmpRequester) Display(target string) string {
-	if _, err := parseICMPTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // parseICMPTarget reads a target: a host name or an address, an IPv6 one
 // in brackets or not, and nothing else.
@@ -240,10 +231,10 @@ type icmpDocument struct {
 	RTTStddev    *float64  `json:"rtt_stddev_seconds,omitempty"`
 	Duplicates   int       `json:"duplicates"`
 	PayloadBytes int       `json:"payload_bytes"`
-	// Addresses are, with all_addresses, each address pinged, in the
-	// resolver's order, of AddressesFound the name has of the families
-	// ip_family takes; Address and Family are then "" and 0, and the rest
-	// of the top of all of them together.
+	// Addresses holds, with all_addresses, each address pinged, in the
+	// resolver's order. They are the addresses in AddressesFound of the
+	// families ip_family takes. Address and Family are then "" and 0, and
+	// the remaining fields cover all addresses together.
 	Addresses      []icmpAddressResult `json:"addresses,omitempty"`
 	AddressesFound int                 `json:"addresses_found,omitempty"`
 	// DurationSeconds is the whole scrape, the lookup included.
@@ -308,29 +299,17 @@ func fetchICMP(ctx context.Context, target string, c *model.Collector, overrides
 		}
 	}
 	doc.Host, doc.DurationSeconds = host, time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // icmpPingAddress pings address, of host, as r says, its request recorded
 // at at: held to the target lists, a socket opened to it, the echoes sent
 // and the replies read.
 func icmpPingAddress(ctx context.Context, host string, address netip.Addr, r ICMPConfig, at tracedAt) (icmpDocument, error) {
-	// The address is held to the target lists before a socket is opened,
-	// as the connection's is (checkConnection), the socket being connected
-	// to that address alone: a refused one is refused whether or not the
-	// system would open the socket.
+	// The address is checked against the target lists before a socket is
+	// opened, as a connection's address is (checkConnection). The socket is
+	// connected to that address only. A refused address is refused whether
+	// or not the system would open the socket.
 	if err := checkConnection(ctx, net.JoinHostPort(host, "0"), icmpConnectedTo{remote: &net.UDPAddr{IP: address.AsSlice()}}); err != nil {
 		at.outcome("error: "+err.Error(), true)
 		return icmpDocument{}, err
@@ -355,10 +334,10 @@ func icmpPingAddress(ctx context.Context, host string, address netip.Addr, r ICM
 	return doc, nil
 }
 
-// icmpPingAll pings each of addresses, of host, at once, each its own
-// request: the document has each in addresses, and of all of them
-// together the counts, the round trips and their statistics. One that
-// fails fails the scrape, naming it.
+// icmpPingAll pings all addresses of host at once, each as its own
+// request. The document lists each one in addresses, plus the counts,
+// round trips and statistics of all of them together. If one fails, the
+// scrape fails and the error names it.
 func icmpPingAll(ctx context.Context, host string, addresses []netip.Addr, r ICMPConfig) (icmpDocument, error) {
 	found := len(addresses)
 	addresses = addresses[:min(found, icmpMaxAddresses)]
@@ -403,11 +382,11 @@ type icmpConnectedTo struct {
 // RemoteAddr is the address the socket is connected to.
 func (c icmpConnectedTo) RemoteAddr() net.Addr { return c.remote }
 
-// icmpAddresses are the addresses a host may be pinged at, the first the
-// one it is pinged at without all_addresses: the host itself when it is an
-// address, and otherwise its name's of the family ip_family names, ip4 or
-// ip6; prefer_ip4 or prefer_ip6, that family's first and then the other's;
-// or both, in the resolver's order, left out.
+// icmpAddresses returns the addresses a host may be pinged at. The first
+// one is used without all_addresses. If the host is an address, it is the
+// only one. Otherwise they are the name's addresses chosen by ip_family:
+// ip4 or ip6 gives that family; prefer_ip4 or prefer_ip6 gives that
+// family's first, then the other's; left out, both in the resolver's order.
 func icmpAddresses(ctx context.Context, host, family string) ([]netip.Addr, error) {
 	addrs := []netip.Addr{}
 	if a, err := netip.ParseAddr(host); err == nil {
@@ -449,11 +428,11 @@ func icmpAddresses(ctx context.Context, host, family string) ([]netip.Addr, erro
 	return pick, nil
 }
 
-// icmpEcho is an echo request's ICMP message: type 8 for IPv4 and 128 for
-// IPv6, code 0, the checksum, worked out for IPv4 alone, which the system
-// works out for ICMPv6 over the pseudo-header, an identifier the system
-// replaces with the socket's own, the sequence, and the data, which begins
-// with the scrape's token.
+// icmpEcho builds an echo request's ICMP message: type 8 for IPv4 and 128
+// for IPv6, code 0, the checksum, an identifier, the sequence, and the
+// data, which begins with the scrape's token. The checksum is computed
+// only for IPv4; for ICMPv6 the system computes it over the pseudo-header.
+// The system replaces the identifier with the socket's own.
 func icmpEcho(v6 bool, seq uint16, data []byte) []byte {
 	msg := make([]byte, 8+len(data))
 	msg[0] = 8
@@ -483,10 +462,10 @@ func icmpChecksum(b []byte) uint16 {
 	return ^uint16(sum)
 }
 
-// icmpReply reads a datagram as the reply to an echo of this scrape: the
-// sequence of an echo reply, type 0 or 129, whose data is the token and
-// what followed it. On macOS an ICMP datagram socket of IPv4 reads the IP
-// header too, which is taken off.
+// icmpReply reads a datagram as the reply to an echo of this scrape. It
+// returns the sequence of an echo reply (type 0 or 129) whose data is the
+// token and what followed it. On macOS an IPv4 ICMP datagram socket also
+// reads the IP header, which is removed.
 func icmpReply(b []byte, v6 bool, data []byte) (uint16, bool) {
 	if !v6 && len(b) >= 20 && b[0]>>4 == 4 {
 		// A header that says it is longer than the datagram is no header
@@ -624,10 +603,10 @@ loop:
 	return doc, nil
 }
 
-// icmpStatistics sets what doc's Sent and the round trips rtts make of it:
-// the replies, the loss, the round trips, from the shortest, and their
-// minimum, average, maximum and population standard deviation, left out
-// when there are none.
+// icmpStatistics fills in doc from its Sent and the round trips rtts: the
+// replies, the loss, the round trips sorted from the shortest, and their
+// minimum, average, maximum and population standard deviation. The
+// statistics are left out when there are no round trips.
 func icmpStatistics(doc *icmpDocument, rtts []float64) {
 	doc.Received = len(rtts)
 	if doc.Sent > 0 {
@@ -651,9 +630,9 @@ func icmpStatistics(doc *icmpDocument, rtts []float64) {
 }
 
 // icmpLostEcho reports whether err is the network's answer to an echo,
-// which loses that echo and no other: no route to the network or the host,
-// or an ICMP error a router or the host sent back, which a connected socket
-// reports on its next read or write.
+// which loses that echo and no other. This is no route to the network or
+// host, or an ICMP error sent back by a router or the host. A connected
+// socket reports such an error on its next read or write.
 func icmpLostEcho(err error) bool {
 	return errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ECONNREFUSED)
 }

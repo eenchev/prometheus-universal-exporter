@@ -86,10 +86,10 @@ type otlpHistogram struct {
 	AggregationTemporality int                      `json:"aggregationTemporality"`
 }
 
-// otlpHistogramDataPoint is one series of a histogram. OTLP's bucket counts
-// are per bucket, not cumulative as Prometheus's are, and there is one more
-// count than bounds: the last is everything above the highest bound, which is
-// Prometheus's +Inf bucket.
+// otlpHistogramDataPoint is one series of a histogram. OTLP bucket counts
+// are per bucket, not cumulative like Prometheus buckets. There is one more
+// count than there are bounds: the last count covers everything above the
+// highest bound, which is Prometheus's +Inf bucket.
 type otlpHistogramDataPoint struct {
 	Attributes        []otlpAttribute `json:"attributes,omitempty"`
 	StartTimeUnixNano string          `json:"startTimeUnixNano,omitempty"`
@@ -127,12 +127,13 @@ type otlpExponentialHistogram struct {
 }
 
 // otlpExponentialHistogramDataPoint is one series of an exponential
-// histogram (model.ExponentialHistogram): its scale, the count of its zero
-// bucket and the per-bucket counts of its positive buckets from the bucket
-// numbered offset on. The exporter's durations are never negative, so it has
-// no negative buckets, and its zero bucket holds exact zeros only, the zero
-// threshold OTLP takes when it is left out. min and max are left out of a
-// histogram that has observed nothing, which has none.
+// histogram (model.ExponentialHistogram). It holds the scale, the count of
+// the zero bucket, and the per-bucket counts of the positive buckets from
+// the bucket numbered offset on. The exporter's durations are never
+// negative, so there are no negative buckets. The zero bucket holds exact
+// zeros only, which is the zero threshold OTLP assumes when it is omitted.
+// min and max are omitted for a histogram that has observed nothing, since
+// it has none.
 type otlpExponentialHistogramDataPoint struct {
 	Attributes        []otlpAttribute    `json:"attributes,omitempty"`
 	StartTimeUnixNano string             `json:"startTimeUnixNano,omitempty"`
@@ -261,17 +262,17 @@ func (r otlpResourceIdentity) attributes() []otlpAttribute {
 }
 
 // defaultResourceIdentity is the exporter-wide resource used for probe output
-// and self-health metrics. A resource attribute written "" is the attribute
-// left out, as a transform.labels value written "" is the label left out:
-// the resource carries no attribute that says nothing.
+// and self-health metrics. A resource attribute set to "" is omitted, just as
+// a transform.labels value set to "" omits the label. The resource carries no
+// empty attributes.
 //
-// With otlp.exporter_instance on, it carries the replica's name too, and so
-// does every resource made from it: a static target's (targetResource), the
-// log records' (otlplogs.go) and the debug page's (debugotlp.go). It is part
-// of the resource's identity (key) like any attribute. The configuration's
-// check filled in its value and refused an attribute of its name elsewhere
-// on the resource (config.checkExporterInstance); an exporter whose host
-// name could not be read never got here.
+// With otlp.exporter_instance on, it also carries the replica's name, and so
+// does every resource built from it: a static target's (targetResource), the
+// log records' (otlplogs.go) and the debug page's (debugotlp.go). Like any
+// attribute, it is part of the resource's identity (key). The configuration
+// check filled in its value and rejected an attribute with that name
+// elsewhere on the resource (config.checkExporterInstance). An exporter that
+// could not read its host name never gets here.
 func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 	identity := otlpResourceIdentity{ServiceName: cfg.ServiceName, Attributes: map[string]string{}}
 	for key, value := range cfg.ResourceAttributes {
@@ -285,29 +286,29 @@ func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 	return identity
 }
 
-// otlpRequests are the requests of one export, in the order they are sent:
-// each one's body, and, where there are several, the request whose points
-// each series is sent in last, by its place among the resources of the
-// export and in its resource's set; an export of one request has none. A
-// series is accounted for by that request alone: one whose points are in
-// two requests — a histogram exported as gauges under its samples' names —
-// is kept again when the later fails, and a series none of whose points is
-// sent, left out for another written later (otlpMetricsOf), is the first
-// request's. points are the data points of each request, which the status
-// page counts of the requests sent.
+// otlpRequests are the requests of one export, in the order they are sent.
+// It holds each request's body. With several requests, it also records the
+// last request that carries each series' points, indexed by the series'
+// place among the export's resources and within its resource's set. An
+// export of one request records none. A series is accounted for by that request
+// alone. A series with points in two requests (a histogram exported as
+// gauges under its samples' names) is kept again when the later one fails.
+// A series with no point sent, left out for another written later
+// (otlpMetricsOf), belongs to the first request. points are the data points
+// of each request, which the status page counts for the requests sent.
 type otlpRequests struct {
 	bodies [][]byte
 	last   [][]int
 	points []int
 }
 
-// otlpRequestsOf makes the requests that send resources to the endpoint. Of
-// up to otlp.batch_max_size data points and otlp.batch_max_bytes bytes of
-// JSON, as nearly every export is, it is one request, of every resource
-// (otlpPayloadOf). An export of more is split (splitOTLP), and its points
-// are then gone through again to know which series each request carries
-// (otlpPointSources), so that a request that fails is accounted for by the
-// series of its own points.
+// otlpRequestsOf builds the requests that send resources to the endpoint.
+// An export of up to otlp.batch_max_size data points and otlp.batch_max_bytes
+// bytes of JSON, which is nearly every export, is one request holding every
+// resource (otlpPayloadOf). A larger export is split (splitOTLP). Its points
+// are then walked again to find which series each request carries
+// (otlpPointSources), so that a failed request is accounted for by the series
+// of its own points.
 func (s *Server) otlpRequestsOf(cfg model.OTLPConfig, resources []otlpResourceSet) (otlpRequests, error) {
 	payload, now := s.otlpPayloadOf(cfg, resources)
 	if len(payload.ResourceMetrics) == 0 {
@@ -387,10 +388,10 @@ func otlpBatchBounds(cfg model.OTLPConfig) (maxPoints, maxBytes int) {
 	return maxPoints, maxBytes
 }
 
-// from are the series of pending sent last in request k or one after it:
-// what the export has not delivered when request k fails for a reason worth
-// retrying, or was not sent. pending are the resources of the export without
-// the exporter's own series, which come after a resource's queued ones.
+// from returns the series of pending whose last request is k or later. These
+// are what the export has not delivered when request k fails for a retryable
+// reason, or is not sent. pending are the export's resources without the
+// exporter's own series, which come after a resource's queued series.
 func (q otlpRequests) from(pending []otlpResourceSet, k int) []otlpResourceSet {
 	if q.last == nil {
 		return pending
@@ -447,37 +448,36 @@ func (s *Server) otlpPayloadOf(cfg model.OTLPConfig, resources []otlpResourceSet
 	return payload, now
 }
 
-// otlpResourceMetricsOf is what an export sends of one resource: its
-// attributes, the scope, and its metrics made under cfg's
-// otlp.metric_names (otlpMetricsWith), with the clashes found among them.
-// The export makes each resource of its payload with it, and the debug
-// page the resource of one run (debugotlp.go), which is how the page shows
-// what the export would send without anything queued or remembered: start
-// gives each cumulative point its start time, and sources, when given, are
-// told which series each point is of and which points are left out.
+// otlpResourceMetricsOf builds what an export sends for one resource: its
+// attributes, the scope, and its metrics built under cfg's otlp.metric_names
+// (otlpMetricsWith), plus the name clashes found among them. The export uses
+// it for each resource of its payload. The debug page uses it for the
+// resource of one run (debugotlp.go), so the page shows what the export would
+// send without anything queued or remembered. start gives each cumulative
+// point its start time. sources, when given, records which series each point
+// belongs to and which points are left out.
 func otlpResourceMetricsOf(cfg model.OTLPConfig, resource otlpResourceSet, now string, start func(m model.Metric, at string) string, sources *otlpPointSources) (otlpResourceMetrics, []otlpNameClash) {
 	resource.otelNames = cfg.MetricNames == model.OTLPMetricNamesOTel
 	metrics, clashes := otlpMetricsWith(resource, now, start, sources)
 	return otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScopeOf(cfg), Metrics: metrics}}}, clashes
 }
 
-// deliverOTLP sends one request's body, and retries a network error, 429,
-// 502, 503 or 504 — the responses the OTLP specification makes retryable —
+// deliverOTLP sends one request's body. It retries a network error, 429,
+// 502, 503 or 504 (the responses the OTLP specification makes retryable)
 // with exponential backoff, or after the Retry-After the endpoint asks for,
-// for as long as another attempt can start before deadline. Each attempt is
-// bounded by otlp.timeout. Any other status is an otlpRefusedError, not
-// retried. It returns the number of retries made, and the partial success the
-// endpoint reported when it accepted the request without some of it.
+// while another attempt can start before deadline. Each attempt is bounded
+// by otlp.timeout. Any other status is an otlpRefusedError and is not
+// retried. It returns the number of retries made, and the partial success
+// the endpoint reported when it accepted only part of the request.
 func (s *Server) deliverOTLP(ctx context.Context, cfg model.OTLPConfig, body []byte, deadline time.Time) (int, otlpPartialSuccess, error) {
 	return s.deliverOTLPOf(ctx, otlpMetricsSignal(s.logger), cfg, body, deadline)
 }
 
-// otlpSignal is what an export of metrics, one of logs and one of traces
-// are sent apart by: what the endpoint's partialSuccess counts the rejected
-// in, and the logger a retry is logged to. The exports of the exporter's
-// own log and of its traces log to stderr alone (otlplogs.go,
-// otlptraces.go), or each retry of the log export would be a line to
-// export.
+// otlpSignal tells the metrics, logs and traces exports apart. It gives the
+// field in which the endpoint's partialSuccess counts rejected items, and the
+// logger that retries are logged to. The exports of the exporter's own log
+// and of its traces log to stderr only (otlplogs.go, otlptraces.go).
+// Otherwise each retry of the log export would become a line to export.
 type otlpSignal struct {
 	kind   otlpSignalKind
 	logger *slog.Logger
@@ -587,9 +587,9 @@ type otlpAnswer struct {
 }
 
 // otlpPartialSuccess is the partialSuccess of an ExportMetricsServiceResponse:
-// the endpoint accepted the export but rejected rejected of its data points,
-// saying why in message. The endpoint may also send a message alone, as a
-// warning. Both are zero for a full success.
+// the endpoint accepted the export but rejected some data points. rejected
+// counts them and message says why. The endpoint may also send a message
+// alone, as a warning. Both are zero for a full success.
 type otlpPartialSuccess struct {
 	rejected int64
 	message  string
@@ -601,11 +601,11 @@ const otlpResponseLimit = 1 << 20
 
 // sendOTLPOf makes one attempt of an export of the signal.
 func (s *Server) sendOTLPOf(ctx context.Context, signal otlpSignal, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
-	// One connection to the collector is reused from export to export.
-	// Redirects are not followed: Go would send otlp.headers, which carry
-	// the endpoint's API keys and tenant, and the body to wherever the
-	// endpoint points, another host and plain http:// included. A redirect
-	// is a misconfigured endpoint, refused below for the operator to fix.
+	// One connection to the collector is reused across exports.
+	// Redirects are not followed. Go would send otlp.headers (which carry
+	// the endpoint's API keys and tenant) and the body to wherever the
+	// endpoint points, including another host and plain http://. A redirect
+	// means a misconfigured endpoint. It is refused below for the operator to fix.
 	resp, err := postOTLP(ctx, cfg, tlsSettings, body, timeout)
 	if err != nil {
 		var unusable *otlpTLSError
@@ -632,9 +632,9 @@ func (e *otlpTLSError) Error() string { return "OTLP TLS configuration: " + e.er
 func (e *otlpTLSError) Unwrap() error { return e.err }
 
 // postOTLP sends body to cfg.Endpoint once, with the export's headers, TLS,
-// compression and timeout, and reads the answer. It is an attempt of an
-// export (sendOTLPOf) and the debug page's endpoint test
-// (debugotlptest.go), which are sent alike.
+// compression and timeout, and reads the response. Both an export attempt
+// (sendOTLPOf) and the debug page's endpoint test (debugotlptest.go) use it,
+// so both are sent the same way.
 func postOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpResponse, error) {
 	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: tlsSettings}, false, timeout)
 	if err != nil {
@@ -653,9 +653,9 @@ func postOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSCo
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// Unreachable, reset, timed out: the next attempt may get through.
-		// Go's client quotes the endpoint in its error with its query as
-		// written, which may carry a token: the error is logged and shown
+		// Unreachable, reset, or timed out: the next attempt may get through.
+		// Go's client quotes the endpoint in its error with the query as
+		// written, which may contain a token. The error is logged and shown
 		// on the status page with the URL's credentials withheld.
 		return otlpResponse{}, fetch.RedactURLErrors(err)
 	}
@@ -770,24 +770,23 @@ func compressOTLP(raw []byte, compression string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// An export of more data points than otlp.batch_max_size, or of more bytes
-// of JSON than otlp.batch_max_bytes, is sent as several requests. A receiver
-// refuses a request past its own bound — the OpenTelemetry Collector's
-// OTLP/HTTP receiver one of over 20MiB, its gRPC receiver one of over 4MiB —
-// and a refused request is dropped, so one export of every point waiting
-// would be dropped whole, at every interval, once there were enough of them.
+// An export with more data points than otlp.batch_max_size, or more bytes of
+// JSON than otlp.batch_max_bytes, is sent as several requests. A receiver
+// refuses a request over its own limit (the OpenTelemetry Collector's
+// OTLP/HTTP receiver over 20MiB, its gRPC receiver over 4MiB), and a refused
+// request is dropped. So a single export of every waiting point would be
+// dropped whole, at every interval, once there were enough points.
 //
-// The points are taken in the order of the export — its resources, the
-// metrics of each, the points of each metric — and each request is filled
-// with as many as it holds within both bounds before the next is begun. A
-// request carries the resource and the scope of each of its points, and the
-// name, the kind and the description of each of their metrics, so those of
-// a resource or a metric that does not fit in one request are written again
-// in the next. A point whose request would be over otlp.batch_max_bytes with
-// it alone is sent alone, for the receiver to take or refuse. What a request
-// holds is measured, not encoded, as it is filled: the JSON of a request is
-// the JSON of each of its parts, so its size is the sum of theirs, which is
-// exact.
+// Points are taken in export order: the resources, the metrics of each, the
+// points of each metric. Each request is filled with as many points as fit
+// within both limits before the next one starts. A request carries the
+// resource and scope of each of its points, and the name, kind and
+// description of each of their metrics. So a resource or metric that does
+// not fit in one request is written again in the next. A point that alone
+// would put its request over otlp.batch_max_bytes is sent alone, for the
+// receiver to accept or refuse. A request's size is measured, not encoded,
+// while it is filled: a request's JSON is the JSON of its parts, so its size
+// is the exact sum of theirs.
 
 // otlpPiece is what a request carries of one metric: its points from up to
 // to, of the metric'th metric of the resource'th resource of the payload.
@@ -946,43 +945,43 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 // become the data points of one metric, in the order the family first
 // appears: a gauge, a monotonic cumulative sum for a counter, a cumulative
 // histogram, or a summary. start gives a cumulative point its start time;
-// nil leaves it out.
+// nil omits it.
 //
-// A family with a series whose values its type does not allow (typedValues)
-// — a counter that is NaN or negative, a histogram whose bucket counts fall
-// or whose +Inf bucket and _count differ, a summary with a quantile of 1.5 —
-// cannot be a monotonic sum, a histogram or a summary in OTLP either: a
-// bucket's own count would be negative, a histogram's point has one count,
-// and OTLP's quantiles are within 0 to 1 and not negative as OpenMetrics'
-// are. It is exported as gauges under the names of its samples, with the
-// series and values the exposition formats write: what OpenMetrics' unknown,
-// which such a family is written as there (planOpenMetrics), is in OTLP.
-// Every point then is valid, and none is left out.
+// Some families have a series with values their type does not allow
+// (typedValues): a counter that is NaN or negative, a histogram whose bucket
+// counts fall or whose +Inf bucket and _count differ, a summary with a
+// quantile of 1.5. Such a family cannot be a monotonic sum, histogram or
+// summary in OTLP either: a bucket's own count would be negative, a
+// histogram point has one count, and OTLP quantiles lie within 0 to 1 and
+// are not negative as OpenMetrics' are. It is exported as gauges under its
+// samples' names, with the series and values the exposition formats write.
+// That is OTLP's form of OpenMetrics' unknown, which such a family is
+// written as there (planOpenMetrics). Every point is then valid, none left out.
 func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at string) string) []otlpMetric {
 	out, _ := otlpMetricsOf(otlpResourceSet{Set: set}, now, start)
 	return out
 }
 
-// otlpPoints is the conversion otlpMetrics describes, of the series as the
-// set has them. own is where the exporter's own series begin in the set,
-// after those that waited in the queue (exportOTLP). keep, when there is
-// one, is asked of every point before it is made — the series it is of, by
-// its place in the set, the name the exposition writes the point under, and
-// the name, the kind and the attributes it would be exported with — and a
-// point it refuses is left out, and its series' start time not asked for.
+// otlpPoints performs the conversion otlpMetrics describes, on the series as
+// the set holds them. own is where the exporter's own series begin in the
+// set, after the series that waited in the queue (exportOTLP). keep, when
+// set, is called for every point before it is made, with the point's series
+// (by its place in the set), the name the exposition writes the point under,
+// and the name, kind and attributes it would be exported with. A point keep
+// refuses is left out, and its series' start time is not requested.
 //
-// shared says that two points of the result may be one to a receiver — one
-// metric's, with the same attributes — or that a name is two metrics of
-// different kinds in it, which otlpMetricsOf then looks into. It is told
-// without a look at any point's attributes, by where the points of a metric
-// come from. The series of one name and type that follow one another in the
-// set are a run, and those of a run differ in their labels, as the keys
-// they waited under and the exporter's own series do. So a metric whose
-// points are all of one run, each exported under its series' own name with
-// its labels for attributes, has no two alike; and shared is said where a
-// metric gets a point of a second run, where a name is exported as a second
-// kind, and where a histogram or a summary is exported as gauges under its
-// samples' names, with le or quantile among the attributes.
+// shared reports that two points of the result may be the same to a
+// receiver (one metric's, with the same attributes), or that a name is two
+// metrics of different kinds in it. otlpMetricsOf then examines it. shared
+// is decided without looking at any point's attributes, only at where a
+// metric's points come from. Series of one name and type that follow each
+// other in the set form a run. Series of a run differ in their labels, as
+// the keys they waited under and the exporter's own series do. So a metric
+// whose points all come from one run, each exported under its series' own
+// name with its labels as attributes, has no two alike. shared is set where
+// a metric gets a point from a second run, where a name is exported as a
+// second kind, and where a histogram or summary is exported as gauges under
+// its samples' names, with le or quantile among the attributes.
 func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(m model.Metric, at string) string, keep func(series int, source, name string, shape otlpShape, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
 	// Where the metric of a name is in out, and the run that made it.
 	type place struct{ at, run int }
@@ -1107,13 +1106,13 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 	return out, shared
 }
 
-// otlpNameClash is a name that the writers of one resource export as
-// metrics of different kinds in one export, or, under otlp.metric_names:
-// otel, as the name of metrics of different Prometheus names: the kind the
-// latest of them wrote is exported, and points of the others, of the kinds
-// leftOut, are not; and of that kind, the Prometheus name, source, the
-// latest wrote, and the points of the others, sourcePoints of the names
-// leftOutSources, are not.
+// otlpNameClash is a name that the writers of one resource export, in one
+// export, as metrics of different kinds, or (under otlp.metric_names: otel)
+// as the name of metrics with different Prometheus names. The kind the
+// latest writer wrote is exported. Points of the other kinds, listed in
+// leftOut, are not. Within that kind, the Prometheus name the latest writer
+// wrote (source) is exported. Points of the other names, sourcePoints of
+// the names in leftOutSources, are not.
 type otlpNameClash struct {
 	name    string
 	kept    otlpShape
@@ -1125,64 +1124,63 @@ type otlpNameClash struct {
 	sourcePoints   int
 }
 
-// otlpMetricsOf is otlpMetrics of what one resource has in an export — the
-// series that waited in the queue, each with its place in it, and after
-// them the exporter's own, for its own resource — as one writer's.
+// otlpMetricsOf is otlpMetrics of what one resource has in an export, as if
+// written by one writer: the series that waited in the queue, each with its
+// place in it, and after them the exporter's own, for its own resource.
 //
-// To a receiver a point is its resource's, its metric's — the name and the
-// kind — and its attributes', and each such stream has one writer: two
-// points of one in a request are one too many, of which it keeps either,
-// or refuses the request; and two metrics of one name and different kinds
-// are a conflict it settles as it likes. The queue holds a series once, by
-// its name, type and labels (otlpMetricKey), which is not what it is
-// exported as: a gauge and an untyped series of one name and labels are one
-// gauge's point twice; so are the h_bucket of a histogram h exported as
-// gauges and a gauge h_bucket with that le, and a series of a probe named
-// and labelled like one of the exporter's own; and what one probe makes a
-// gauge of and another a counter are two metrics of one name. One set a
-// probe answers with has none of these (MetricSet.Validate); two sets
-// under one resource have. What a series is exported as is not known when
-// it is queued — a family is exported as gauges when any of its series in
-// the export has values its type does not allow (untypedFamilies), and the
-// exporter's own never wait — so it is settled here, where the points are
-// made, by the rule of the queue: the later replaces the earlier.
+// To a receiver, a point belongs to a stream: its resource, its metric (name
+// and kind) and its attributes. Each stream has one writer. Two points of
+// one stream in a request are one too many: the receiver keeps either, or
+// refuses the request. Two metrics of one name and different kinds are a
+// conflict it settles as it likes. The queue holds a series once, by its
+// name, type and labels (otlpMetricKey), which is not what it is exported
+// as. A gauge and an untyped series of one name and labels are one gauge's
+// point twice. So are the h_bucket of a histogram h exported as gauges and a
+// gauge h_bucket with that le, and a probe series named and labelled like
+// one of the exporter's own. A name one probe makes a gauge and another a
+// counter is two metrics of one name. One set a probe answers with has none
+// of these (MetricSet.Validate); two sets under one resource can. What a
+// series is exported as is not known when it is queued: a family is
+// exported as gauges when any of its series in the export has values its
+// type does not allow (untypedFamilies), and the exporter's own series never
+// wait. So it is settled here, where the points are made, by the queue's
+// rule: the later replaces the earlier.
 //
-//   - Of the kinds a name is exported as, the one of the point written last
-//     is exported, and no point of another: they are reported, to be logged
-//     (logOTLPNameClashes).
-//   - Of the Prometheus names a name is exported for, which under
-//     otlp.metric_names: otel are more than one where x_seconds and
-//     x_seconds_total, or requests and requests_total, are both counters,
-//     the one of the point written last is exported, and no point of
-//     another, among the points of the kind exported: they are reported
-//     too. Two series are one stream only where the exposition writes them
-//     under one name; two that it does not are two series to Prometheus,
-//     which one metric of the export would merge into one where their
-//     labels are the same, and a receiver could not tell apart where they
-//     are not.
+//   - Of the kinds a name is exported as, the kind of the point written last
+//     is exported, and no point of another kind. These are reported, to be
+//     logged (logOTLPNameClashes).
+//   - Of the Prometheus names a name is exported for, the one of the point
+//     written last is exported, and no point of another, among the points of
+//     the exported kind. These are reported too. Under otlp.metric_names:
+//     otel there can be more than one, where x_seconds and x_seconds_total,
+//     or requests and requests_total, are both counters. Two series are one
+//     stream only where the exposition writes them under one name. Two that
+//     it does not are two series to Prometheus. One metric of the export
+//     would merge them where their labels are the same, and a receiver could
+//     not tell them apart where they are not.
 //   - Of the points of one metric with the same attributes, the one written
-//     last is exported, as a later scrape's point replaces a series' in
-//     the queue, without a word.
+//     last is exported, silently, as a later scrape's point replaces a
+//     series' point in the queue.
 //
-// Written last is queued last, and one of the exporter's own is written
-// after every queued one, at the export; of two written at once, the later
-// in the set.
+// Written last means queued last. The exporter's own series are written
+// after every queued one, at the export. Of two written at once, the later
+// in the set counts as written last.
 //
-// Nearly no export has either, and it is then made once, as it was
-// (otlpPoints): only where that says two points may be one are the points
-// gone through again, to find those to leave out, and, where there are any,
-// a third time without them. A start time is then asked for twice, for the
-// same point, which gives it the same; and a cumulative point left out has
-// been a point of its series to the start times, a count the series had
-// (otlpStartTimes).
+// Nearly no export has any of this, and it is then built once, as before
+// (otlpPoints). Only where that reports that two points may be one are the
+// points walked again to find those to leave out, and, if there are any, a
+// third time without them. A start time is then requested twice for the
+// same point, which gets the same one. A cumulative point left out has
+// still counted as a point of its series for the start times, a count the
+// series had (otlpStartTimes).
 func otlpMetricsOf(resource otlpResourceSet, now string, start func(m model.Metric, at string) string) ([]otlpMetric, []otlpNameClash) {
 	return otlpMetricsWith(resource, now, start, nil)
 }
 
-// otlpPointSources are the series the points of a resource's metrics are
-// of: of[m][j] is the place in the resource's set of the series the j'th
-// point of the m'th metric is of. index and kinds are what otlpPoints keeps
-// to find the metric of a name and a kind a point is added to.
+// otlpPointSources records the series the points of a resource's metrics
+// come from: of[m][j] is the place in the resource's set of the series of
+// the j'th point of the m'th metric. index and kinds are what otlpPoints
+// keeps to find the metric, by name and kind, that a point is added to.
 type otlpPointSources struct {
 	index  map[string]int
 	shapes []otlpShape
@@ -1193,10 +1191,10 @@ type otlpPointSources struct {
 	leftOut []otlpLeftOutPoint
 }
 
-// otlpLeftOutPoint is a point an export leaves out (otlpMetricsOf): of the
-// series'th series of the resource's set, which the exposition writes under
-// source, exported as name, of shape, with attributes; why says which rule
-// left it out.
+// otlpLeftOutPoint is a point an export leaves out (otlpMetricsOf). It is
+// of the series'th series of the resource's set, which the exposition writes
+// under source, and is exported as name, with shape and attributes. why
+// says which rule left it out.
 type otlpLeftOutPoint struct {
 	series       int
 	source, name string
@@ -1359,10 +1357,10 @@ func otlpMetricsWith(resource otlpResourceSet, now string, start func(m model.Me
 	return out, reported
 }
 
-// otlpPointIdentity is what tells a point of a resource from every other
-// in an export, among those of the kind its name is exported as: the
-// metric's name, and each attribute's name and value, each after its length
-// (appendKeyPart), so nothing is read from what they hold.
+// otlpPointIdentity identifies a point of a resource among all others in an
+// export that have the kind its name is exported as. It is the metric's
+// name and each attribute's name and value, each preceded by its length
+// (appendKeyPart), so nothing is read from their content.
 func otlpPointIdentity(name string, attributes []otlpAttribute) string {
 	b := appendKeyPart(nil, name)
 	for _, a := range attributes {
@@ -1385,11 +1383,11 @@ const (
 	otlpNamesMergedMessage = "OTLP metric name written for two Prometheus metric names under one resource; the data points of the name written earlier are left out of the export"
 )
 
-// logOTLPNameClashes logs each name of a resource that an export had as
-// two kinds, or for two Prometheus names, once and then as a repeat
-// (failureLog), whichever was written last at each export. The line shows
-// the names as an error shows one (model.ShownName), and the clash is
-// remembered under the whole name, of kinds and of Prometheus names apart.
+// logOTLPNameClashes logs each name of a resource that an export had as two
+// kinds, or for two Prometheus names, once and then as a repeat
+// (failureLog), naming whichever was written last at each export. The line
+// shows names as an error does (model.ShownName). The clash is remembered
+// under the whole name, with kind and Prometheus-name clashes kept apart.
 func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
 	for _, clash := range clashes {
 		if len(clash.leftOutSources) > 0 {
@@ -1445,10 +1443,10 @@ func otlpNameClashLines(clash otlpNameClash) []string {
 	return lines
 }
 
-// untypedFamilies are the names of the families of a set that have a series
-// whose values its type does not allow (typedValues), which are exported as
-// gauges; nil when there is none, as nearly always. It is decided for the
-// family, as in OpenMetrics, so that a name is one kind of metric in an
+// untypedFamilies returns the names of a set's families that have a series
+// whose values its type does not allow (typedValues). These are exported as
+// gauges. It is nil when there are none, as nearly always. The decision is
+// per family, as in OpenMetrics, so that a name is one kind of metric in an
 // export.
 func untypedFamilies(set model.MetricSet) map[string]bool {
 	var untyped map[string]bool
@@ -1534,15 +1532,14 @@ func newOTLPMetric(name, help string, shape otlpShape) otlpMetric {
 }
 
 // otlpHistogramPoint turns Prometheus's cumulative buckets into OTLP's
-// per-bucket counts, in ascending order of their bounds whatever order the
-// source had them in. The +Inf bucket, when the histogram carries one, is
-// not a bound: what lies above the highest finite bound is the count less
-// the last finite bucket's cumulative count. The histogram is one whose
-// values its type allows (typedValues): its bounds are numbers, its +Inf
-// bucket's count is its _count where it has both, and its cumulative counts
-// never fall, up to that count, so every bucket's own count is its
-// cumulative count less the one before, and they add up to the count, as
-// OTLP requires.
+// per-bucket counts, in ascending order of bounds, whatever order the
+// source had them in. The +Inf bucket, if present, is not a bound: the
+// count above the highest finite bound is the count minus the last finite
+// bucket's cumulative count. The histogram's values are allowed by its type
+// (typedValues): its bounds are numbers, its +Inf bucket's count is its
+// _count where it has both, and its cumulative counts never fall, up to that
+// count. So each bucket's own count is its cumulative count minus the one
+// before, and they add up to the count, as OTLP requires.
 func otlpHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) otlpHistogramDataPoint {
 	h := m.Histogram
 	var e expositionWriter
@@ -1659,9 +1656,9 @@ type otlpStatus struct {
 	consecutiveFailures int
 	endpoint            string
 	// history is what the status page shows of the exports to endpoint
-	// (otlpstatuspage.go): a reload that points OTLP somewhere else starts
-	// it again, as it does consecutiveFailures. It is a few values, one
-	// error text of at most model.MaxFailureBytes and at most
+	// (otlpstatuspage.go). Like consecutiveFailures, it starts again when a
+	// reload points OTLP somewhere else. It is a few values: one error text
+	// of at most model.MaxFailureBytes and at most
 	// model.MaxOTLPUnreadyAfterFailures times, whatever the exports.
 	history otlpHistory
 	// now is time.Now unless a test sets a clock of its own, to tell the
@@ -1712,15 +1709,14 @@ type otlpHistory struct {
 	// failedAt began, kept through the successes after it.
 	errorText string
 	failedAt  time.Time
-	// failureEnds are when the failed exports of the current run of
-	// failures ended, the first first, up to
-	// model.MaxOTLPUnreadyAfterFailures of them; empty after a success.
-	// The exporter is unready under otlp.unready_after_failures N since the
-	// end of the Nth, whatever N a reload sets during the run: one under
-	// the run's length is a failure kept, one over it leaves the exporter
-	// ready. N is at most the bound, so the failures past it are never one
-	// the exporter is unready since, and are not kept: at most a thousand
-	// times, whatever the run's length.
+	// failureEnds are the end times of the failed exports in the current run
+	// of failures, oldest first, up to model.MaxOTLPUnreadyAfterFailures of
+	// them. It is empty after a success. Under otlp.unready_after_failures N,
+	// the exporter is unready from the end of the Nth, whatever N a reload
+	// sets during the run. An N below the run's length names a kept failure;
+	// an N above it leaves the exporter ready. N is at most the bound, so
+	// failures past it can never be the one the exporter is unready from, and
+	// are not kept: at most a thousand times, whatever the run's length.
 	failureEnds []time.Time
 }
 
@@ -1831,16 +1827,16 @@ type pendingMetric struct {
 }
 
 // scrapeTime is when the series of a result queued for OTLP were scraped. A
-// data point carries the time its value came from the target, and an answer
-// from the cache, fresh or stale (cache.go), is made of values that came
-// from it earlier than the answer was given: exported as of the answer, an
-// old value would look newly measured every time it was served again.
+// data point carries the time its value came from the target. An answer
+// from the cache, fresh or stale (cache.go), holds values that came from the
+// target before the answer was given. Exported with the answer's time, an
+// old value would look newly measured each time it was served again.
 //
 // The first data series of the result came from the target at at. The rest
-// are the exporter's own account of the result as it is queued — a static
-// target's health metrics — and so are, wherever they stand, the freshness
-// series of a collector with cache.stale_if_error, which say how old the
-// result is now. Those are as of now, as every series is when at is zero.
+// are the exporter's own account of the result as it is queued (a static
+// target's health metrics). So are the freshness series of a collector with
+// cache.stale_if_error, wherever they stand, which say how old the result is
+// now. Those are as of now, as every series is when at is zero.
 type scrapeTime struct {
 	at        time.Time
 	data      int
@@ -1865,17 +1861,17 @@ func (t scrapeTime) covers(i int, m model.Metric) bool {
 	return true
 }
 
-// Probes of every target and collector are queued under the one exporter-wide
-// resource, where a series is known by its name, type and labels alone. Two
-// probes answering the same series — two targets behind one collector, two
-// collectors naming a metric alike — are then one series, and the later
-// probe's point replaces the earlier's before the export. With
-// otlp.probe_attributes, each probe's points carry collector and target
-// attributes, so they stay apart; a label of the series' own by either name
-// is kept. What two probes write that is one stream to a receiver without
-// being one series here — a gauge and an untyped series of one name, a name
-// that is a gauge of one and a counter of the other — is settled where the
-// export is made (otlpMetricsOf).
+// Probes of every target and collector are queued under the one
+// exporter-wide resource, where a series is identified by its name, type and
+// labels alone. Two probes that answer the same series (two targets behind
+// one collector, two collectors naming a metric alike) then give one series,
+// and the later probe's point replaces the earlier one before the export.
+// With otlp.probe_attributes, each probe's points carry collector and target
+// attributes, so they stay apart. A series' own label with either name is
+// kept. Some things two probes write are one stream to a receiver without
+// being one series here: a gauge and an untyped series of one name, or a
+// name that is a gauge in one and a counter in the other. These are settled
+// where the export is made (otlpMetricsOf).
 
 // Probe attribute names.
 const (
@@ -1896,10 +1892,10 @@ func (s *Server) queueProbeOTLP(set model.MetricSet, c *model.Collector, target 
 	s.queueOTLPResource(otlpProbeSet(cfg, set, c, target), defaultResourceIdentity(cfg), at)
 }
 
-// otlpProbeSet is a probe's answer as it is exported: with collector and
-// target attributes on its series when otlp.probe_attributes says so, a
-// label of the series' own by either name kept. The debug page shows a
-// run's points made of it (debugotlp.go).
+// otlpProbeSet is a probe's answer as it is exported. When
+// otlp.probe_attributes says so, its series get collector and target
+// attributes, and a series' own label with either name is kept. The debug
+// page shows a run's points made from it (debugotlp.go).
 func otlpProbeSet(cfg model.OTLPConfig, set model.MetricSet, c *model.Collector, target string) model.MetricSet {
 	if !cfg.ProbeAttributes {
 		return set
@@ -1929,10 +1925,10 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 	for i, metric := range set.Metrics {
 		s.otlpSeq++
 		point := model.CloneMetric(metric)
-		// A point is exported at the time it was scraped, which the queue
-		// keeps through the wait for the next export and any retries, not
-		// at the time the export is sent, and which for a result answered
-		// from the cache is when the cached trip was made (scrapeTime).
+		// A point is exported with the time it was scraped, not the time the
+		// export is sent. The queue keeps that time through the wait for the
+		// next export and any retries. For a result answered from the cache,
+		// it is when the cached trip was made (scrapeTime).
 		switch {
 		case point.Timestamp != nil:
 		case at.covers(i, metric):
@@ -1945,10 +1941,10 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 	s.capPendingLocked(cfg.MaxPendingPoints)
 }
 
-// otlpPointTime is a point's time as an export writes it, in nanoseconds,
-// of ms, the milliseconds since the epoch the queue keeps of it
-// (queueOTLPResource) — the precision of a Prometheus sample's timestamp —
-// so an export's times are whole milliseconds.
+// otlpPointTime returns a point's time as an export writes it, in
+// nanoseconds. ms is the milliseconds since the epoch that the queue keeps
+// for the point (queueOTLPResource), the precision of a Prometheus sample's
+// timestamp. So an export's times are whole milliseconds.
 func otlpPointTime(ms int64) string {
 	return strconv.FormatInt(ms*int64(time.Millisecond), 10)
 }
@@ -2029,11 +2025,11 @@ func (s *Server) drainOTLP() []otlpResourceSet {
 	return out
 }
 
-// otlpQueueOrder is the series of set as the queue would hold them, queued
-// one after another under one resource and drained: by their places in set,
-// each series once, its last point in set, in the order drainOTLP gives
-// them. The debug page shows a run's points in it (debugotlp.go), which the
-// export's checks of a resource's points depend on.
+// otlpQueueOrder returns the series of set as the queue would hold them if
+// they were queued one after another under one resource and drained: each
+// series once, by its place in set, with its last point in set, in the
+// order drainOTLP gives. The debug page shows a run's points in this order
+// (debugotlp.go), which the export's checks of a resource's points depend on.
 func otlpQueueOrder(set model.MetricSet) []int {
 	pending := make(map[string]pendingMetric, len(set.Metrics))
 	place := make(map[string]int, len(set.Metrics))
@@ -2081,23 +2077,23 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 			return
 		}
 		// Static targets are scraped on their own intervals
-		// (StaticScrapeLoop); an export delivers what the probes and the
-		// targets with export_via_otlp queued since the last one. It may retry for up to an interval, so it
-		// never runs into the next one.
+		// (StaticScrapeLoop). An export delivers what the probes and the
+		// targets with export_via_otlp queued since the last one. It may
+		// retry for up to an interval, so it never runs into the next one.
 		s.exportOTLP(ctx, interval)
 	})
 }
 
-// otlpEvery calls export with the otlp block in force and its interval, as
-// intervalOf reads it, an interval after the last call ended, until ctx
-// ends: the metrics', the log records' and the spans' export loops. The
-// interval is that of the configuration in force, not of the one in force
-// when the wait began: a reload, or the first bundle of an exporter in
-// allocator mode, that puts another in force wakes the wait, which is then
-// to an interval of the new configuration after the last export, and ends
-// at once when that is past. An exporter in allocator mode begins with no
-// configuration, whose interval is the default, and would otherwise make
-// its first export that long after its bundle came.
+// otlpEvery calls export with the otlp block in force and its interval (as
+// intervalOf reads it), one interval after the last call ended, until ctx
+// ends. The metrics, log records and spans export loops use it. The interval
+// is that of the configuration in force now, not when the wait began. A
+// reload, or the first bundle of an exporter in allocator mode, that puts
+// another configuration in force wakes the wait. The wait then runs to one
+// interval of the new configuration after the last export, and ends at once
+// if that is already past. An exporter in allocator mode starts with no
+// configuration, whose interval is the default. Otherwise it would make its
+// first export that long after its bundle came.
 func (s *Server) otlpEvery(ctx context.Context, intervalOf func(model.OTLPConfig) time.Duration, export func(model.OTLPConfig, time.Duration)) {
 	last := time.Now()
 	for {
@@ -2168,29 +2164,28 @@ func (s *Server) FlushOTLP() {
 }
 
 // exportOTLP sends everything pending, with a self-metric snapshot, retrying
-// within budget, in as many requests as otlp.batch_max_size and
-// otlp.batch_max_bytes make of it, one after another. Metrics that could not
-// be delivered for a reason worth retrying — a network error, 429, 502, 503,
-// 504, the budget running out, or the export being cut short by shutdown —
-// are queued again for the next export, with those of every request not sent
-// yet, unless a newer value of the same series has been queued since; the
-// self-metrics are not, since the next export takes a new snapshot, and
-// neither are the metrics of the requests delivered before. Metrics the
-// endpoint refused outright are dropped and counted, those of the request it
-// refused, since sending them again would be refused again, and the export
-// goes on with the next request.
+// within budget. It sends as many requests as otlp.batch_max_size and
+// otlp.batch_max_bytes make of it, one after another. Metrics not delivered
+// for a reason worth retrying (a network error, 429, 502, 503, 504, the
+// budget running out, or shutdown cutting the export short) are queued again
+// for the next export, with those of every request not yet sent, unless a
+// newer value of the same series has been queued since. Self-metrics are not
+// queued again, since the next export takes a new snapshot, and neither are
+// the metrics of requests already delivered. Metrics of a request the
+// endpoint refused outright are dropped and counted, since sending them
+// again would be refused again. The export goes on with the next request.
 func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 	s.exportOTLPOnce(ctx, budget, false)
 }
 
-// exportOTLPOnce is exportOTLP, and the last export at shutdown when last
-// says so (FlushOTLP): there is no next export then, so the metrics a
-// failure would queue again for it are dropped instead, counted in
+// exportOTLPOnce is exportOTLP, and also the last export at shutdown when
+// last says so (FlushOTLP). There is no next export then, so the metrics a
+// failure would queue again are dropped instead, counted in
 // http_exporter_otlp_points_dropped_total and logged as dropped.
 //
-// It is one export to the self-metrics however many requests it is sent
-// in: its duration is the whole export's, its retries those of every
-// request, and it is a success when the endpoint accepted every request.
+// It counts as one export in the self-metrics, however many requests it is
+// sent in. Its duration is the whole export's, its retries are those of
+// every request, and it is a success when the endpoint accepted every request.
 func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last bool) {
 	cfg := s.manager.Get().OTLP
 	pending := s.drainOTLP()
@@ -2288,11 +2283,11 @@ func (s *Server) exportOTLPOnce(ctx context.Context, budget time.Duration, last 
 	s.logger.Warn("OTLP export failed; its data points are kept for the next export", "error", err, "retries", retries)
 }
 
-// requeueOTLP queues metrics that were not delivered again, each unless a
-// newer value of its series has been queued since it was drained. Each keeps
-// the place in the queue it was drained with, older than anything queued
-// since, so otlp.max_pending_points drops the oldest points first however
-// many exports in a row have failed.
+// requeueOTLP queues undelivered metrics again, except those whose series
+// has had a newer value queued since they were drained. Each keeps the
+// queue position it was drained with, older than anything queued since, so
+// otlp.max_pending_points drops the oldest points first, however many
+// exports in a row have failed.
 func (s *Server) requeueOTLP(resources []otlpResourceSet) {
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
@@ -2316,10 +2311,10 @@ func countPoints(resources []otlpResourceSet) int {
 	return n
 }
 
-// otlpMetricKey is what tells a series of a resource from every other
-// (otlpKey): its name, its type, and each label's name and value. A point
-// queued replaces the one waiting under it, and a resource's points are
-// exported in the order of their keys.
+// otlpMetricKey identifies a series of a resource among all others
+// (otlpKey): its name, its type, and each label's name and value. A queued
+// point replaces the one waiting under the same key, and a resource's points
+// are exported in key order.
 func otlpMetricKey(metric model.Metric) string {
 	return otlpSeriesKey("", &metric)
 }
@@ -2330,25 +2325,24 @@ func otlpSeriesKey(before string, metric *model.Metric) string {
 	return otlpKey(before, metric.Labels, metric.Name, string(metric.Type))
 }
 
-// A key is remembered — where a point waits for the export (otlpBatch), and
-// where a series' start time is kept (otlpStartTimes) — by itself when it is
-// at most otlpKeyLongest bytes long, as nearly every one is, and otherwise by
-// its SHA-256 digest. A series' labels are the target's, and with
-// otlp.probe_attributes its target attribute is what the probe's caller
-// wrote, up to 8 KiB: remembered as themselves, every point waiting, up to
-// otlp.max_pending_points of them, held a copy of its target, and so did
-// twice as many start times, for an hour, about 1.5 GiB of them at 8 KiB.
-// A digest is as long whatever its key is. The keys of up to
-// otlpKeyLongest bytes, a series' with a few labels and a target of a
-// hundred bytes, are not made digests because a digest costs: of a key of
-// 100 bytes about half a microsecond, which would make a point a fifth
-// slower where it waits and a quarter slower where its start time is found
-// (BenchmarkOTLPPoints).
+// A key is stored where a point waits for the export (otlpBatch) and where
+// a series' start time is kept (otlpStartTimes). It is stored as itself
+// when it is at most otlpKeyLongest bytes long, as nearly every key is, and
+// otherwise as its SHA-256 digest. A series' labels are the target's, and
+// with otlp.probe_attributes its target attribute is what the probe's caller
+// wrote, up to 8 KiB. Stored as themselves, every waiting point (up to
+// otlp.max_pending_points) held a copy of its target, and so did twice as
+// many start times, for an hour: about 1.5 GiB of them at 8 KiB. A digest
+// has the same length whatever the key. Keys of up to otlpKeyLongest bytes
+// (a series with a few labels and a target of a hundred bytes) are not
+// digested because a digest costs: about half a microsecond for a key of
+// 100 bytes, which would make a point a fifth slower where it waits and a
+// quarter slower where its start time is found (BenchmarkOTLPPoints).
 //
-// A key of exactly the digest's length is remembered by its digest too, so
-// a key remembered as itself is never as long as a digest is: no key is
-// remembered as what another's digest is, and a digest is told by its
-// length (otlpKeyDigested).
+// A key of exactly the digest's length is also stored as its digest. So a
+// key stored as itself is never as long as a digest, no key is stored as
+// another key's digest, and a digest is recognized by its length
+// (otlpKeyDigested).
 const otlpKeyLongest = 256
 
 // otlpKeyOf is what key is remembered by: key itself, or its digest,
@@ -2374,10 +2368,10 @@ func otlpPendingKey(metric *model.Metric) string {
 	return string(otlpKeyOf(appendOTLPKey(room[:0], "", metric.Labels, metric.Name, string(metric.Type)), &digest))
 }
 
-// otlpPendingOrder is the keys of a resource's points waiting, in the order
-// of their series keys, as the points are exported. A key remembered by its
-// digest is made again for it, for the moment the order is found, so the
-// order is the one the keys themselves had.
+// otlpPendingOrder returns the keys of a resource's waiting points in the
+// order of their series keys, which is the order the points are exported in.
+// A key stored as its digest is rebuilt just while the order is found, so
+// the order is the one the original keys had.
 func otlpPendingOrder(pending map[string]pendingMetric) []string {
 	keys := make([]string, 0, len(pending))
 	var long map[string]string
@@ -2411,51 +2405,48 @@ const (
 	otlpKeyEnd = "\x00\x00"
 )
 
-// otlpKey is the key of a resource or of a series: what the export tells one
-// from every other by, where points wait for it (otlpBatch), among the
-// resources of one (appendToResource) and where start times are kept
-// (otlpStartTimes). head are the parts every one has — a resource's service
-// name; a series' name and type — and pairs its attributes or its labels.
+// otlpKey is the key of a resource or a series. The export uses it to tell
+// one from every other: where points wait for it (otlpBatch), among the
+// resources of an export (appendToResource), and where start times are kept
+// (otlpStartTimes). head holds the parts every one has (a resource's service
+// name; a series' name and type), and pairs its attributes or labels.
 // before is written first, as it is.
 //
-// The key was once the parts joined: the head with a NUL between its parts,
-// and then a NUL, the name, = and the value of each pair, by the pairs'
-// names in order. But a label's value is the target's and a resource's
-// attributes are the operator's, of any bytes: m{a="1\x00b=2"} and
-// m{a="1",b="2"} are joined to the same bytes, as are the attribute a=b of
-// the value c and the attribute a of the value b=c, and a resource whose
-// last attribute holds what another's series begin with. Two series with
-// one key were one in the queue, where the later point replaced the other
-// and that series was never exported; two resources with one key were
-// exported as one, under the attributes of the first; and two series with
-// one key among the start times each took the other's count for its own,
-// and were given a start time, and a reset, that the other had.
+// The key used to be the parts joined: the head with a NUL between its
+// parts, then, for each pair in name order, a NUL, the name, = and the
+// value. But a label value is the target's and resource attributes are the
+// operator's, of any bytes. m{a="1\x00b=2"} and m{a="1",b="2"} joined to the
+// same bytes, as did the attribute a=b of value c and the attribute a of
+// value b=c, and a resource whose last attribute held what another's series
+// began with. Two series with one key were one in the queue: the later point
+// replaced the other and that series was never exported. Two resources with
+// one key were exported as one, under the first one's attributes. Two series
+// with one key among the start times each took the other's count as its
+// own, and got a start time and a reset that the other had.
 //
-// So the key is the join, and after it the length of every part, each a
-// varint (binary.AppendUvarint), in the order the parts are joined in. The
-// lengths say where each part is within the join, so nothing is read from
-// what a part holds, and no two subjects have one key whatever their parts
-// hold. Where the join ends is told without a length before it: every NUL of
-// the join, a part's own or one between two parts, is written with a 0x01
-// after it (otlpKeyNUL), and two NULs end it (otlpKeyEnd), which the join
-// so written never holds.
+// So the key is the join followed by the length of every part, each a
+// varint (binary.AppendUvarint), in join order. The lengths say where each
+// part lies within the join, so nothing is read from a part's content, and
+// no two subjects share a key whatever their parts hold. The end of the
+// join is found without a length before it: every NUL of the join, a part's
+// own or a separator, is followed by 0x01 (otlpKeyNUL), and two NULs end it
+// (otlpKeyEnd), which the join written this way never contains.
 //
-// The join is kept, where the failure log's keys have each part after its
-// own length (appendKeyPart), and it ends as it does, because the resources
-// of an export and the points of each are exported in the order of their
-// keys (drainOTLP), which was the order of the joins: and written so, keys
-// are in the order of their joins still. Up to where two joins first differ
-// their keys are the same; there the smaller byte is the smaller byte of
-// the keys, a NUL too; and a join that is the beginning of another ends
-// with two NULs where the other goes on with a byte that is not a NUL, or
-// with a NUL and 0x01. Only subjects whose parts are joined to the same
-// bytes, which had one key, are in the order of the lengths.
+// The join is kept (the failure log's keys instead put each part after its
+// own length, appendKeyPart), and it ends this way, because an export's
+// resources and the points of each are exported in key order (drainOTLP),
+// which was join order. Written this way, keys still sort in join order. Up
+// to where two joins first differ, their keys are the same. There the
+// smaller byte is the smaller byte of the keys, a NUL too. A join that is
+// a prefix of another ends with two NULs where the other goes on with a
+// byte that is not a NUL, or with a NUL and 0x01. Only subjects whose parts
+// join to the same bytes, which shared a key, are ordered by the lengths.
 //
-// A key up to otlpKeyRoom bytes is made in the one allocation that holds
+// A key of up to otlpKeyRoom bytes is built in the one allocation that holds
 // it, where the old key took one for the names in order and several as it
-// grew: the parts are put in the order they are joined in, in place, for all
-// but a subject of more pairs than any is likely to have, and written where
-// the caller has room (appendOTLPKey). A longer one takes one more.
+// grew. The parts are placed in join order, in place, for all but a subject
+// with more pairs than any is likely to have, and written where the caller
+// has room (appendOTLPKey). A longer key takes one more allocation.
 func otlpKey(before string, pairs map[string]string, head ...string) string {
 	var room [otlpKeyRoom]byte
 	return string(appendOTLPKey(room[:0], before, pairs, head...))
@@ -2525,8 +2516,8 @@ func appendOTLPKey(dst []byte, before string, pairs map[string]string, head ...s
 	return b
 }
 
-// withoutExponential leaves the exporter's own histograms with their classic
-// buckets alone, which the OTLP export sends as explicit-bucket histograms
+// withoutExponential leaves the exporter's own histograms with only their
+// classic buckets, which the OTLP export sends as explicit-bucket histograms
 // unless otlp.exponential_histograms is on. A histogram is copied before it
 // is changed, since the set may share it.
 func withoutExponential(set *model.MetricSet) {

@@ -6,13 +6,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// otlpUnitSuffixes are the units a Prometheus metric name ends in, each as
-// the OTLP unit, a UCUM code, it stands for. They are the OpenTelemetry
-// Collector's Prometheus translator's, read backwards: it names a metric of
-// unit s with the suffix _seconds and one of unit By with _bytes, so an
-// export with otlp.metric_names: otel gives a name with the suffix the unit
-// and takes the suffix off. ratio is the translator's for a gauge of unit
-// 1.
+// otlpUnitSuffixes maps each unit suffix of a Prometheus metric name to the
+// OTLP unit (a UCUM code) it stands for. It is the OpenTelemetry Collector's
+// Prometheus translator's table, read backwards. The translator names a
+// metric of unit s with the suffix _seconds and one of unit By with _bytes.
+// So an export with otlp.metric_names: otel takes the suffix off a name and
+// gives it the unit. ratio is the translator's suffix for a gauge of unit 1.
 var otlpUnitSuffixes = map[string]string{
 	"days": "d", "hours": "h", "minutes": "min", "seconds": "s",
 	"milliseconds": "ms", "microseconds": "us", "nanoseconds": "ns",
@@ -28,12 +27,12 @@ var otlpUnitSuffixes = map[string]string{
 // minute here is min.
 var otlpPerUnitSuffixes = map[string]string{"second": "s", "minute": "min", "hour": "h", "day": "d"}
 
-// otlpNameOf is the name and the unit a series of name is exported with,
-// as a metric of kind: under otlp.metric_names: prometheus, name as the
-// exposition writes it and no unit; under otel, as OpenTelemetry names it.
-// A counter's _total is taken off, then a unit suffix (otlpUnitOf). A
-// histogram's or a summary's name is its family's, which a unit suffix
-// ends as a gauge's does.
+// otlpNameOf is the name and unit a series called name is exported with, as
+// a metric of kind. Under otlp.metric_names: prometheus, it is name as the
+// exposition writes it, with no unit. Under otel, it is the OpenTelemetry
+// name: a counter's _total is taken off, then a unit suffix (otlpUnitOf). A
+// histogram's or a summary's name is its family's, which ends in a unit
+// suffix the same way a gauge's does.
 func otlpNameOf(name string, kind int, otel bool) (string, string) {
 	if !otel {
 		return name, ""
@@ -47,12 +46,12 @@ func otlpNameOf(name string, kind int, otel bool) (string, string) {
 	return otlpUnitOf(base)
 }
 
-// otlpUnitOf takes a unit suffix off name, as the unit it stands for: the
-// last of its _-separated words, when that is a unit of otlpUnitSuffixes,
-// or its last three, when they are a unit, per and a unit of
-// otlpPerUnitSuffixes. Something must be left of the name before them: a
-// gauge named seconds keeps its name, and has no unit. A word that is not a
-// whole word — milliseconds_x, xseconds — is no suffix.
+// otlpUnitOf takes a unit suffix off name and returns the unit it stands
+// for. The suffix is the last _-separated word of name, when that is a unit
+// of otlpUnitSuffixes, or its last three words, when they are a unit, per,
+// and a unit of otlpPerUnitSuffixes. Something must be left of the name
+// before them: a gauge named seconds keeps its name and has no unit. Only a
+// whole word counts as a suffix, so milliseconds_x and xseconds have none.
 func otlpUnitOf(name string) (string, string) {
 	if head, per, ok := cutLastWord(name); ok {
 		if perUnit, known := otlpPerUnitSuffixes[per]; known {
@@ -84,10 +83,10 @@ func cutLastWord(name string) (string, string, bool) {
 }
 
 // otlpShape is what a name is exported as besides its points: its kind and
-// its unit. A name is one metric of one shape under a resource; two series
-// whose names otlp.metric_names: otel makes one — a gauge jobs and a
-// counter jobs_total, a gauge latency and a gauge latency_seconds — are one
-// name, of two shapes where they differ in kind or unit.
+// its unit. A name is one metric of one shape under a resource. Two series
+// whose names otlp.metric_names: otel turns into one (a gauge jobs and a
+// counter jobs_total, a gauge latency and a gauge latency_seconds) are one
+// name, with two shapes where they differ in kind or unit.
 type otlpShape struct {
 	kind int
 	unit string

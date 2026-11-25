@@ -3,17 +3,16 @@
 The `whois` request type reads a domain's registration from its registry's
 WHOIS server (RFC 3912) and hands it to the transforms as a JSON document:
 when the registration expires, its registrar, its status and its name
-servers. Use it to alert before a domain expires, and to see a registrar or
-a name server change.
+servers. Use it to alert before a domain expires, and to see when a
+registrar or a name server changes.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with whois](#building-with-whois)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with whois](#building-with-whois)).
 
 ## Building with whois
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=whois              # bin/prometheus-universal-exporter
@@ -21,9 +20,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=whois -t exporter:whois .
 go build -tags "$(sh tools/request-type-tags.sh '' '' whois)" .
 ```
 
-The tag is `request_type_whois`. A configuration with a `whois` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_whois`. A build without the type refuses a
+configuration with a `whois` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -54,8 +54,8 @@ collectors:
 
 **Cache the collector for hours.** Registries limit how often one address
 may ask, some to a few questions a day, and answer an address that asks
-more with an error, an empty answer or nothing; a registration changes
-rarely. `cache.ttl` keeps one answer for every scrape within it
+more with an error, an empty answer or nothing. A registration rarely
+changes. `cache.ttl` keeps one answer for every scrape within it
 ([Response caching](CONFIGURATION.md#response-caching)).
 
 | Key | Default | Notes |
@@ -70,9 +70,10 @@ No other request key applies, and setting one is a startup error. A probe
 takes `timeout` and `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The target
 
@@ -125,28 +126,29 @@ and the answer is read until the server closes.
 WHOIS has no format: each registry writes its own keys and its own dates.
 The document is what could be read of the answer.
 
-- `expires`, `created` and `updated` are the dates, in RFC 3339 in UTC,
-  with each as Unix seconds beside it, read from the keys registries write
-  them under (`Registry Expiry Date`, `Expiry date`, `paid-till`,
-  `expires`, `[Expires on]`, …) and the forms they write them in. A date
-  that names no zone is taken as UTC.
+- `expires`, `created` and `updated` are the dates, in RFC 3339 in UTC, each
+  with Unix seconds beside it. They are read from the keys that registries
+  write them under (`Registry Expiry Date`, `Expiry date`, `paid-till`,
+  `expires`, `[Expires on]`, …) and in the forms that they write them in. A
+  date that names no zone is taken as UTC.
 - **A date that could not be read is `null`**, and a rule that reads it
-  fails as any rule over a missing value does, rather than the domain
-  looking as if it never expired. Some registries publish no expiry date
-  at all (`.de`, `.eu`, `.nl` among them). A date of numbers that begins
-  with the day, `03/04/2027`, is not guessed at.
+  fails as any rule over a missing value does, instead of the domain looking
+  as if it never expires. Some registries publish no expiry date at all
+  (`.de`, `.eu` and `.nl` among them). A date in numbers that begins with
+  the day, such as `03/04/2027`, is not guessed at.
 - `registered` is false when the answer holds no date, registrar or name
   server and says the registry knows no such domain (`No match`,
   `NOT FOUND`, …). Such an answer is not a failure.
 - `status` is the status values, each without the URL that may follow it,
   and `name_servers` the name servers, in lower case.
-- `fields` is every `key: value` line of the answer by its key in lower
-  case, a key written several times with each of its values, up to the
-  line that says when the database was last updated. Lines written under a
-  heading, further in, are the heading's values, and a field under one is
-  under its own key and under the two together: the `Organization` under
-  a `Registrar` heading is `organization` and `registrar organization`. A rule reads what the
-  document has no field for from it: `.fields["registrant country"][0]`.
+- `fields` holds every `key: value` line of the answer, by its key in lower
+  case, with a key written several times holding each of its values, up to
+  the line that says when the database was last updated. Lines written
+  further in under a heading are the heading's values, and a field under a
+  heading is found both under its own key and under the two together: the
+  `Organization` under a `Registrar` heading is `organization` and
+  `registrar organization`. A rule reads from it what the document has no
+  field for: `.fields["registrant country"][0]`.
 - `text` is the answer as it came, for a `python` transform or a `jq`
   `capture` to read what no line holds as a key and a value.
 - `server` is the server that answered, and `referred_by` the server that
@@ -177,14 +179,14 @@ larger than the response limit, `request.max_response_bytes` or
 ## Errors and self-metrics
 
 A failed request is reported in the `whois` stage and follows
-`error_handling.on_fetch_error`, naming the server: one that cannot be
-reached, one that closed the connection without an answer, an answer past
-the response limit, or a top-level domain IANA names no server for
-(`whois.iana.org:43 names no WHOIS server for .example; set
-request.whois_server to the registry's, if it has one`). A host the target
-lists refuse counts in `http_exporter_targets_refused_total`, answered
-`403`. Transforms see no status (`$status` is `null`, Python's
-`response.status_code` `None`) and the header
+`error_handling.on_fetch_error`, naming the server. Causes include a server
+that cannot be reached, one that closed the connection without an answer,
+an answer past the response limit, and a top-level domain that IANA names
+no server for (`whois.iana.org:43 names no WHOIS server for .example; set
+request.whois_server to the registry's, if it has one`). A host that the
+target lists refuse counts in `http_exporter_targets_refused_total` and is
+answered `403`. Transforms see no status (`$status` is `null`, and Python's
+`response.status_code` is `None`) and the header
 `Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows each question with how
@@ -217,10 +219,10 @@ a request is labelled `url="whois://example.com"` and `http_method="QUERY"`.
 ## Troubleshooting
 
 - **`expires_timestamp_seconds` is `null`.** Run a
-  [debug probe](CONFIGURATION.md#debug-probes) and read `text`: the
-  registry publishes no expiry date, limits the exporter's rate, or writes
-  the date under a key or in a form the type does not read, which
-  `fields` or `text` and a rule of your own can.
+  [debug probe](CONFIGURATION.md#debug-probes) and read `text`. The registry
+  publishes no expiry date, limits the exporter's rate, or writes the date
+  under a key or in a form that the type does not read; `fields` or `text`
+  and a rule of your own can read it then.
 - **`registered` is false for a domain that exists.** The target is a host
   under the domain, or the server asked is not the registry's.
 - **The registry closes the connection without an answer.** It limits the

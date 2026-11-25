@@ -10,14 +10,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A key of a type the build left out is read, as in a build with the type,
-// into a value of the Go type of its field there, so that what the decoder
-// and the load refuse of its value, at any depth, they refuse alike in
-// every build. The catalogue holds the shape of that Go type: a type of
-// internal/model, which every build has, by its name, and any other, a type
-// of the left-out request type's own, by its structure, which is made again
-// here (goTypeOf). A type that reads itself from YAML cannot be made again
-// so, and must be one of internal/model's (catalogueTypes).
+// A key of a type the build left out is read into a value of its field's Go
+// type, as in a build with the type. So the decoder and the load refuse the
+// same values, at any depth, in every build. The catalogue holds the shape
+// of that Go type. A type of internal/model, which every build has, is held
+// by its name. Any other type, one of the left-out request type's own, is
+// held by its structure, which is made again here (goTypeOf). A type that
+// reads itself from YAML cannot be made again this way, so it must be one
+// of internal/model's (catalogueTypes).
 
 // typeShape is a Go type as the catalogue holds it.
 type typeShape struct {

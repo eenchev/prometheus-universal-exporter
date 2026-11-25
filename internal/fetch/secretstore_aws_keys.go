@@ -1,8 +1,8 @@
 package fetch
 
-// The keys of an aws secret store, which every build knows, the ones
-// without the store too, so that the schema is the same for all of them and
-// a build without it refuses an entry for its type and not for its keys
+// The keys of an aws secret store. Every build knows them, including those
+// without the store, so the schema is the same for all of them. A build
+// without the store refuses an entry for its type and not for its keys
 // (secretstore_aws.go, secretstore_aws_none.go).
 var awsStoreKeys = []string{"region", "endpoint"}
 

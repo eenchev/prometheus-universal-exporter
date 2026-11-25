@@ -21,11 +21,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The smtp request type talks to a mail server as a client about to send a
-// message would, and stops before the message: the greeting, EHLO and the
-// extensions it lists, STARTTLS, AUTH when the collector has an account,
-// and, when it names a sender and recipients, MAIL FROM and RCPT TO, each
-// answered by the server and none followed by DATA. Nothing is ever sent.
+// The smtp request type talks to a mail server the way a client about to
+// send a message would, and stops before the message. It runs the
+// greeting, EHLO and the extensions it lists, STARTTLS, AUTH when the
+// collector has an account, and MAIL FROM and RCPT TO when it names a
+// sender and recipients. The server answers each, and none is followed by
+// DATA. Nothing is ever sent.
 //
 //	request:
 //	  type: smtp
@@ -41,11 +42,12 @@ import (
 // it, the extensions, the mechanisms AUTH offers, how AUTH ended, and the
 // code and text of the answer to MAIL FROM and to each RCPT TO. A server
 // that refuses a recipient has answered: the refusal is in the document,
-// and the scrape succeeds. A greeting that is no 220, an EHLO refused, TLS
-// that cannot be begun where it must and an AUTH refused fail the scrape.
+// and the scrape succeeds. The scrape fails on a greeting that is not 220,
+// a refused EHLO, TLS that cannot be started where it must be, or a refused
+// AUTH.
 //
-// The target is host, host:port, smtp://host:port or smtps://host:port:
-// port 25, and 465 for smtps://, which is TLS from the first byte. A
+// The target is host, host:port, smtp://host:port or smtps://host:port.
+// The default port is 25, or 465 for smtps://, which is TLS from the first byte. A
 // password is never sent over a connection that is not TLS, unless
 // starttls_mode: never says the server has none.
 //
@@ -84,10 +86,10 @@ const (
 // smtpPorts are the schemes of an smtp target and their default ports.
 var smtpPorts = map[string]int{"": 25, "smtp": 25, "smtps": 465}
 
-// smtpAddress is what an address of mail_from or rcpt_to may be once its
+// smtpAddress is what an address in mail_from or rcpt_to may be once its
 // placeholders are filled: a local part and a domain, with no blank, angle
-// bracket or control character, which would end the command it is written
-// in or begin another.
+// bracket or control character. Such a character would end the command it
+// is written in, or begin another.
 var smtpAddress = regexp.MustCompile(`^[^\s<>@\x00-\x1f\x7f]+@[^\s<>@\x00-\x1f\x7f]+$`)
 
 func init() {
@@ -484,15 +486,7 @@ func (smtpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	if err != nil {
 		return nil, err
 	}
-	resp := &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}
+	resp := jsonBody(body, target, c, start)
 	if state := conn.tlsState(); state != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: tlsConnectionOf(state)}
 	}
@@ -518,10 +512,10 @@ func smtpHelloName(conn *netConn) string {
 	return "[" + host + "]"
 }
 
-// smtpExtensions reads the lines of an EHLO answer after its first, which
-// names the server: each an extension's keyword, in upper case, with its
-// parameters as text or true when it has none; the mechanisms of AUTH; and
-// SIZE's limit, nil when the server says none.
+// smtpExtensions reads the lines of an EHLO answer after the first, which
+// names the server. It returns each extension's keyword in upper case, with
+// its parameters as text, or true when it has none; the mechanisms of AUTH;
+// and SIZE's limit, nil when the server gives none.
 func smtpExtensions(lines []string) (map[string]any, []string, *int64) {
 	extensions := map[string]any{}
 	mechanisms := []string{}
@@ -593,10 +587,10 @@ func (s *smtpSession) auth(c *model.Collector, own SMTPConfig, password string, 
 		}
 	case netAuthCRAMMD5:
 		if reply, err = s.command("AUTH CRAM-MD5", ""); err == nil && reply.Code == 334 {
-			// The challenge as the server wrote it, not as a failure
-			// would show it: a reply's text is cut where a failure's is
-			// and looked through for credentials, and base64 that ends
-			// in a word such as token== would come out masked.
+			// The challenge as the server wrote it, not as a failure would
+			// show it. A reply's text is cut where a failure's is and
+			// searched for credentials, so base64 that ends in a word such
+			// as token== would come out masked.
 			response, bad := netCRAMMD5Response(user, password, strings.Join(reply.lines, ""))
 			if bad != nil {
 				_, _ = s.command("*", "* (to end the login)")

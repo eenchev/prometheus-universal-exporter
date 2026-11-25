@@ -12,27 +12,27 @@ import (
 )
 
 // The defaults block of a file (model.CollectorDefaults) is given to the
-// collectors of that file as they are read, before anything is validated,
-// so a collector is checked, compared on a reload and keyed in the cache as
-// if it wrote every value it took: moving a value from the collectors into
-// defaults changes no collector, and changing a default changes each
+// collectors of that file as they are read, before any validation. A
+// collector is then checked, compared on a reload and keyed in the cache as
+// if it wrote every value it took. So moving a value from the collectors
+// into defaults changes no collector, and changing a default changes each
 // collector that takes it. The defaults of one file never reach the
-// collectors of another, the configuration's included.
+// collectors of another file, the configuration's own included.
 //
-// A value of the block is checked on its own first, where it does not
-// depend on the collector, and refused naming the block, once rather than
-// once for each collector; what does depend on the collector — whether its
-// request type takes a key, and a value the type holds to rules of its own,
-// a bucket for an allowed target of s3file, say — is checked with each
-// collector, whose error then says the value came from defaults.
+// A block value that does not depend on the collector is checked on its own
+// first. It is refused once, naming the block, rather than once per
+// collector. A value that does depend on the collector is checked with each
+// collector, and the error then says the value came from defaults. Examples
+// are whether the collector's request type takes a key, and a value the type
+// has its own rules for, such as a bucket for an allowed target of s3file.
 
-// applyDefaults gives the collectors of a file, decoded from the document
-// whose root mapping is root, the file's defaults block, and records on
-// each the keys it took (Collector.FromDefaults). own says the file is the
-// configuration itself rather than a collector file. A value of the block
-// that is wrong in itself is refused, and the block is then given to none;
-// so is a key that applies to no collector of the file, which would be a
-// setting nothing uses.
+// applyDefaults gives the file's defaults block to the collectors of a file,
+// decoded from the document whose root mapping is root. It records on each
+// collector the keys it took (Collector.FromDefaults). own says the file is
+// the configuration itself rather than a collector file. A block value that
+// is wrong in itself is refused, and the block is then given to no
+// collector. The same applies to a key that applies to no collector of the
+// file, since that would be a setting nothing uses.
 func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collectors []model.Collector, own bool) error {
 	if defaults == nil {
 		return nil
@@ -67,12 +67,12 @@ func applyDefaults(defaults *model.CollectorDefaults, root *yaml.Node, collector
 				}
 			}
 		}
-		// The block's proxy credentials are for a proxy: a collector that
-		// names its own proxy, or goes direct, takes none of them when the
-		// block names the proxy they are for, which would send them to a
-		// proxy they were not meant for. Credentials given without a proxy
-		// are for the collectors that name their own, and one that goes
-		// direct has no proxy to send them to.
+		// The block's proxy credentials are for a proxy. If the block names
+		// the proxy they are for, a collector that names its own proxy, or
+		// goes direct, takes none of them: they would go to a proxy they were
+		// not meant for. Credentials given without a proxy are for the
+		// collectors that name their own. A collector that goes direct has no
+		// proxy to send them to.
 		if slices.Contains(written, "request.proxy_url") && (x.Request.ProxyURL == model.ProxyDirect || slices.Contains(defaults.Keys, "request.proxy_url")) {
 			written = append(written, "request.proxy_basic_auth_file")
 		}
@@ -268,10 +268,10 @@ func withDefaultsNoted(err error, x *model.Collector) error {
 	return model.JoinProblems(out...)
 }
 
-// defaultsNoted is a warning validation gave about a collector, saying, as
-// withDefaultsNoted does of a problem, which of the keys it names came from
-// the file's defaults: a warning that the collector sets a key is about a
-// value written there.
+// defaultsNoted is a warning validation gave about a collector. Like
+// withDefaultsNoted does for a problem, it says which of the keys it names
+// came from the file's defaults. A warning that the collector sets a key is
+// about a value written there.
 func defaultsNoted(warning string, x *model.Collector) string {
 	return warning + defaultsNote(warning, x)
 }

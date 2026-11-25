@@ -6,19 +6,19 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
-// Every HTML page of the exporter — the landing page, the collectors page,
-// the debug page and the status page — is framed alike: the bar at the top
-// of each (pageChrome), the stylesheet (pageStyle), in the theme chosen in
-// the bar (themeHead), and the headers renderPage sets. The bar leads back to the
-// landing page and to every other page from wherever a page is served, so no
-// page is a dead end, and a page added later gets it by being rendered at
-// all: renderPage takes only data that carries a bar (framedPage).
+// Every HTML page of the exporter (the landing page, the collectors page,
+// the debug page and the status page) is framed the same way: the bar at
+// the top (pageChrome), the stylesheet (pageStyle) in the theme chosen in
+// the bar (themeHead), and the headers renderPage sets. From any page, the
+// bar leads back to the landing page and to every other page, so no page is
+// a dead end. A page added later gets the bar just by being rendered:
+// renderPage takes only data that carries a bar (framedPage).
 
-// pageChrome is the bar at the top of a page: Home, the landing page as a
-// link relative to the page, empty on the landing page itself; Links, the
-// other pages, the one shown marked; Docs, the documentation; and
-// Dangerous, --web.debug.dangerous, which every page's bar warns of, as the
-// debug page's playground then runs Python and reads the server's files.
+// pageChrome is the bar at the top of a page. Home is the landing page as a
+// link relative to the page, empty on the landing page itself. Links are the
+// other pages, with the current one marked. Docs is the documentation.
+// Dangerous is --web.debug.dangerous, which every page's bar warns of, as
+// the debug page's playground then runs Python and reads the server's files.
 type pageChrome struct {
 	Home      string
 	Links     []chromeLink
@@ -48,8 +48,8 @@ const (
 )
 
 // chromeFor is the bar of the page served at path. Its links are relative to
-// that path, as every link of the pages is, so they hold behind a reverse
-// proxy that serves the exporter under a path of its own; the status page is
+// that path, like every link of the pages, so they work behind a reverse
+// proxy that serves the exporter under a path of its own. The status page is
 // under the static targets path, one or more segments down.
 func (s *Server) chromeFor(path string) pageChrome {
 	up := rootLink(path)
@@ -81,10 +81,10 @@ const chromeTemplate = `{{define "chrome"}}<header class="site"><nav aria-label=
 {{- range .Links}}{{if .Current}}<span aria-current="page">{{.Label}}</span>{{else}}<a href="{{.Href}}">{{.Label}}</a>{{end}}{{end}}<a href="{{.Docs}}">Documentation</a>` + themePicker + `</span>
 </nav></header>{{end}}`
 
-// The theme is chosen in the bar of every page, as on the allocator's
-// (pagekit): themeHead sets the choice kept before the page is first drawn,
-// and themePicker, in the bar, changes it; the status page's refresh swaps
-// in its content alone and keeps it.
+// The theme is chosen in the bar of every page, as on the allocator's pages
+// (pagekit). themeHead applies the stored choice before the page is first
+// drawn, and themePicker, in the bar, changes it. The status page's refresh
+// swaps in only its content and keeps the theme.
 const (
 	themeHead   = pagekit.ThemeHead
 	themePicker = pagekit.ThemePicker

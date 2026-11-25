@@ -1,11 +1,11 @@
 # Graphite
 
-The `graphite` request type asks a Graphite render API — graphite-web,
-carbonapi, or anything that answers `/render` the same way — for the series of
-one or more Graphite expressions, and the `graphite` decoder turns what comes
+The `graphite` request type asks a Graphite render API (graphite-web,
+carbonapi, or anything that answers `/render` the same way) for the series
+of one or more Graphite expressions. The `graphite` decoder turns what comes
 back into a document that jq, yq or a Python script maps to Prometheus
-metrics, with the same rules, limits, caching and error policies as any other
-collector.
+metrics, with the same rules, limits, caching and error policies as any
+other collector.
 
 The exporter pulls, and so does this: it asks Graphite what it already holds.
 It does not accept carbon's pushed lines on a port. A job that writes carbon
@@ -64,20 +64,20 @@ is its host:
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
 | `headers`, credentials, `login`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `new_connection`, `ip_family`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers`, `rate_limit`, `proxy_url`, `proxy_basic_auth_file` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md), [A collector's own proxy](REQUESTS.md#a-collectors-own-proxy) for `proxy_url` and [Authentication](AUTHENTICATION.md), and [Logging in to a target](AUTHENTICATION.md#logging-in-to-a-target) for `login`. |
 
-The probe's target is the Graphite server, and a query it carries is sent as
-written, before `query` and the type's own parameters — except a pair of it
+The probe's target is the Graphite server. A query that it carries is sent
+as written, before `query` and the type's own parameters, except for a pair
 that names `target`, `from`, `until` or `format`, in any case, which is
-dropped: those are the collector's, so a probe whose target is
-`graphite:8080/?target=secret.*` asks for the collector's expressions and no
-other, in the collector's window, as JSON.
+dropped: those belong to the collector. A probe whose target is
+`graphite:8080/?target=secret.*` therefore asks for the collector's
+expressions and no other, in the collector's window, as JSON.
 
 The request is a `GET`; `method` and `body` are refused, as is any key of
 another request type. When the expressions together are too long for a URL
-every proxy passes — over 2 KiB encoded — the same parameters go as a form
-with `POST` instead, which graphite-web and carbonapi read alike; it is
-retried as a `GET` would be, since it only reads, and the verbose
-`http_method` label says `POST`. Which one a collector uses depends only on
-its expressions, so it never changes from one scrape to the next.
+that every proxy passes (over 2 KiB encoded), the same parameters go as a
+form with `POST` instead, which graphite-web and carbonapi read alike. The
+`POST` is retried as a `GET` would be, because it only reads, and the verbose
+`http_method` label says `POST`. Which method a collector uses depends only
+on its expressions, so it never changes from one scrape to the next.
 
 Every expression is checked when the configuration loads — not empty, its
 quotes closed, its brackets balanced, and listed once — so a typo stops the
@@ -90,12 +90,12 @@ The answer must be render JSON, a list of series. Anything else — the login
 page of a proxy in front of Graphite, an error in JSON — fails the probe
 saying Graphite did not answer with render JSON, and how its answer starts.
 
-The same `/probe` parameters as `http` apply — `path`, `timeout`,
+The same `/probe` parameters as for `http` apply (`path`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `new_connection`,
-`ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>` and `param_<name>` — and `from` and `until`,
-which replace the window for that probe: `params: {from: [-1h]}` on a
-monitor. `method` and `body` get a `400`, and so do `from` and `until` for a
-collector of another type.
+`ip_family`, `retry_attempts`, `retry_backoff`, `header_<name>` and
+`param_<name>`), plus `from` and `until`, which replace the window for that
+probe: `params: {from: [-1h]}` on a monitor. `method` and `body` get a
+`400`, and so do `from` and `until` for a collector of another type.
 
 ## Placeholders
 
@@ -109,14 +109,16 @@ label values](REQUESTS.md#in-label-values)).
 
 A value lands inside a Graphite expression, which has no escaping, so it may
 hold only what a path node or a tag value is made of: letters, digits and
-`_ - . : @ % + ~`. Anything else — a quote, a comma, a bracket, a `*` — is
-refused with `400`, since it could change the expression rather than fill a
-value in it: `x'),sumSeries('y` would otherwise add a series nobody
-configured. A default is held to the same rule when the configuration loads:
-`{{param_env:prod*}}` stops the exporter at startup, since every probe that
-left `param_env` out would be refused. The rule is the expression's: a
-parameter that fills only a label value is written as given, and one that
-fills both is held to it.
+`_ - . : @ % + ~`.
+
+- Anything else (a quote, a comma, a bracket, a `*`) is refused with `400`,
+  because it could change the expression instead of filling a value in it:
+  `x'),sumSeries('y` would otherwise add a series that nobody configured.
+- A default is held to the same rule when the configuration loads:
+  `{{param_env:prod*}}` stops the exporter at startup, because every probe
+  that left `param_env` out would be refused.
+- The rule belongs to the expression: a parameter that fills only a label
+  value is written as given, and one that fills both is held to the rule.
 
 ## The series document
 
@@ -142,20 +144,26 @@ Whatever Graphite answers is decoded into one document:
 | `time` | The newest point's time, in Unix seconds. Only for rules to read: samples are exported without a timestamp, like every collector's. |
 | `points` | Every point with a value, `[value, time]`, oldest first, for a rule that wants more than `value`. |
 
-A point without a value — `null`, which Graphite writes for an interval
-nothing was written in — is left out, and so is an infinite one, which
-graphite-web writes as `1e9999` or `-1e9999`; and a series left with no point at all
-is left out of the document, rather than failing a rule on every scrape as a
-series without a value. So is a series older than
-[`max_age`](#which-value), and a series answered twice — the same path, tags
-and points, because two expressions both matched it. A series with the same
-path but other points, from different functions, is kept: give it a
-different name with `alias()` so the rules can tell the two apart.
+Some series and points are left out of the document:
+
+- A point without a value is left out: `null`, which Graphite writes for an
+  interval that nothing was written in. So is an infinite point, which
+  graphite-web writes as `1e9999` or `-1e9999`.
+- A series left with no point at all is left out, instead of failing a rule
+  on every scrape as a series without a value. So is a series older than
+  [`max_age`](#which-value).
+- A series answered twice (the same path, tags and points, because two
+  expressions both matched it) is kept only once.
+
+A series with the same path but other points, from different functions, is
+kept: give it a different name with `alias()` so that the rules can tell the
+two apart.
 
 What is left out is counted in the collector's
 [self-metrics](SELF-METRICS.md), `http_exporter_decoder_series_left_out_total`,
-and logged at debug level with how many for each reason, so a metric that is
-missing because its series was left out can be told from one nobody wrote.
+and logged at debug level with how many for each reason. A metric that is
+missing because its series was left out can therefore be told apart from
+one that nobody wrote.
 
 ## Mapping series to metrics
 
@@ -217,15 +225,16 @@ with it is refused too.
 
 ## The window
 
-The window, `-15min` to `now` by default, must hold at least one point with a
-value of every series you map. Graphite answers `null` for an interval nothing
-was written in yet, and for the current, unfinished interval of a series
-stored at a coarse resolution, so a window of a few minutes over a series
-stored every five or ten minutes, or one a statsd flush writes late, can hold
-nothing but nulls. Fifteen minutes covers one-minute and five-minute
-resolutions; for coarser ones set `from` to a few intervals back. The window
-decides what `value` can reach, and [`max_age`](#which-value) how old the
-newest point may be, so a wide window does not keep a stale series alive.
+The window, `-15min` to `now` by default, must hold at least one point with
+a value for every series that you map. Graphite answers `null` for an
+interval that nothing was written in yet, and for the current, unfinished
+interval of a series stored at a coarse resolution. A window of a few
+minutes over a series stored every five or ten minutes, or one that a
+statsd flush writes late, can therefore hold nothing but nulls. Fifteen
+minutes covers one-minute and five-minute resolutions; for coarser ones, set
+`from` to a few intervals back. The window decides what `value` can reach,
+and [`max_age`](#which-value) how old the newest point may be, so a wide
+window does not keep a stale series alive.
 
 A long window returns every point in it, which is wasted on `value: last` and
 can reach `max_response_bytes` for many series. `maxDataPoints` asks Graphite
@@ -279,42 +288,53 @@ collectors:
 ```
 
 A file ending in `.graphite` or `.carbon` is read this way with
-`decoder.type` `auto`, and so is a file with another extension whose every
-line is a carbon line — a path, a value and a timestamp, some path with a dot
-or a tag. `decoder.type: graphite` reads any file this way.
+`decoder.type` `auto`, and so is a file with another extension in which
+every line is a carbon line: a path, a value and a timestamp, with some path
+holding a dot or a tag. `decoder.type: graphite` reads any file this way.
 
-Each line is `<path> <value> <timestamp>`, the timestamp in Unix seconds. A
-line without one, or with `-1`, is taken as written now, as carbon takes it. A
-timestamp in milliseconds — anything from 10¹¹, the year 5138 in seconds — is
-refused, naming the line, rather than read as a time thousands of years away
-that no `max_age` would ever call stale. The value and the timestamp are
-numbers [as a rule reads them](CONFIGURATION.md#what-counts-as-a-number):
-`1_000` and `0x1p-2` are not, and a line with one is not a carbon line.
-Lines of one path, and the same tags in any order, are one series with a point
-per line, so a file that is appended to gives `last` its newest line. Blank
-lines and lines starting with `#` are skipped; any other line that is not a
-carbon line fails the scrape, naming the line. `NaN` and infinite values are
-left out, as Graphite's `null`.
+Each line is `<path> <value> <timestamp>`, the timestamp in Unix seconds.
 
-A file a job appends to can end in a line the job is still writing, and one
-torn line then fails the whole file. `response.graphite.invalid_lines: skip`
-leaves such lines out instead and reads the rest. Skipped lines are counted
-in `http_exporter_decoder_lines_skipped_total` and logged at warn level with
-the first of them — once, and then sparingly while they keep being skipped,
-as a failing target is — and a read that skips none again logs that it did.
+- A line without a timestamp, or with `-1`, is taken as written now, as
+  carbon takes it.
+- A timestamp in milliseconds (anything from 10¹¹, the year 5138 in
+  seconds) is refused, naming the line, instead of being read as a time
+  thousands of years away that no `max_age` would ever call stale.
+- The value and the timestamp are numbers
+  [as a rule reads them](CONFIGURATION.md#what-counts-as-a-number): `1_000`
+  and `0x1p-2` are not numbers, and a line with one is not a carbon line.
+- Lines of one path, with the same tags in any order, are one series with a
+  point per line, so for a file that is appended to, `last` gives its
+  newest line.
+- Blank lines and lines starting with `#` are skipped. Any other line that
+  is not a carbon line fails the scrape, naming the line.
+- `NaN` and infinite values are left out, as Graphite's `null` is.
+
+A file that a job appends to can end in a line that the job is still
+writing, and one torn line then fails the whole file.
+`response.graphite.invalid_lines: skip` leaves such lines out instead and
+reads the rest. Skipped lines are counted in
+`http_exporter_decoder_lines_skipped_total` and logged at warn level with
+the first of them: once, and then sparingly while they keep being skipped,
+as for a failing target. A read that skips none again logs that it did.
 
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `graphite` collector is scraped by
-the exporter on its interval. Its `target` is the Graphite server's URL, and
-under `request` it may set `path`, `timeout`, `insecure_skip_verify`,
-`follow_redirects`, `enable_http2`, `new_connection`, `ip_family`, `retry`, static `headers`, the credential
-keys (`basic_auth`, `basic_auth_file`, `bearer_token`, `bearer_token_file`),
-its own [`login`](AUTHENTICATION.md#logging-in-to-a-target),
-its own [`rate_limit`](REQUESTS.md#rate-limiting),
-its own [`accept_status`](REQUESTS.md#accepting-other-statuses), its own
-[`tls` block](STATIC-TARGETS.md#credentials-and-tls-of-a-target), and its own
-`targets`, `from` and `until`, which replace the collector's:
+the exporter on its interval. Its `target` is the Graphite server's URL.
+Under `request` it may set:
+
+- `path`, `timeout`, `insecure_skip_verify`, `follow_redirects`,
+  `enable_http2`, `new_connection`, `ip_family`, `retry` and static
+  `headers`;
+- the credential keys (`basic_auth`, `basic_auth_file`, `bearer_token`,
+  `bearer_token_file`);
+- its own [`login`](AUTHENTICATION.md#logging-in-to-a-target),
+  [`rate_limit`](REQUESTS.md#rate-limiting),
+  [`accept_status`](REQUESTS.md#accepting-other-statuses) and
+  [`tls` block](STATIC-TARGETS.md#credentials-and-tls-of-a-target);
+- its own `targets`, `from` and `until`, which replace the collector's.
+
+For example:
 
 ```yaml
 interval: 1m

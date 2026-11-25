@@ -15,24 +15,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The debug page shows a configured collector it runs as YAML, in place of
-// the collector written on the page, so what is shown is what runs. It is
-// the collector as its file writes it (model.Collector.Written): the keys as
-// the operator wrote them, the ${NAME} references unexpanded, the keys it
-// takes from its file's defaults added with a comment that says so. A
-// collector the exporter holds without a file is shown as it holds it, its
-// empty keys left out.
+// When the debug page runs a configured collector, it shows it as YAML in
+// place of the collector written on the page, so what is shown is what
+// runs. It is the collector as its file writes it (model.Collector.Written):
+// the keys as the operator wrote them, the ${NAME} references unexpanded,
+// and the keys taken from its file's defaults added with a comment that
+// says so. A collector the exporter holds without a file is shown as it
+// holds it, with its empty keys left out.
 //
 // The page is for whoever may change the configuration, but what it shows
-// is shown on a page, at edit as at full, so no credential is: a value whose
-// key reads as a credential's (fetch.CredentialName) — bearer_token,
-// basic_auth's password, a header or a query parameter named like one, a
-// login's fields — is withheld, and so is every path a *_file key names,
-// which the pages never show; a header's value and a URL are withheld as a
-// debug report withholds them; and a Python script, which is shown as
-// written, has what reads as a credential in it masked (fetch.RedactText).
+// is shown on a page, at edit as at full, so it shows no credential:
+//
+//   - a value whose key reads as a credential's (fetch.CredentialName) is
+//     withheld: bearer_token, basic_auth's password, a header or a query
+//     parameter named like one, a login's fields;
+//   - every path a *_file key names is withheld, as the pages never show it;
+//   - a header's value and a URL are withheld as a debug report withholds
+//     them;
+//   - a Python script is shown as written, with what reads as a credential
+//     in it masked (fetch.RedactText).
+//
 // The YAML pasted back as a collector written on the page reads as it does
-// in its file, but for what was withheld.
+// in its file, except for what was withheld.
 
 // debugCollectorPath answers a configured collector as the page shows it,
 // ?name=<name>, as JSON.
@@ -49,15 +53,16 @@ var notCredentials = map[string]bool{
 // urlValue is a value written as an absolute URL.
 var urlValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
 
-// commandCredential is a command of a text protocol that logs in, which a
-// tcp collector's send may write: AUTH of Redis, Memcached's SASL and SMTP,
-// PASS and APOP of POP3 and FTP, at the start of a line or after a ; that
-// puts several commands on one; IMAP's tagged LOGIN with its user and
-// password; Redis's HELLO with AUTH; and AUTH framed as RESP, an array's
-// bulk string AUTH followed by the next one's length, as a HELLO's AUTH is
-// framed too. What follows the command is a credential whatever it looks
-// like, which fetch.RedactText, reading names and values, cannot tell. A
-// word that only begins with one, such as author, is no command.
+// commandCredential is a login command of a text protocol, which a tcp
+// collector's send may write. It covers AUTH of Redis, Memcached's SASL and
+// SMTP, and PASS and APOP of POP3 and FTP, at the start of a line or after
+// a ; that puts several commands on one. It also covers IMAP's tagged LOGIN
+// with its user and password, Redis's HELLO with AUTH, and AUTH framed as
+// RESP: an array's bulk string AUTH followed by the next one's length, as a
+// HELLO's AUTH is framed too. What follows the command is a credential
+// whatever it looks like, and fetch.RedactText, which reads names and
+// values, cannot tell that. A word that only begins with one, such as
+// author, is no command.
 var commandCredential = regexp.MustCompile(`(?im)` +
 	`(?:^|;)[ \t]*(?:auth|pass|apop)[ \t]+\S` +
 	`|^[ \t]*[A-Za-z0-9.]+[ \t]+login[ \t]+\S+[ \t]+\S` +
@@ -94,10 +99,10 @@ type debugStaticTarget struct {
 }
 
 // debugStaticTargets are the static targets in force that are scraped
-// through the collector named name, in the order of their file; none for
-// no name. The page offers these alone: the collector chosen, or the one the
-// playground was copied from, is the one a response comes through, as a
-// fetched target's does, so a static target is scraped through it.
+// through the collector named name, in the order of their file, or none for
+// no name. The page offers only these. A response comes through the
+// collector chosen, or the one the playground was copied from, as a fetched
+// target's does, so a static target is scraped through it.
 func debugStaticTargets(followed *followedConfig, name string) []debugStaticTarget {
 	out := []debugStaticTarget{}
 	if name == "" {
@@ -173,13 +178,13 @@ func foldedScalars(n *yaml.Node, out []*yaml.Node) []*yaml.Node {
 }
 
 // writtenBlocks puts shownBlock<i> in place of each folded block scalar of
-// the collector, folded, that its file writes over several lines
-// (model.Collector.WrittenBlocks), and gives what writes the blocks in
+// the collector (folded) that its file writes over several lines
+// (model.Collector.WrittenBlocks). It returns what writes the blocks back in
 // their place once the YAML is encoded. The encoder writes a folded scalar
-// on one line, however long, as its value has it; a SQL statement of four
-// lines would run off the editor. Only a block whose lines still read as
-// the value shown, which the withholding has not changed, is written as
-// its file writes it.
+// on one line, however long, as its value has it, so a SQL statement of four
+// lines would run off the editor. A block is written as its file writes it
+// only when its lines still read as the value shown, that is, when the
+// withholding has not changed it.
 func writtenBlocks(x *model.Collector, folded []*yaml.Node) blockLines {
 	var out blockLines
 	if x.Written == nil || len(folded) != len(x.WrittenBlocks) {
@@ -364,14 +369,15 @@ func inRequest(path string) bool {
 	return path == "request" || strings.HasPrefix(path, "request.")
 }
 
-// freeTextCredential says whether n, a string of the request block whose
-// key does not read as a credential's, such as an http body, a grpc
-// message, a tcp send, a redis command's argument or a SQL statement, holds
-// what reads as one: what fetch.RedactText masks, as it masks a Python
-// script's, or a protocol's login command (commandCredential). Such a value
-// is withheld whole, not masked where it reads as one, since a credential
-// in free text may not look like one to the rule: a body that writes
-// password=hunter2 may write the same password elsewhere in it.
+// freeTextCredential says whether n holds what reads as a credential. n is
+// a string of the request block whose key does not read as a credential's,
+// such as an http body, a grpc message, a tcp send, a redis command's
+// argument or a SQL statement. It holds one when it has what
+// fetch.RedactText masks, as it masks a Python script's, or a protocol's
+// login command (commandCredential). Such a value is withheld whole rather
+// than masked where it reads as one, since a credential in free text may
+// not look like one to the rule: a body that writes password=hunter2 may
+// write the same password elsewhere in it.
 func freeTextCredential(n *yaml.Node) bool {
 	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
 		return false

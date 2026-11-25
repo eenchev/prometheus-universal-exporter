@@ -18,10 +18,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The redis request type speaks RESP2, the protocol every Redis and Valkey
-// server answers a client in until it asks for RESP3 with HELLO 3, which
-// this client never sends. A command is an array of bulk strings; a reply
-// is one of five kinds, told apart by its first byte:
+// The redis request type speaks RESP2. Every Redis and Valkey server uses
+// this protocol with a client until the client asks for RESP3 with HELLO 3,
+// which this client never sends. A command is an array of bulk strings. A
+// reply is one of five kinds, identified by its first byte:
 //
 //	+OK\r\n                    simple string
 //	-ERR unknown command\r\n   error
@@ -30,14 +30,14 @@ import (
 //	*2\r\n:1\r\n:2\r\n         array of replies, *-1\r\n for nil
 //
 // Everything the server sends is read against one budget, the collector's
-// response limit, counted in the bytes of the replies as they come off the
-// wire. A length the server declares is checked against what is left of the
-// budget before anything is read for it, and nothing is allocated for it
-// beyond what the server has actually sent: a bulk string's length of a
-// gigabyte, followed by nothing, costs the bytes that came and a failed
-// scrape, never a gigabyte. An array's length is checked against the least
-// its elements could take on the wire, three bytes each, and arrays nest
-// no deeper than redisMaxDepth.
+// response limit, counted in reply bytes as they come off the wire. A
+// length the server declares is checked against the remaining budget
+// before anything is read for it. Nothing is allocated for it beyond what
+// the server has actually sent: a bulk string declared as a gigabyte and
+// followed by nothing costs only the bytes that arrived and a failed
+// scrape, never a gigabyte. An array's length is checked against the
+// minimum its elements could take on the wire, three bytes each. Arrays
+// nest no deeper than redisMaxDepth.
 
 // redisMaxLine is the longest line of a reply other than a bulk string's
 // data: a reply's kind and length, an integer, a simple string or an
@@ -60,12 +60,12 @@ func (e *redisError) Error() string { return "the server answered: " + e.text }
 // errRedisProtocol marks a reply that is no RESP2 reply at all.
 var errRedisProtocol = errors.New("not a RESP2 reply")
 
-// errRedisNotText is the failure of a reply holding bytes that are not
-// UTF-8: the document is JSON, whose strings are text, and a value put in it
-// would have each such byte replaced with U+FFFD, a different value, with
-// nothing to say so. A key holding a serialized object, a compressed value
-// or a counter written in binary is read with a command that answers its
-// size or its kind instead, such as STRLEN, TYPE or OBJECT ENCODING.
+// errRedisNotText is the failure for a reply holding bytes that are not
+// UTF-8. The document is JSON, whose strings are text, so each such byte
+// would be replaced with U+FFFD, silently giving a different value. A key
+// holding a serialized object, a compressed value or a binary counter is
+// read instead with a command that returns its size or kind, such as
+// STRLEN, TYPE or OBJECT ENCODING.
 var errRedisNotText = errors.New("the reply holds bytes that are not UTF-8 text, which the JSON document cannot hold as they are; a redis collector reads values stored as text, and the size or kind of others, with STRLEN, TYPE or OBJECT ENCODING")
 
 // redisText is a reply's text, or errRedisNotText.
@@ -398,10 +398,11 @@ func redisInfoScalar(value string) any {
 	return value
 }
 
-// redisInfoValue is a value of an INFO line. One made of name=value pairs
-// joined by commas, as the keyspace's db0:keys=1,expires=0,avg_ttl=0, a
-// replica's slave0:ip=...,port=...,lag=0 and every commandstats line are,
-// is an object of them; any other is a scalar (redisInfoScalar).
+// redisInfoValue is the value of an INFO line. A value made of name=value
+// pairs joined by commas is an object of those pairs. Examples are the
+// keyspace's db0:keys=1,expires=0,avg_ttl=0, a replica's
+// slave0:ip=...,port=...,lag=0 and every commandstats line. Any other value
+// is a scalar (redisInfoScalar).
 func redisInfoValue(value string) any {
 	if !strings.Contains(value, "=") {
 		return redisInfoScalar(value)
@@ -417,11 +418,11 @@ func redisInfoValue(value string) any {
 	return pairs
 }
 
-// parseRedisInfo adds the sections of an INFO reply to info: each
-// "# Section" line opens one, named in lower case with _ for a blank, and
-// each name:value line under it is a value of it (redisInfoValue). It
-// returns the sections the reply held, which a section asked for and not
-// known to the server has none of.
+// parseRedisInfo adds the sections of an INFO reply to info. Each
+// "# Section" line opens a section, named in lower case with _ for a blank.
+// Each name:value line under it is a value of that section
+// (redisInfoValue). It returns the number of sections the reply held. A
+// requested section the server does not know adds none.
 func parseRedisInfo(text string, info map[string]map[string]any) int {
 	sections := 0
 	var section map[string]any

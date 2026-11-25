@@ -5,7 +5,6 @@ package fetch
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,27 +23,29 @@ import (
 )
 
 // The whois request type reads a domain's registration: when it expires,
-// who its registrar is, its status and its name servers. Its target is the
+// its registrar, its status and its name servers. Its target is the
 // domain. A scrape asks the registry's WHOIS server (RFC 3912: the name and
-// a line end over TCP port 43, the answer until the server closes), which
-// request.whois_server names or, left out, IANA's server does for the domain's
-// top-level domain, and answers one JSON document: the dates the answer
-// holds, read from the many ways registries write them, the registrar, the
-// status values and the name servers, every `key: value` line by its key,
-// and the text as it came.
+// a line end over TCP port 43, then the answer until the server closes).
+// request.whois_server names the server. If it is left out, IANA's server
+// names the one for the domain's top-level domain. The answer is one JSON
+// document with:
+//   - the dates the answer holds, parsed from the many formats registries use;
+//   - the registrar, the status values and the name servers;
+//   - every `key: value` line, by its key;
+//   - the original text.
 //
 //	request:
 //	  type: whois
 //	  # whois_server: whois.nic.example
 //
-// WHOIS has no format, so the document is what could be read: a date no
-// line holds is null, and the rule that reads it fails, rather than a
-// domain looking as if it never expired. A registry that knows no such
-// domain is not a failure either: the document says registered: false.
+// WHOIS has no format, so the document holds what could be read. A date no
+// line holds is null, and the rule that reads it fails, rather than the
+// domain seeming never to expire. A registry that does not know the domain
+// is not a failure either: the document says registered: false.
 //
-// Registries limit how often one address may ask, some to a few questions
-// a day, so a whois collector is cached for hours (docs/WHOIS.md), and what
-// IANA said of a top-level domain is kept for a day.
+// Registries limit how often one address may ask, some to a few queries a
+// day. So a whois collector is cached for hours (docs/WHOIS.md), and IANA's
+// answer for a top-level domain is kept for a day.
 
 // WhoisConfig is a whois collector's own request keys.
 type WhoisConfig struct {
@@ -102,7 +103,19 @@ func init() {
 }
 
 // whoisRequester is the whois request type's Requester.
-type whoisRequester struct{}
+type whoisRequester struct{ parsedTarget[whoisTarget] }
+
+// whoisTarget reads a whois target: label returns the url label of a
+// request of it.
+type whoisTarget struct{}
+
+func (whoisTarget) label(target string) (string, error) {
+	domain, err := parseWhoisDomain(target)
+	if err != nil {
+		return "", err
+	}
+	return "whois://" + domain, nil
+}
 
 // Validate checks a whois collector's request: the server is host or
 // host:port, and the prefix one short line.
@@ -136,32 +149,8 @@ func (whoisRequester) Fetch(ctx context.Context, target string, c *model.Collect
 	return fetchWhois(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a whois collector's target, which is a domain.
-func (whoisRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseWhoisDomain(target)
-	return err
-}
-
-// Label is the url label of a whois request: whois:// and the domain.
-func (whoisRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	domain, err := parseWhoisDomain(target)
-	if err != nil {
-		return "", err
-	}
-	return "whois://" + domain, nil
-}
-
 // Method is the http_method label of a whois request.
 func (whoisRequester) Method(*model.Collector, RequestOverrides) string { return whoisMethod }
-
-// Display renders a whois target for logs and labels: as written, since it
-// holds no credentials, when it is a domain at all.
-func (whoisRequester) Display(target string) string {
-	if _, err := parseWhoisDomain(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // parseWhoisDomain reads a target: a domain name of two labels or more, an
 // internationalised one in its ASCII form, as every host is written.
@@ -282,19 +271,7 @@ func fetchWhois(ctx context.Context, target string, c *model.Collector, override
 	}
 	doc.read(text)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // whoisAsk sends one question to server and reads the answer until the
@@ -412,12 +389,13 @@ func netShownLine(text string) string {
 var whoisBracketed = regexp.MustCompile(`^(?:[a-z]\. )?\[([^\]]{1,64})\]\s*(.*)$`)
 
 // whoisFields reads the `key: value` lines of an answer, by key in lower
-// case, and the keys in the order they came. A key whose value is on the
-// lines under it, further in, has those lines for values, and so has a
-// heading written without a colon; a field under either is under its own
-// key and under the two together, as "registrar organization". Comment lines are
-// passed over, and nothing is read past the line that says when the
-// database was last updated, under which registries write their terms.
+// case, and returns the keys in the order they came. A key whose value is
+// on the indented lines below it takes those lines as its values, and so
+// does a heading written without a colon. A field under either is stored
+// under its own key and under both keys joined, as "registrar
+// organization". Comment lines are skipped. Nothing is read past the line
+// that says when the database was last updated, below which registries
+// write their terms.
 func whoisFields(text string) (fields map[string][]string, order []string) {
 	fields = map[string][]string{}
 	add := func(key, value string) {
@@ -591,10 +569,10 @@ func (d *whoisDocument) read(text string) {
 	}
 }
 
-// whoisDateLayouts are the ways registries write a date, the day before
-// the month only where the month is a name or the parts are dotted: a date
-// of numbers and slashes or dashes that begins with the day reads as
-// another date in half the world, and is not guessed at.
+// whoisDateLayouts are the formats registries write dates in. The day comes
+// before the month only where the month is a name or the parts are dotted.
+// A date of numbers and slashes or dashes that starts with the day reads
+// as a different date in half the world, so it is not guessed at.
 var whoisDateLayouts = []string{
 	time.RFC3339Nano,
 	"2006-01-02T15:04:05.999999999Z0700",

@@ -8,15 +8,15 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
-// A page cell of free text — an error, which can quote a whole URL or a
-// target's answer, or a target's address — has no length of its own, and one
+// A page cell of free text (an error, which can quote a whole URL or a
+// target's answer, or a target's address) has no length of its own. One
 // long value would make its table as tall as the text. Past
-// longPreviewRunes characters or longPreviewLines lines a cell shows the
-// start of it, and the whole text one click away: the template "long"
-// writes a <details> whose summary is the start and whose body is the whole
-// text, so a page without JavaScript opens it in place, and a page's script
-// may show the body in a dialog instead (the status page does). Shorter
-// text is written as it is.
+// longPreviewRunes characters or longPreviewLines lines, a cell shows the
+// start of the text, with the whole text one click away. The template
+// "long" writes a <details> whose summary is the start and whose body is the
+// whole text. A page without JavaScript opens it in place, and a page's
+// script may show the body in a dialog instead (the status page does).
+// Shorter text is written as it is.
 const (
 	longPreviewRunes = 160
 	longPreviewLines = 3
@@ -53,10 +53,10 @@ var pageFuncs = template.FuncMap{"long": clipLong, "lastError": statusLastError,
 // of the value; the body is a <pre> so the whole text keeps its lines.
 const longTemplate = `{{define "long"}}{{if .Long}}<details class="long"><summary aria-label="Show the whole {{.Kind}}" data-kind="{{.Kind}}"><span class="preview">{{.Preview}}</span></summary><pre class="whole">{{.Text}}</pre></details>{{else}}{{.Text}}{{end}}{{end}}`
 
-// longStyle is the part of pageStyle for longTemplate: the start is cut at
-// three lines as well, however narrow the cell, and the summary says it
-// opens, or, opened in place without a script, closes. A <details> is a
-// block of its own, so a line break after it would leave a blank line.
+// longStyle is the part of pageStyle for longTemplate. The start is also
+// cut at three lines, however narrow the cell. The summary says it opens,
+// or, when opened in place without a script, that it closes. A <details> is
+// its own block, so a line break after it would leave a blank line.
 const longStyle = `
 details.long > summary { list-style: none; cursor: pointer; }
 details.long > summary::-webkit-details-marker { display: none; }

@@ -13,16 +13,16 @@ import (
 // A debug probe (/probe?debug=true) reports every request a trip sent: each
 // attempt, each redirect followed and each gRPC call, with the headers as
 // they went out and how each ended. The fetch functions record them in the
-// RequestTrace of the context, when there is one; a trip without it records
+// context's RequestTrace, when there is one. A trip without one records
 // nothing. Credentials are recorded as sent: the caller redacts them before
 // showing anything.
 //
-// The trace of a probe or a scrape exported over OTLP (otlp.traces) records
-// the same requests, with WithSpanTrace, for its spans: each one's method,
-// URL, page, status and times, and none of its headers, which no span shows
-// and which would be a copy of every request's for nothing. Such a trip is
-// no debug run (debugRun): it counts in every self-metric as it would
-// without its trace.
+// The trace of a probe or scrape exported over OTLP (otlp.traces) records
+// the same requests for its spans, with WithSpanTrace: each one's method,
+// URL, page, status and times. It records none of the headers, since no
+// span shows them and copying every request's headers would be wasted.
+// Such a trip is not a debug run (debugRun): it counts in every
+// self-metric as it would without its trace.
 
 // RequestTrace is the requests one trip sent, in order. spans says it is the
 // trace of an exported trip's spans, which keeps no headers and is no debug
@@ -56,26 +56,26 @@ type TracedRequest struct {
 	// and WithheldWhy says why the redirect was not trusted.
 	Withheld    []string
 	WithheldWhy string
-	// Outcome is how it ended: a status, a gRPC code, or the error, as a
-	// debug report shows it. It may quote what the target sent — a
-	// greeting, a command's stderr, a status line's reason — so a span,
-	// which leaves the exporter as a log line does, never carries it: a
-	// span has Failed and Facts instead.
+	// Outcome is how the request ended: a status, a gRPC code, or the
+	// error, as a debug report shows it. It may quote what the target sent
+	// (a greeting, a command's stderr, a status line's reason). A span
+	// leaves the exporter as a log line does, so it never carries Outcome:
+	// a span has Failed and Facts instead.
 	Outcome string
 	// Failed says the request got no answer, or an answer its request type
 	// takes for a failure: an error, or a connection lost before it was
 	// answered. An HTTP answer's failure is its Status.
 	Failed bool
-	// Facts are what the request type tells of how the request ended, for
-	// its span: numbers, yes-or-no answers and names of the exporter's own
-	// vocabulary — a response code's, a TLS version's — that it worked out
-	// of the answer, never text the target sent.
+	// Facts are what the request type tells about how the request ended,
+	// for its span: numbers, yes-or-no answers and names from the
+	// exporter's own vocabulary (a response code's, a TLS version's) worked
+	// out from the answer. They are never text the target sent.
 	Facts []TraceFact
-	// Wait is, under request.retry.retry_after, how long the trip waited
-	// before retrying the request and why, or why it was not retried when
-	// a Retry-After asked for longer than its time left; and, under
-	// request.rate_limit, how long the request waited for its turn before
-	// it was sent; "" otherwise.
+	// Wait is "" by default. Under request.retry.retry_after, it is how
+	// long the trip waited before retrying the request and why, or why it
+	// was not retried when a Retry-After asked for longer than its time
+	// left. Under request.rate_limit, it is how long the request waited for
+	// its turn before it was sent.
 	Wait     string
 	Duration time.Duration
 	// Status is the HTTP status of the answer to an HTTP request, 0 for
@@ -91,22 +91,23 @@ type TracedRequest struct {
 	// (otlp.traces.propagate), which its CLIENT span is made with; zero
 	// when it sent none of the exporter's.
 	SpanID [8]byte
-	// Phases are the phases of an HTTP request that were timed, as
-	// $timings has them (HTTPTrip): the name's lookup, the connection, the
-	// TLS handshake, each only when the request made it, and the time to
-	// the answer's first byte, from the request's start; or of a
-	// connection another type made for the request (connTiming): its
-	// lookup, connection and TLS or SSH handshake, without first_byte. nil
-	// when none was, as for a request on a connection kept from before.
+	// Phases are the timed phases of the request, or nil when none was
+	// timed, as for a request on a connection kept from before. For an
+	// HTTP request they are as $timings has them (HTTPTrip): the name
+	// lookup, the connection and the TLS handshake, each only when the
+	// request made it, and the time from the request's start to the
+	// answer's first byte. For a connection another type made for the
+	// request (connTiming): its lookup, connection and TLS or SSH
+	// handshake, without first_byte.
 	Phases  []TracedPhase
 	started time.Time
 }
 
-// TracedPhase is one phase of a request: an http request's dns, connect,
-// tls or first_byte, or a connection's another type made for its request,
-// connection.dns, connection.connect, connection.tls or
-// connection.handshake (an SSH connection's), with when it began and
-// ended.
+// TracedPhase is one phase of a request, with when it began and ended. It
+// is an http request's dns, connect, tls or first_byte, or a phase of a
+// connection another type made for its request: connection.dns,
+// connection.connect, connection.tls or connection.handshake (an SSH
+// connection's).
 type TracedPhase struct {
 	Name       string
 	Start, End time.Time
@@ -195,11 +196,11 @@ func earlier(a, b time.Time) time.Time {
 	return a
 }
 
-// debugRun reports whether ctx is a debug run's — a debug probe, a debug
-// scrape of a static target or a debug page's fetch — whose trips record
-// their requests (WithRequestTrace) and count in no self-metric of the
-// collector's (§ 42.17). An exported trip's
-// trace (WithSpanTrace) is no debug run's.
+// debugRun reports whether ctx belongs to a debug run: a debug probe, a
+// debug scrape of a static target or a debug page's fetch. Its trips
+// record their requests (WithRequestTrace) and count in none of the
+// collector's self-metrics (§ 42.17). An exported trip's trace
+// (WithSpanTrace) is not a debug run.
 func debugRun(ctx context.Context) bool {
 	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
 	return ok && !t.spans
@@ -217,11 +218,11 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	traceRequestAt(ctx, method, url, header, host, redirect)
 }
 
-// tracedAt is a request recorded by traceRequestAt, at which what is known
-// of it later is recorded, rather than at the last request recorded, as
-// the trace* functions record it: requests sent at once, as a kubernetes
-// collector's listings of several namespaces are, each end at their own.
-// The zero tracedAt is of a trip without a trace, and records nothing.
+// tracedAt is a request recorded by traceRequestAt. What is learned about
+// it later is recorded on it, rather than on the last request recorded as
+// the trace* functions do. Requests sent at once, such as a kubernetes
+// collector's listings of several namespaces, each end at their own time.
+// The zero tracedAt belongs to a trip without a trace and records nothing.
 type tracedAt struct {
 	t *RequestTrace
 	i int

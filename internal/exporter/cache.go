@@ -20,14 +20,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// cacheEntry is one collector result held until it expires. It is fresh
-// until freshUntil, answering repeats of its probe without a trip to the
-// target, and then stale until expires, kept only to stand in for a trip that
+// cacheEntry is one collector result held until it expires. Until freshUntil
+// it is fresh and answers repeats of its probe without a trip to the target.
+// After that it is stale until expires, kept only to stand in for a trip that
 // fails (cache.stale_if_error).
 //
 // An entry with a response is also kept past expires, until
-// max_cache_entries pushes it out or a new result replaces it: answering
-// nothing, it is there for the next trip of its request to revalidate
+// max_cache_entries pushes it out or a new result replaces it. It answers
+// nothing: it is there for the next trip of its request to revalidate
 // (revalidation).
 type cacheEntry struct {
 	key        string
@@ -203,11 +203,11 @@ func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, sta
 }
 
 // PutFor is Put for a trip that read its collector as read says. Nothing is
-// stored when the collector no longer stands (configRead): a reload removed
-// it, or changed its definition, since, and dropped its entries; the result
-// is that of a collector that is gone, which a collector brought back under
-// the name with the same definition would be answered with, and which would
-// count in the max_cache_entries of the one now under the name.
+// stored when the collector no longer stands (configRead): since then a
+// reload removed it or changed its definition, and dropped its entries. The
+// result is that of a collector that is gone. A collector brought back under
+// the name with the same definition would be answered with it, and it would
+// count in the max_cache_entries of the collector now under the name.
 //
 // response, when not nil, is kept with the result for revalidation.
 func (c *responseCache) PutFor(read configRead, key, collector string, set model.MetricSet, response *fetch.CachedResponse, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
@@ -225,16 +225,16 @@ func (c *responseCache) PutFor(read configRead, key, collector string, set model
 }
 
 // evictLocked keeps a collector within its configured entry budget. Expired
-// entries are dropped first; if the collector is still over budget the entries
-// closest to expiry are removed, the smaller key first among entries expiring
-// together. The collector's heap has them in that order, so this only looks
-// at the entries it removes, and at one more: it runs on every Put, under the
-// one cache lock.
+// entries are dropped first. If the collector is still over budget, the
+// entries closest to expiry are removed, the smaller key first among entries
+// expiring together. The collector's heap holds them in that order, so this
+// looks only at the entries it removes, plus one more. It runs on every Put,
+// under the one cache lock.
 //
 // An expired entry kept for revalidation stays while the collector is within
-// its budget, and is the first to go once it is not, the oldest first. It
-// may stand in front of expired entries without a response, which go when
-// a lookup or Stats meets them, or when the budget reaches them.
+// its budget. It is the first to go once the collector is over budget, the
+// oldest first. It may sit in front of expired entries without a response;
+// those go when a lookup or Stats meets them, or when the budget reaches them.
 func (c *responseCache) evictLocked(collector string, maxEntries int, now time.Time) {
 	if maxEntries <= 0 {
 		return
@@ -270,38 +270,38 @@ func (c *responseCache) Stats(now time.Time) map[string]int {
 // probeCacheKey fingerprints a probe request. The key covers the collector
 // definition, the target, the query parameters that make the request
 // (probeKeyQuery) including per-scrape overrides, and every header forwarded
-// to the target including a forwarded Authorization value. A request that omits a credential, a header,
-// or a TLS override therefore produces a different key and can never read an
-// entry populated by a request that supplied one. An empty result means the
-// request must not be cached.
+// to the target, including a forwarded Authorization value. So a request that
+// omits a credential, a header, or a TLS override produces a different key
+// and can never read an entry populated by a request that supplied one. An
+// empty result means the request must not be cached.
 //
 // own is what a static target sets that no probe parameter can: a graphite
-// collector's targets (statictarget.go). It is written in a
-// section of its own after the headers, which a probe never writes, so a probe
-// cannot be given a key that reads a result made with them.
+// collector's targets (statictarget.go). It is written in its own section
+// after the headers. A probe never writes that section, so a probe cannot be
+// given a key that reads a result made with them.
 func probeCacheKey(c *model.Collector, target string, query url.Values, forwarded http.Header, own ...string) string {
 	return probeCacheKeyWith(collectorFingerprint(c), c, target, query, forwarded, own...)
 }
 
 // probeKeyQuery is a probe's request as its cache key holds it: collector and
 // target, and the probe parameters as the probe read them
-// (fetch.ParseRequestOverrides) rather than as the caller wrote them. Each is
-// written one way — the method in upper case, a duration as Go prints it, a
-// boolean as true or false, a whole number without padding — so method=get
-// and method=GET, or timeout=5s and timeout=5000ms, which make the same
-// request, make the same key. Keyed as written, every spelling of one request
-// would be an entry of its own: a caller could go to the target past
-// cache.ttl, fill max_cache_entries with copies of one result, pushing out the
-// entries cache.stale_if_error falls back on, and keep identical probes from
-// sharing a trip (probeflight.go).
+// (fetch.ParseRequestOverrides), not as the caller wrote them. Each is
+// written one way: the method in upper case, a duration as Go prints it, a
+// boolean as true or false, a whole number without padding. So method=get and
+// method=GET, or timeout=5s and timeout=5000ms, make the same request and the
+// same key. Keyed as written, every spelling of one request would be its own
+// entry. A caller could then go to the target past cache.ttl, fill
+// max_cache_entries with copies of one result (pushing out the entries
+// cache.stale_if_error falls back on), and keep identical probes from sharing
+// a trip (probeflight.go).
 //
-// Nothing else of the query is in the key. A parameter no request type knows
-// is ignored by the probe, so &x=1, &x=2, ... are one request; a parameter
-// given twice, of which the probe would read one value, is refused before a
-// key is made (checkProbeParams). A param_<name> left empty counts as not
-// given, as it does where it is bound. header_<name> parameters are left out
-// too: the ones forwarded are keyed as the headers they become
-// (forwardedHeaders), and the rest are not sent.
+// Nothing else of the query is in the key. The probe ignores a parameter no
+// request type knows, so &x=1, &x=2, ... are one request. A parameter given
+// twice, of which the probe would read one value, is refused before a key is
+// made (checkProbeParams). An empty param_<name> counts as not given, as it
+// does where it is bound. header_<name> parameters are left out too: the
+// forwarded ones are keyed as the headers they become (forwardedHeaders), and
+// the rest are not sent.
 //
 // The values are written as targetCacheQuery writes a static target's, so a
 // static target's scrape and the probe that makes the same request share an

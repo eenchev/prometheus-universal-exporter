@@ -13,16 +13,16 @@ import (
 
 // MaxXMLDepth is how deep the elements of an XML document may nest. It is the
 // bound the HTML parser has for its open elements, so XPath meets the same
-// documents whichever decoder read them. What reads a parsed document walks
-// it by recursion, and the text of an element is that of everything beneath
-// it, so a document of a hundred thousand nested elements, which fits in a
+// documents whichever decoder read them. Code that reads a parsed document
+// walks it recursively, and an element's text is that of everything beneath
+// it. So a document of a hundred thousand nested elements, which fits in a
 // megabyte, costs a rule that selects them all the square of that.
 const MaxXMLDepth = 512
 
-// xmlNamesWithheld is failure, an error of the text text whose part library
-// is of a form that holds names of the document, marked as the operator's
-// when names is set: a probe's caller is told text with that part as
-// caller, the form's words without the names (xmlNamesCut).
+// xmlNamesWithheld is failure marked as the operator's when names is set.
+// failure is an error with the text text, whose part library is of a form
+// that holds names of the document. A probe's caller is told text with that
+// part as caller: the form's words without the names (xmlNamesCut).
 func xmlNamesWithheld(failure error, text, library, caller string, names bool) error {
 	if !names {
 		return failure

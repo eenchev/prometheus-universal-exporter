@@ -1,20 +1,19 @@
 # AMQP
 
-The `amqp` request type asks an AMQP 0-9-1 broker, RabbitMQ and the brokers
-that speak its protocol, how deep its queues are, over AMQP itself, and
-hands the answer to the transforms as a JSON document: each queue's ready
-messages and consumers, and what the broker says of itself. Use it where
-the broker's management API is closed or not installed but a client may
-connect; where the API is open, an `http` collector reads more from it.
+The `amqp` request type asks an AMQP 0-9-1 broker (RabbitMQ and the brokers
+that speak its protocol) how deep its queues are, over AMQP itself. It hands
+the answer to the transforms as a JSON document: each queue's ready messages
+and consumers, and what the broker says of itself. Use it where the broker's
+management API is closed or not installed but a client may connect; where
+the API is open, an `http` collector reads more from it.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with amqp](#building-with-amqp)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with amqp](#building-with-amqp)).
 
 ## Building with amqp
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=amqp              # bin/prometheus-universal-exporter
@@ -22,9 +21,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=amqp -t exporter:amqp .
 go build -tags "$(sh tools/request-type-tags.sh '' '' amqp)" .
 ```
 
-The tag is `request_type_amqp`. A configuration with an `amqp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_amqp`. A build without the type refuses a
+configuration with an `amqp` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -80,25 +80,26 @@ queues, the virtual host and the account take no placeholder. A probe takes
 `timeout` and `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The target
 
-The target is the broker: `host` or `host:port`, port 5672 when it names
-none; `amqp://host`, the same; or `amqps://host` for TLS, port 5671. A
-path, a query, a user or another scheme is refused with `400` before
-anything is sent, a static target's when it loads; the virtual host is the
-collector's `vhost`, not a path of the target.
+The target is the broker: `host` or `host:port`, on port 5672 when it names
+none; `amqp://host`, which is the same; or `amqps://host` for TLS, on port
+5671. A path, a query, a user or another scheme is refused with `400` before
+anything is sent, and a static target's when it loads. The virtual host is
+the collector's `vhost`, not a path of the target.
 
 ## What a scrape does
 
 A scrape opens one connection, logs in with the PLAIN mechanism, opens the
 virtual host, and declares each queue *passively*: the broker creates
-nothing and answers how many messages are ready in the queue and how many
-consumers it has. It then closes the connection as the protocol has it.
-Nothing is published, consumed or acknowledged.
+nothing, and answers how many messages are ready in the queue and how many
+consumers it has. The scrape then closes the connection as the protocol
+requires. Nothing is published, consumed or acknowledged.
 
 A broker answers a queue it does not have by closing the channel, so each
 queue after such a one is asked on a new channel of the same connection.
@@ -131,11 +132,11 @@ queue after such a one is asked on a new channel of the same connection.
   `messages` is the messages **ready** for delivery: those delivered to a
   consumer and not yet acknowledged are not among them, as the protocol
   does not say them.
-- **A queue the broker does not have is not a failure**: its `exists` is
-  false and its counts `null`, so a rule decides what a missing queue
-  means. A queue the broker would not answer about for another reason, an
-  account without access to it or a queue another connection holds
-  exclusively, has `exists` false and what the broker said in `error`.
+- **A queue that the broker does not have is not a failure**: its `exists`
+  is false and its counts are `null`, so a rule decides what a missing queue
+  means. A queue that the broker would not answer about for another reason
+  (an account without access to it, or a queue that another connection
+  holds exclusively) has `exists` false and what the broker said in `error`.
 - `product`, `version`, `platform` and `cluster_name` are the broker's
   properties of those names, and `server_properties` every one of them
   that is text.
@@ -167,16 +168,16 @@ and a frame of the broker's is read up to 1 MiB.
 ## Errors and self-metrics
 
 A failed request is reported in the `amqp` stage and follows
-`error_handling.on_fetch_error`, naming the broker: one that cannot be
-reached, a TLS handshake that failed, what answered is no AMQP 0-9-1
-broker, a login it did not take
+`error_handling.on_fetch_error`, naming the broker. Causes include a broker
+that cannot be reached, a TLS handshake that failed, an answer that is not
+from an AMQP 0-9-1 broker, a login that it did not accept
 (`rabbit1.example.com:5672 refused the login of monitor: 403
-ACCESS_REFUSED ...`), a virtual host it does not have or the account may
-not open, or a password file that cannot be read or is empty. A host the
-target lists refuse counts in `http_exporter_targets_refused_total`,
-answered `403`. Transforms see no status (`$status` is `null`, Python's
-`response.status_code` `None`) and the header
-`Content-Type: application/json`.
+ACCESS_REFUSED ...`), a virtual host that it does not have or that the
+account may not open, and a password file that cannot be read or is empty.
+A host that the target lists refuse counts in
+`http_exporter_targets_refused_total` and is answered `403`. Transforms see
+no status (`$status` is `null`, and Python's `response.status_code` is
+`None`) and the header `Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows the request with how
 it ended:

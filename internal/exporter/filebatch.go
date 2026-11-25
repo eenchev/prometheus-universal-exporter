@@ -14,13 +14,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// A localfile collector reading a directory (fetch/localfile_directory.go) hands
-// back every file it read rather than one body. Each is decoded, transformed
-// and validated on its own, as if it were the only file, and its series are
-// labelled with its name. A file that fails at any stage is left out, alone:
-// the failure is logged, counted in the collector's self-metrics like any
-// other, and reported in the answer itself, where whoever scrapes it will
-// look, under the names node_exporter's textfile collector uses:
+// A localfile collector reading a directory (fetch/localfile_directory.go)
+// returns every file it read rather than one body. Each file is decoded,
+// transformed and validated on its own, as if it were the only file, and its
+// series are labelled with its name. A file that fails at any stage is left
+// out on its own. The failure is logged and counted in the collector's
+// self-metrics like any other. It is also reported in the answer itself,
+// where whoever scrapes it will look, under the names node_exporter's
+// textfile collector uses:
 //
 //	localfile_mtime_seconds{file}   when the file was last modified
 //	localfile_scrape_error{file}    1 when the file was left out, else 0
@@ -49,9 +50,9 @@ type fileFailure struct {
 
 // collectDirectory turns a directory read into one metric set.
 //
-// logTarget is the target as logs show it, keyTarget as the failure log
-// tells targets apart (failureKey). python is the worker statistics the
-// scripts of the trip count in (pythonstats.go).
+// logTarget is the target as logs show it. keyTarget is the target as the
+// failure log tells targets apart (failureKey). python is the worker
+// statistics that the trip's scripts count in (pythonstats.go).
 func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead, c *model.Collector, rec statsRecorder, python *transform.PythonStats, logTarget, keyTarget string) *model.MetricSet {
 	rec.update(func(x *serverStats) { x.lastBytes = read.Bytes })
 	// These hold for as long as the directory stays as it is, so they are
@@ -190,16 +191,16 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 const mergeShownBytes = 1200
 
 // checkFileFamilies refuses a file whose metric has a different type than
-// the same metric in a file read before it: one exposition can declare a
+// the same metric in a file read before it. One exposition can declare a
 // family only once.
 //
-// Every metric that clashes is named while the names are within
-// mergeShownBytes together, and the rest are counted: two files of fifty
-// thousand families each, typed otherwise in one than in the other, clash
-// in every one, and the error that named them all was 5.7 MB, of which the
-// bound on a trip's error (boundedTripFailure) kept the first seventeen and
-// not what the error says after them. How many more there are is something
-// measured, and is the mark in what the failure is recognised by.
+// Clashing metrics are named while their names fit within mergeShownBytes
+// together, and the rest are counted. Two files of fifty thousand families
+// each, typed differently in each, clash in every family. The error that
+// named them all was 5.7 MB. The bound on a trip's error
+// (boundedTripFailure) kept the first seventeen names and not what the error
+// says after them. The count of the rest is measured, and it is the mark the
+// failure is recognised by.
 func checkFileFamilies(set *model.MetricSet, families map[string][]model.Metric, typeFrom map[string]string) *fileFailure {
 	var conflicts []string
 	shown, more := 0, 0

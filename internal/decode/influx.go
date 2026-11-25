@@ -9,37 +9,37 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The influx decoder reads InfluxDB line protocol, the text InfluxDB is
-// written with and Telegraf's influx output writes: a point a line,
+// The influx decoder reads InfluxDB line protocol: the text InfluxDB is
+// written with and Telegraf's influx output writes. It has one point a line,
 //
 //	measurement,tag=value,tag=value field=value,field=value timestamp
 //
-// as InfluxDB's own parser reads it; no module of InfluxDB's is a
-// dependency, the grammar being a page. Its document is the list of the
+// read as InfluxDB's own parser reads it. No InfluxDB module is a
+// dependency, as the grammar is a page. The document is the list of the
 // points, in the order of their lines, each a mapping of its measurement,
 // its tags, its fields and its timestamp, so that a jq rule reads it as it
 // reads a JSON array of objects.
 //
-//   - A line of nothing but blanks is passed over, and so is one that
-//     starts with #, a comment. A line ends at a line feed, a carriage
-//     return before it dropped, but for one inside a quoted field value,
-//     which is part of the value.
-//   - The measurement runs to the first comma or blank that no backslash
-//     is before; \, and \ and a blank write those in it. The tags follow,
-//     each key=value after a comma, with \, \= and \ and a blank for those
-//     characters in a key and in a value; a point may have none. Tags are
-//     text.
-//   - The fields follow the blanks after them, key=value between commas, at
-//     least one. A value is a float, written as a number; an integer, a
-//     whole number and i; an unsigned integer, one and u; a boolean, t, T,
-//     true, True, TRUE and the same of false; or text in double quotes,
-//     with \" and \\ for a quote and a backslash in it. A float is a number
-//     here and an integer one that keeps every digit, as the json decoder
-//     keeps a whole number's.
-//   - The timestamp follows the blanks after the fields, a whole number as
-//     it is written: the line does not say its precision, nanoseconds
-//     unless whoever wrote it chose another, so the document does not
-//     either. A point without one has null.
+//   - A line of only blanks is skipped, and so is a line that starts with
+//     #, a comment. A line ends at a line feed (a carriage return before it
+//     is dropped), except a line feed inside a quoted field value, which is
+//     part of the value.
+//   - The measurement runs to the first comma or blank with no backslash
+//     before it; \, and \ followed by a blank write those in it. The tags
+//     follow, each key=value after a comma, with \, \= and \ followed by a
+//     blank for those characters in a key and in a value. A point may have
+//     no tags. Tags are text.
+//   - The fields follow after blanks: at least one key=value, separated by
+//     commas. A value is a float, written as a number; an integer, a whole
+//     number followed by i; an unsigned integer, one followed by u; a
+//     boolean, t, T, true, True, TRUE or the same of false; or text in double
+//     quotes, with \" and \\ for a quote and a backslash in it. A float is
+//     a number here, and an integer is a number that keeps every digit, as
+//     the json decoder keeps a whole number's.
+//   - The timestamp follows after blanks: a whole number, as it is written.
+//     The line does not say its precision (nanoseconds unless the writer
+//     chose another), so the document does not either. A point without one
+//     has null.
 //   - A key written twice in a point's tags or in its fields keeps the
 //     later value.
 //   - An error names the line and column and what cannot be there, never
@@ -110,10 +110,10 @@ func (d *influxDecoder) lineEnd() bool {
 	return true
 }
 
-// name reads a measurement, a tag's key or value or a field's key: the
-// bytes up to one of stops that no backslash is before, a backslash before
-// a comma, an equals sign or a blank dropped. It ends at a blank and at the
-// line's end whatever stops holds.
+// name reads a measurement, a tag's key or value, or a field's key: the
+// bytes up to the first of stops with no backslash before it. A backslash
+// before a comma, an equals sign or a blank is dropped. It ends at a blank
+// and at the line's end, whatever stops holds.
 func (d *influxDecoder) name(stops string) string {
 	d.text = d.text[:0]
 	for d.at < len(d.body) {

@@ -10,19 +10,19 @@ import (
 )
 
 // Edit a copy makes the playground a copy of the configured collector the
-// page shows. A copy of one that names a file of the server's — a key of
-// its request ending in _file or _files, such as tls.ca_file or
-// password_file, or a login, which reads its secrets from files — would be
-// refused until those lines were taken out by hand (refusedOnDebugPage),
-// and the page shows their paths <redacted> besides. So the copy leaves
-// them out, each line replaced by a comment that says what was dropped and
-// why, and a mapping left with nothing, tls: with its ca_file alone, goes
-// with it, so that the copy loads. With --web.debug.dangerous the
-// playground may read files, and keeps a login, but the paths are still
-// withheld: they are dropped all the same, the comment saying to write the
-// path in. Python is left in: a script dropped would leave a collector that
-// does not load, and the refusal says what to do; the note above the
-// editor says so beforehand.
+// page shows. Some collectors name a file of the server's: a request key
+// ending in _file or _files (such as tls.ca_file or password_file), or a
+// login, which reads its secrets from files. A copy of such a collector
+// would be refused until those lines were removed by hand
+// (refusedOnDebugPage), and the page shows their paths as <redacted> too.
+// So the copy leaves them out. Each line is replaced by a comment that says
+// what was dropped and why. A mapping left empty (tls: with only its
+// ca_file) is dropped with it, so that the copy loads. With
+// --web.debug.dangerous the playground may read files and keeps a login,
+// but the paths are still withheld: they are dropped anyway, and the comment
+// says to write the path in. Python is kept: dropping a script would leave a
+// collector that does not load, and the refusal says what to do. The note
+// above the editor says so beforehand.
 
 // copiedCollectorYAML is x as Edit a copy puts it in the playground
 // (collectorYAML), and the note the page shows above it, "" when nothing
@@ -99,11 +99,11 @@ func (d *copyDrops) why(path, written string) string {
 	return written + " dropped: the playground reads no file of the server's (--web.debug.dangerous lets it)"
 }
 
-// dropIn leaves out of the mapping n, at path under request ("" for the
-// block itself), the keys refused, and those of the mappings it holds, each
-// replaced by a droppedKey: a mapping all of whose keys are left out is
-// left out whole, its droppedKey saying what each of them was. It returns
-// the paths left out, under path, and whether nothing of n is left.
+// dropIn removes the refused keys from the mapping n, at path under request
+// ("" for the block itself), and from the mappings it holds. Each removed
+// key is replaced by a droppedKey. A mapping whose keys are all removed is
+// removed whole, and its droppedKey says what each key was. It returns the
+// removed paths, under path, and whether nothing of n is left.
 func (d *copyDrops) dropIn(n *yaml.Node, path string) ([]string, bool) {
 	var dropped []string
 	kept, left := make([]*yaml.Node, 0, len(n.Content)), 0
@@ -136,10 +136,10 @@ func (d *copyDrops) dropIn(n *yaml.Node, path string) ([]string, bool) {
 	}
 	n.Content = kept
 	if len(dropped) > 0 {
-		// A droppedKey's comments go on lines of their own, which a mapping
-		// written in flow style, {ca_file: …, server_name: …}, has none of:
-		// the stand-in would be left in it. The mappings it stands in, n and
-		// those that hold n, are written in block style.
+		// A droppedKey's comments go on lines of their own, and a mapping
+		// written in flow style ({ca_file: …, server_name: …}) has no such
+		// lines, so the stand-in would be left in it. The mappings it stands
+		// in, n and those that hold n, are written in block style.
 		n.Style &^= yaml.FlowStyle
 	}
 	return dropped, left == 0 && len(dropped) > 0

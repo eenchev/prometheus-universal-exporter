@@ -22,11 +22,11 @@ import (
 	"time"
 )
 
-// pin describes where one build argument's versions come from and how far it may
-// move. Go and the Python libraries allow minor updates within their current
-// major, which is the widest move that stays non-breaking by the projects' own
-// versioning promises; the major component is never touched. Python itself
-// holds its minor too, see HeldBecause.
+// pin describes where one build argument's versions come from and how far it
+// may move. Go and the Python libraries allow minor updates within their
+// current major. By the projects' own versioning promises, that is the widest
+// move that stays non-breaking. The major component is never touched. Python
+// itself holds its minor too, see HeldBecause.
 type pin struct {
 	Arg    string
 	Source string
@@ -95,10 +95,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "depupdate: %v\n", err)
 		return 1
 	}
-	// A held release is always worth a line in the run's log, but it is not an
-	// update: on its own it writes no summary and leaves the Dockerfile as it
-	// is, so the workflow, which goes by the Dockerfile's diff, opens no pull
-	// request for it.
+	// A held release is always worth a line in the run's log, but it is not
+	// an update. On its own it writes no summary and leaves the Dockerfile
+	// as it is. The workflow goes by the Dockerfile's diff, so it opens no
+	// pull request for it.
 	for _, h := range held {
 		fmt.Fprintf(stdout, "depupdate: %s\n", h.sentence())
 	}
@@ -143,11 +143,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // resolve asks each source for its versions and keeps the ones the policy
-// allows. A pin the Dockerfile no longer declares is skipped rather than
-// treated as an error, so removing a dependency does not break this command;
-// an unresolvable source is an error, because silently proposing nothing would
-// look identical to being up to date. Beside the updates it returns the newer
-// releases a held minor keeps a pin from, which are reported and never applied.
+// allows. A pin the Dockerfile no longer declares is skipped, not treated as
+// an error, so removing a dependency does not break this command. A source
+// that cannot be resolved is an error, because silently proposing nothing
+// would look the same as being up to date. Beside the updates, it returns the
+// newer releases that a held minor keeps a pin from. These are reported and
+// never applied.
 func resolve(ctx context.Context, current map[string]string) ([]update, []heldRelease, error) {
 	var updates []update
 	var held []heldRelease

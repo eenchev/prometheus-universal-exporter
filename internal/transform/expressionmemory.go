@@ -12,14 +12,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// transformJQWithinMemory is transformJQ, stopped when it takes more memory
-// than the collector's limit (expr.WatchMemory): its context is then
+// transformJQWithinMemory is transformJQ, stopped when it uses more memory
+// than the collector's limit (expr.WatchMemory). Its context is then
 // cancelled, which stops a jq program as a deadline does and lets no rule
-// carry on (handleMetricError), and what the transform failed with is the
-// limit's failure, at the rule it was at.
+// continue (handleMetricError). The transform then fails with the limit's
+// failure, at the rule it had reached.
 //
-// For a caller that asked (WithMemoryMeasured), what the transform held at
-// its most is measured and written to the rule logger, beside the limit.
+// For a caller that asked (WithMemoryMeasured), the transform's peak
+// memory is measured and written to the rule logger, next to the limit.
 func transformJQWithinMemory(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	var measure *expr.MemoryMeasure
 	if memoryMeasured(ctx) {
@@ -45,10 +45,13 @@ func transformJQWithinMemory(ctx context.Context, data any, rules []model.Metric
 type memoryMeasuredKey struct{}
 
 // WithMemoryMeasured returns a context whose Transforms measure the memory
-// they take and write it to the rule logger at debug level, for someone
-// choosing a limit: what a jq or yq transform's expressions held at their
-// most, beside limits.max_expression_memory, and the most address space
-// the worker of a Python script has had, beside limits.max_script_memory.
+// they use and write it to the rule logger at debug level, to help choose
+// a limit:
+//   - the peak memory a jq or yq transform's expressions held, next to
+//     limits.max_expression_memory;
+//   - the peak address space of a Python script's worker, next to
+//     limits.max_script_memory.
+//
 // The first costs garbage collections of the whole exporter, so it is for
 // a debug probe and not for a scrape.
 func WithMemoryMeasured(ctx context.Context) context.Context {

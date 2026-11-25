@@ -27,83 +27,87 @@ import (
 // names a collector may declare them by: the package name or the import name.
 var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true, "python-dateutil": true, "dateutil": true}
 
-// Python scripts run in long-lived worker interpreters rather than in a fresh
+// Python scripts run in long-lived worker interpreters, not in a fresh
 // process per scrape. Starting CPython and importing lxml, PyYAML or dateutil
-// takes tens to hundreds of milliseconds; running a typical collector script
-// takes well under one. A worker pays the start-up once and then serves
+// takes tens to hundreds of milliseconds, while a typical collector script
+// runs in well under one. A worker pays the start-up once and then serves
 // scrape after scrape.
 //
-// Isolation. A worker only ever runs one collector's scripts: workers are
+// Isolation. A worker only ever runs one collector's scripts. Workers are
 // pooled per collector, interpreter, declared libraries, output limit and
-// script text, so a script cannot see or disturb another collector's state,
-// and a reloaded script gets fresh workers rather than inheriting the old
+// script text. So a script cannot see or disturb another collector's state,
+// and a reloaded script gets fresh workers instead of inheriting the old
 // one's module state. Each run gets a fresh set of globals. The same sandbox
 // as before is installed once, at start-up, before any script runs.
 //
 // Protocol. Requests go to the worker on file descriptor 3 and answers come
 // back on file descriptor 4, one JSON document per line. Neither is stdin or
-// stdout, so a script that prints, or reads stdin, cannot corrupt the stream;
-// its output is captured per run, as before. The worker's stdin and stdout are
-// /dev/null, and stderr is kept, bounded, for error messages.
+// stdout, so a script that prints, or reads stdin, cannot corrupt the stream.
+// Its output is captured per run, as before. The worker's stdin and stdout
+// are /dev/null, and stderr is kept, bounded, for error messages.
 //
-// A worker that has read and parsed a request says so, with a line of its
-// own, before it runs the script, and then answers with the result
+// A worker that has read and parsed a request says so on a line of its own
+// before it runs the script, and then answers with the result
 // (pythonWorker.call).
 //
-// Time. limits.script_timeout bounds the run of a script: its clock starts
-// when the worker says it has the request. It bounds neither the start of the
-// interpreter, which, with importing the collector's declared libraries, has
-// its own budget, nor handing the worker the request, which takes as long as
-// the response is large and is bounded by the probe's deadline, and by
-// pythonHandoverTimeout where that is later or there is none. A script that
-// overruns is not interrupted inside the interpreter, which Python cannot do
-// reliably; the worker is killed, and the next scrape starts another. A
-// script the probe's deadline ends first is stopped the same way, and
-// reported and counted as that rather than as overrunning script_timeout.
+// Time. limits.script_timeout bounds the run of a script. Its clock starts
+// when the worker says it has the request. It does not bound:
+//   - the interpreter's start, which, with importing the collector's
+//     declared libraries, has its own budget;
+//   - handing the worker the request, which takes as long as the response
+//     is large. That is bounded by the probe's deadline, and by
+//     pythonHandoverTimeout where that is later or there is none.
+// A script that overruns is not interrupted inside the interpreter, because
+// Python cannot do that reliably. Instead the worker is killed, and the next
+// scrape starts another. A script that the probe's deadline ends first is
+// stopped the same way, but reported and counted as that, not as overrunning
+// script_timeout.
 //
 // Lifetime. A worker that fails in any way is discarded. A healthy one is
 // reused up to pythonWorkerMaxRuns times, so a slow leak in a script or a
-// library cannot grow without bound, and at most --python.max-idle-workers
-// are kept per pool once a burst of concurrent scrapes has passed: one by
-// default, since each is a process of 11 MB or more that a collector scraped
-// one at a time never uses, and 0 keeps none, each worker stopping when its
-// run ends. Idle workers are stopped after --python.idle-timeout, two
-// minutes by default, checked every PythonPool.ReapInterval whether or not
+// library cannot grow without bound. Once a burst of concurrent scrapes has
+// passed, at most --python.max-idle-workers are kept per pool. The default is
+// one, since each is a process of 11 MB or more that a collector scraped one
+// at a time never uses. 0 keeps none, and each worker stops when its run
+// ends. Idle workers are stopped after --python.idle-timeout, two minutes by
+// default. This is checked every PythonPool.ReapInterval whether or not
 // anything runs Python, so a collector nobody scrapes any more does not keep
 // its interpreters. Two minutes is twice the longest scrape interval in
 // common use: a collector scraped every minute or more often keeps its one
-// worker warm through a late or a missed scrape, rather than paying for an
-// interpreter's start every time. A reload stops at
-// once the idle workers of scripts it removed or changed, and those still busy
-// when they finish, as it does the workers of a collector it removed, whose
-// statistics are retired (PythonStats), though a later reload has brought the
-// collector back as it was by then: that one starts workers of its own.
+// worker warm through a late or a missed scrape, instead of paying for an
+// interpreter's start every time.
+//
+// A reload at once stops the idle workers of scripts it removed or changed,
+// and stops those still busy when they finish. It does the same for the
+// workers of a collector it removed, whose statistics are retired
+// (PythonStats), even if a later reload has brought the collector back as it
+// was by then: that one starts workers of its own.
 //
 // An idle worker can die: the kernel may kill it for memory, and a script
-// can arm a signal that outlives its run. One found dead when it is taken
-// from the pool is replaced, and one that turns out dead before it took the
-// request, when nothing of the script has run, costs the scrape another
-// worker rather than a failure (PythonPool.run).
+// can arm a signal that outlives its run. A worker found dead when it is
+// taken from the pool is replaced. One that turns out dead before it took
+// the request, when nothing of the script has run, costs the scrape another
+// worker instead of a failure (PythonPool.run).
 //
 // When the exporter exits, an idle worker sees its request pipe close and
 // exits too. A busy one is not reading the pipe, and when the exporter is
-// killed nobody is left to stop it, so every worker also watches for the
-// process that started it: a thread of the launcher looks once a second
-// whether its parent is still that process, and ends the worker when it is
-// not. The worker does this itself, rather than asking the kernel to signal
-// it when its parent dies, because that request is tied to the thread of the
-// exporter that started the worker, which the Go runtime may end long before
-// the exporter does.
+// killed nobody is left to stop it. So every worker also watches for the
+// process that started it: a launcher thread checks once a second whether
+// its parent is still that process, and ends the worker when it is not. The
+// worker does this itself, instead of asking the kernel to signal it when
+// its parent dies, because that request is tied to the exporter thread that
+// started the worker, which the Go runtime may end long before the exporter
+// does.
 
 const (
 	// pythonStartupTimeout is how long an interpreter may take to say it is
 	// ready: every pool's start timeout, which only a test changes
 	// (PythonPool.SetStartTimeout).
 	pythonStartupTimeout = 10 * time.Second
-	// pythonHandoverTimeout is how long a worker may take to read and parse
-	// a request when the probe's deadline does not end it sooner: far longer
-	// than the largest response takes, and short enough that a worker that
-	// has stopped reading does not hold a scrape without a deadline for ever.
+	// pythonHandoverTimeout is how long a worker may take to read and parse a
+	// request when the probe's deadline does not end it sooner. It is far
+	// longer than the largest response takes, and short enough that a worker
+	// that has stopped reading does not hold a scrape without a deadline forever.
 	pythonHandoverTimeout = 30 * time.Second
 	pythonWorkerMaxRuns   = 1000
 	// PythonDefaultMaxIdleWorkers is the default of --python.max-idle-workers.
@@ -154,35 +158,38 @@ func (e pythonWorkerGone) Unwrap() error { return e.err }
 const pythonRequestTaken = `{"started": true}`
 
 // The other lines a worker cannot do without, as the launcher writes them,
-// with the ", " and ": " json.dumps separates by: that it is ready, the
-// answer of a transform's script that emitted no metric and printed nothing,
-// and the answer of a pre-script that printed nothing and left None in data.
+// with the ", " and ": " separators json.dumps uses: the line saying it is
+// ready, the answer to a transform's script that emitted no metric and
+// printed nothing, and the answer to a pre-script that printed nothing and
+// left None in data.
 const (
 	pythonReadyLine          = `{"ok": true, "ready": true}`
 	pythonEmptyMetricsAnswer = `{"ok": true, "log": "", "metrics": []}`
 	pythonNoDataAnswer       = `{"ok": true, "log": "", "data": null}`
 )
 
-// MinPythonOutputBytes is the least a limits.max_output_bytes that is set
-// may be, 38 bytes: the longest of the lines every worker has to get through
-// it, without the line break, which is not counted (readAnswers). Under 27
-// bytes the worker's line that it is ready does not fit, so no worker
-// starts and every scrape fails as a start that failed; from 27 a worker
-// starts and says of each request that it has it (17 bytes), and its errors
-// are cut to fit (failed), but an answer is not: the shortest a pre-script
-// gets is 34 bytes, with a number of one digit left in data, 35 with {}, []
-// or "" and 37 with None, and the shortest a transform's script gets is the
-// 38 of no metric at all. Those are of a script that prints nothing: what it
-// prints is in the answer's log. So a smaller limit is one under which a
-// transform's script could do nothing but fail and a pre-script could leave
-// in data nothing that is written longer than None is, and the
-// configuration is refused with it when it loads (config.Validate), by the
-// schema too where the size is written as a number.
+// MinPythonOutputBytes is the smallest value a set limits.max_output_bytes
+// may have: 38 bytes. That is the longest of the lines every worker must get
+// through the limit, without the line break, which is not counted
+// (readAnswers).
+//   - Under 27 bytes the worker's ready line does not fit, so no worker
+//     starts and every scrape fails as a failed start.
+//   - From 27 bytes a worker starts and says of each request that it has it
+//     (17 bytes), and its errors are cut to fit (failed). An answer is not
+//     cut. The shortest answer a pre-script gets is 34 bytes with a
+//     one-digit number left in data, 35 with {}, [] or "", and 37 with
+//     None. The shortest a transform's script gets is the 38 of no metric.
 //
-// The loader holds this floor, not the worker and not the pool: a worker
-// runs under whatever limit it is given, cutting an error to it, which the
+// Those figures are for a script that prints nothing; what it prints is in
+// the answer's log. So under a smaller limit a transform's script could only
+// fail, and a pre-script could leave in data nothing written longer than
+// None. The configuration is refused with such a limit when it loads
+// (config.Validate), and also by the schema where the size is a number.
+//
+// The loader holds this floor, not the worker and not the pool. A worker
+// runs under whatever limit it is given and cuts an error to it, which the
 // tests of that rely on. A test holds the constant to what the launcher
-// writes, so it cannot stay behind when an answer gains or loses a key.
+// writes, so it cannot fall behind when an answer gains or loses a key.
 const MinPythonOutputBytes = max(len(pythonReadyLine), len(pythonRequestTaken), len(pythonEmptyMetricsAnswer), len(pythonNoDataAnswer))
 
 // pythonLibraryModules are the modules a declared library preloads. Importing
@@ -208,8 +215,8 @@ type pythonSpec struct {
 	MaxMemory int64
 	Scripts   string // a digest of the collector's scripts
 	// stats are the statistics the run counts in, when it took them as it
-	// began (PythonPool.statsOf); a run that names none counts in those kept
-	// under Collector. They are no part of which workers the script may run
+	// began (PythonPool.statsOf). A run that names none counts in those kept
+	// under Collector. They play no part in which workers the script may run
 	// in (key).
 	stats *PythonStats
 }
@@ -245,18 +252,18 @@ type PythonPool struct {
 	mu      sync.Mutex
 	idle    map[string][]*pythonWorker
 	started atomic.Int64
-	// stats are kept per collector, under mu. They cost a map lookup per
-	// run, and are published only with verbose self-metrics (exporter/verbosemetrics.go).
-	// They are a collector's for as long as the collector stays: a reload
-	// that removes it retires them (Retire), and a collector added again
-	// under the name has others, from zero.
+	// stats are kept per collector, under mu. They cost a map lookup per run,
+	// and are published only with verbose self-metrics
+	// (exporter/verbosemetrics.go). They belong to a collector for as long as
+	// it stays: a reload that removes it retires them (Retire), and a
+	// collector added again under the name gets new ones, from zero.
 	stats map[string]*PythonStats
-	// departed is what was counted for the collectors whose statistics were
-	// retired, and what their runs and workers have counted since: it is
-	// shown under no collector, and is part of what the pool counts as a
-	// whole (PoolSnapshot), which therefore never goes backwards. It is also
-	// the statistics of a run whose collector was removed before the run
-	// took any (Departed).
+	// departed holds what was counted for the collectors whose statistics were
+	// retired, plus what their runs and workers have counted since. It is
+	// shown under no collector, and is part of the pool's whole count
+	// (PoolSnapshot), which therefore never goes backwards. It is also the
+	// statistics of a run whose collector was removed before the run took any
+	// (Departed).
 	departed PythonStats
 	// busy counts the workers of each key that are running a script, and
 	// obsolete holds the keys a reload dropped while some of their workers
@@ -266,13 +273,13 @@ type PythonPool struct {
 	// closed pools keep no worker: an idle one is stopped at once, and a busy
 	// one when it finishes.
 	closed bool
-	// maxWorkers, when positive, bounds the workers alive at once, starting,
-	// busy or idle, of every collector together (--python.max-workers).
-	// live counts them. waiting is the runs waiting for a worker, in
-	// line: a worker going idle or stopping wakes the first of them only,
-	// which any such change lets through — it takes the idle worker, or
-	// evicts it, or starts one in the stopped worker's place — rather than
-	// every waiter racing for it.
+	// maxWorkers, when positive, bounds how many workers are alive at once
+	// (starting, busy or idle), across all collectors (--python.max-workers).
+	// live counts them. waiting holds the runs waiting for a worker, in line.
+	// A worker going idle or stopping wakes only the first of them, which any
+	// such change lets through: it takes the idle worker, evicts it, or starts
+	// one in place of the stopped worker. This avoids every waiter racing for
+	// it.
 	maxWorkers int
 	live       int
 	waiting    []chan struct{}
@@ -324,20 +331,20 @@ var (
 	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunDeadline, pythonRunOutputLimit, pythonRunFailed}
 )
 
-// PythonStats is one collector's worker statistics, as a run counts in them:
-// a run takes them once, when its trip begins, and counts in those and no
-// others however the run ends, and a worker counts in those of the run that
-// started it, for as long as it lives: it serves the runs that count in
-// them and no others (acquire). So a run or a worker that outlives its
-// collector, which a reload removed, is counted nowhere a collector shows,
-// and not for a collector added again under the name, which has statistics
-// of its own, and workers of its own: every worker a collector's series show
-// is one they counted the start of, and will count the stop of.
+// PythonStats is one collector's worker statistics, as a run counts in them.
+// A run takes them once, when its trip begins, and counts in them and no
+// others however the run ends. A worker counts in the statistics of the run
+// that started it for as long as it lives, and serves only runs that count
+// in them (acquire). So a run or worker that outlives its collector, removed
+// by a reload, is counted nowhere a collector shows. Nor is it counted for a
+// collector added again under the name, which has its own statistics and
+// its own workers. Every worker a collector's series show is one whose start
+// they counted, and whose stop they will count.
 type PythonStats struct {
-	// pool is the pool that keeps them, which never changes, and retired
-	// says that the collector they were of is gone (Retire): what counts in
-	// them is then counted in the pool's departed. retired is read and set
-	// under the pool's mu, as the counts are.
+	// pool is the pool that keeps them, and never changes. retired says the
+	// collector they belonged to is gone (Retire); what counts in them is
+	// then counted in the pool's departed. retired is read and set under the
+	// pool's mu, like the counts.
 	pool           *PythonPool
 	retired        bool
 	starting, busy int
@@ -348,8 +355,8 @@ type PythonStats struct {
 }
 
 // pythonPoolRef is the exporter's worker pool. It is behind an atomic pointer
-// only so each test can run against a pool of its own (IsolatePythonWorkers):
-// the counts a test checks are then its own, whatever ran before it, in
+// only so that each test can run against its own pool (IsolatePythonWorkers).
+// The counts a test checks are then its own, whatever ran before it, in
 // whatever order, however often.
 var pythonPoolRef atomic.Pointer[PythonPool]
 
@@ -379,24 +386,25 @@ func newPythonPool() *PythonPool {
 }
 
 // SetLeastScriptTimeout gives every script the pool runs at least this long,
-// whatever its limits.script_timeout, and 0 holds each to its own again. It
-// is for tests. A script of a millisecond overruns the default 100ms on a
-// machine busy enough, as a test runner is under the race detector with
-// other packages' tests beside it; a test that is not about the timeout then
-// fails by it. Such a test runs against a pool that leaves its scripts a
-// minute, which a slow machine makes slower and never fails, and a test of
-// the timeout itself sets 0.
+// whatever its limits.script_timeout; 0 holds each to its own again. It is
+// for tests. A one-millisecond script overruns the default 100ms on a busy
+// enough machine, such as a test runner under the race detector alongside
+// other packages' tests. A test that is not about the timeout then fails
+// because of it. Such a test runs against a pool that gives its scripts a
+// minute, which a slow machine makes slower but never fails. A test of the
+// timeout itself sets 0.
 func (p *PythonPool) SetLeastScriptTimeout(least time.Duration) {
 	p.leastScriptTimeout.Store(int64(least))
 }
 
-// SetStartTimeout is how long an interpreter the pool starts may take to say
-// it is ready, which is ten seconds in the exporter. It is for tests. An
-// interpreter that starts in a tenth of a second has taken more than the ten
-// on a machine busy enough, and a test that is not about the start then
-// fails by it; such a test runs against a pool that leaves the start a
-// minute, as it leaves a script (SetLeastScriptTimeout). A test of the limit
-// itself sets a short one, and starts something that never says it is ready.
+// SetStartTimeout sets how long an interpreter the pool starts may take to
+// say it is ready, which is ten seconds in the exporter. It is for tests. On
+// a busy enough machine, an interpreter that starts in a tenth of a second
+// can take more than the ten, and a test that is not about the start then
+// fails because of it. Such a test runs against a pool that gives the start
+// a minute, as it gives a script (SetLeastScriptTimeout). A test of the
+// limit itself sets a short one, and starts something that never says it is
+// ready.
 func (p *PythonPool) SetStartTimeout(limit time.Duration) {
 	p.startTimeout.Store(int64(limit))
 }
@@ -493,13 +501,13 @@ func (p *PythonPool) statsLocked(collector string) *PythonStats {
 	return st
 }
 
-// Stats returns the statistics kept under a collector's name, making them
-// when there are none. It is for whoever knows that the collector of that
-// name is the one a run is of, which a name alone does not say once a reload
-// may have removed the collector and another brought one back: the exporter
-// asks while it holds what a reload retires a collector's statistics under,
-// for a trip whose collector has been there since the trip read it
-// (exporter/pythonstats.go), and hands them to the trip's runs
+// Stats returns the statistics kept under a collector's name, creating them
+// if there are none. The caller must know that the collector of that name is
+// the one a run belongs to. A name alone does not say that, since a reload
+// may have removed the collector and another may have brought one back. The
+// exporter asks while it holds what a reload retires a collector's
+// statistics under, for a trip whose collector has existed since the trip
+// read it (exporter/pythonstats.go), and hands them to the trip's runs
 // (WithScriptTimer). A run that is handed none asks by its collector's name
 // when it begins, as every run did.
 func (p *PythonPool) Stats(collector string) *PythonStats {
@@ -509,25 +517,25 @@ func (p *PythonPool) Stats(collector string) *PythonStats {
 }
 
 // Departed returns the statistics of a run whose collector a reload removed
-// before the run took any: retired from the start, so what the run counts is
-// shown under no collector, leaves nothing under the collector's name, and
-// is counted for the pool as a whole.
+// before the run took any. They are retired from the start, so what the run
+// counts is shown under no collector, leaves nothing under the collector's
+// name, and is counted for the pool as a whole.
 func (p *PythonPool) Departed() *PythonStats { return &p.departed }
 
 // Retire drops the statistics kept under the names of collectors a reload
-// removed: they are shown no more, a collector added again under one of the
-// names starts from zero, and nothing is kept for a name that does not come
-// back. What they had counted stays counted for the pool as a whole, and so
-// is what the runs and workers that still hold them count from now on, a run
-// that waits for a worker, runs its script or ends, and a worker that is
-// stopped when its run ends: under no collector's name.
+// removed. They are no longer shown, a collector added again under one of
+// the names starts from zero, and nothing is kept for a name that does not
+// come back. What they had counted stays counted for the pool as a whole.
+// So does what the runs and workers still holding them count from now on
+// (a run that waits for a worker, runs its script or ends, and a worker
+// stopped when its run ends): under no collector's name.
 //
-// No worker outlives its statistics idle. The ones that are idle now are
-// stopped here, for the reload that removed their collector
-// (pythonStopReload), where the reload has not stopped them already (Retain,
-// which the configuration manager calls before the exporter retires
-// anything): a run of the removed collector may have left one since. A busy
-// one is stopped when its run ends (release).
+// No idle worker outlives its statistics. Workers idle now are stopped
+// here, for the reload that removed their collector (pythonStopReload),
+// unless the reload already stopped them (Retain, which the configuration
+// manager calls before the exporter retires anything): a run of the removed
+// collector may have left one since. A busy worker is stopped when its run
+// ends (release).
 func (p *PythonPool) Retire(collectors map[string]bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -594,10 +602,10 @@ func (p *PythonPool) countedLocked(st *PythonStats) *PythonStats {
 	return st
 }
 
-// statsOf is the statistics a run of collector counts in: carried, the ones
-// its trip was handed, when they are this pool's, and otherwise the ones
-// kept under the collector's name. A test may have put another pool in place
-// since a trip was handed its own (IsolatePythonWorkers).
+// statsOf returns the statistics a run of collector counts in: carried (the
+// ones its trip was handed) when they belong to this pool, and otherwise the
+// ones kept under the collector's name. A test may have put another pool in
+// place since a trip was handed its own (IsolatePythonWorkers).
 func (p *PythonPool) statsOf(carried *PythonStats, collector string) *PythonStats {
 	if carried != nil && carried.pool == p {
 		return carried
@@ -616,9 +624,9 @@ func (p *PythonPool) recordRun(st *PythonStats, outcome string) {
 
 // run sends one request to a worker for spec and returns its answer line and
 // how long the script ran, without starting a worker or handing it the
-// request. A worker from the pool that turns out to have died while it was
-// idle, before it took the request, is replaced by another, so its death
-// fails no scrape; one just started that dies is the failure it looks like.
+// request. A pooled worker that turns out to have died while idle, before it
+// took the request, is replaced by another, so its death fails no scrape. A
+// just-started worker that dies is the failure it looks like.
 func (p *PythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, timeout time.Duration) ([]byte, time.Duration, error) {
 	for {
 		worker, reused, err := p.acquire(ctx, spec)
@@ -681,21 +689,20 @@ func (p *PythonPool) unbusyLocked(key string) {
 	}
 }
 
-// acquire gives a worker for spec: an idle one of the pool, which reused
-// then says, or one it starts. The run counts in spec's statistics, which
-// are the collector's by name for a run that names none, and so does the
-// worker it is given: an idle worker is one of the script, and of those
-// statistics, the ones the run that started it counted its start in. Workers
-// are kept by a key that carries the collector's name, and a name does not
-// say whose a worker is once a reload has removed a collector and another
-// has brought one back under it: a run of the collector added again is not
-// given a worker the removed collector started, whose stop its series would
-// then count with no start, and a run of the removed collector that is
-// still under way, whose statistics are retired, is not given one the
-// collector added again started, which would leave that one's series with
-// its stop never counted. Such a run finds no idle worker, since none
-// outlives its statistics idle (Retire, release), and starts one, under the
-// pool's limit as any other.
+// acquire gives a worker for spec: an idle one from the pool (reused then
+// says so) or one it starts. The run counts in spec's statistics (the
+// collector's by name, for a run that names none), and so does its worker:
+// an idle worker belongs to the script and to the statistics its starting
+// run counted its start in. Workers are kept by a key that carries the
+// collector's name, and a name does not say whose a worker is once a reload
+// has removed a collector and another has brought one back under it. A run
+// of the re-added collector is not given a worker the removed collector
+// started, whose stop its series would then count with no start. A
+// still-running run of the removed collector, whose statistics are retired,
+// is not given one the re-added collector started, which would leave that
+// one's series with its stop never counted. Such a run finds no idle worker,
+// since none outlives its statistics idle (Retire, release), and starts one,
+// under the pool's limit like any other.
 func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, bool, error) {
 	key := spec.key()
 	p.mu.Lock()
@@ -734,10 +741,10 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 		if p.maxWorkers <= 0 || p.live < p.maxWorkers || p.evictIdleLocked() {
 			break
 		}
-		// Every worker the limit allows is starting or busy: wait in line
-		// for one to finish, within the run's own deadline. A waiter woken
-		// that still finds none, because a run that never waited took it
-		// first, keeps its place at the head of the line.
+		// Every worker the limit allows is starting or busy, so wait in line for
+		// one to finish, within the run's own deadline. A woken waiter that still
+		// finds none, because a run that never waited took it first, keeps its
+		// place at the head of the line.
 		wake := make(chan struct{})
 		if woken {
 			p.waiting = append([]chan struct{}{wake}, p.waiting...)
@@ -834,13 +841,13 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 		return
 	}
 	if obsolete || worker.stats.retired {
-		// A reload removed or changed this script while it ran, or removed
-		// the collector the worker was started for, whose statistics are
-		// retired: the script may be in use again, of a collector added
-		// again under the name, and the worker is none of that one's. So a
-		// run of a removed collector that began late, when its script was
-		// no longer in use, leaves no worker idle either. The stop is the
-		// reload's, counted for the pool alone.
+		// A reload removed or changed this script while it ran, or removed the
+		// collector the worker was started for, whose statistics are retired.
+		// The script may be in use again by a collector added again under the
+		// name, and the worker does not belong to that one. So a run of a
+		// removed collector that began late, when its script was no longer in
+		// use, leaves no worker idle either. The stop is the reload's, counted
+		// for the pool alone.
 		p.stopLocked(worker)
 		st.stops[pythonStopReload]++
 		return
@@ -963,18 +970,18 @@ type pythonWorkerSnapshot struct {
 }
 
 // Snapshot copies the statistics kept under a collector's name and counts
-// the idle workers that count in them. A name nothing is kept under has
-// counted nothing, and asking makes nothing kept under it: a reader may name
-// a collector a reload has just removed.
+// the idle workers that count in them. A name with nothing kept under it has
+// counted nothing, and asking creates nothing under it: a reader may name a
+// collector a reload has just removed.
 func (p *PythonPool) Snapshot(collector string) pythonWorkerSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.snapshotLocked(p.stats[collector])
 }
 
-// Kept returns the statistics kept under a collector's name, and nil when
-// there are none: for a reader, which makes none by asking. Like Stats, it is
-// for whoever knows that the collector of that name is the one it means
+// Kept returns the statistics kept under a collector's name, or nil when
+// there are none. It is for readers, and asking creates none. Like Stats, it
+// is for callers that know the collector of that name is the one they mean
 // (exporter/pythonstats.go).
 func (p *PythonPool) Kept(collector string) *PythonStats {
 	p.mu.Lock()
@@ -982,11 +989,11 @@ func (p *PythonPool) Kept(collector string) *PythonStats {
 	return p.stats[collector]
 }
 
-// SnapshotOf is Snapshot for the statistics a reader holds (Kept): what they
-// count is read from them, whatever is kept under the collector's name by
-// now, so a reader shows the counts of the collector it means. Retired since
-// the reader took them, they are what they were then; nil, or of another
-// pool, they have counted nothing.
+// SnapshotOf is Snapshot for statistics a reader holds (Kept). The counts are
+// read from them, whatever is kept under the collector's name by now, so a
+// reader shows the counts of the collector it means. If they were retired
+// after the reader took them, they are what they were then. If nil, or from
+// another pool, they have counted nothing.
 func (p *PythonPool) SnapshotOf(st *PythonStats) pythonWorkerSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1097,15 +1104,15 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 	// The worker outlives the scrape that starts it, so it must not be tied to
 	// that scrape's context; stop() ends it. -B: the importer never writes
 	// bytecode caches. Where a module's cache is missing or stale and its
-	// directory writable, it would otherwise try to write one through the
+	// directory is writable, it would otherwise try to write one through the
 	// sandboxed _io.FileIO, whose refusal it does not expect, and the import
-	// would fail. The worker is told how deep a decoded value nests, which
-	// is how deep it writes what a pre-script leaves in data (deep_check):
-	// the depth is stated once, with the decoders. And it is told how long
-	// an answer may be, limits.max_output_bytes: it does not write one
-	// that a list or a dict is in so many times over that it is longer
-	// (weigh), nor one whose strings are, with the keys of its dicts that
-	// are strings where it looks at those, each as often as it is written,
+	// would fail. The worker is told how deep a decoded value nests, which is
+	// how deep it writes what a pre-script leaves in data (deep_check); the
+	// depth is stated once, with the decoders. It is also told how long an
+	// answer may be, limits.max_output_bytes. It does not write an answer that
+	// a list or a dict appears in so many times over that it is longer
+	// (weigh), nor one whose strings make it longer (with its dicts' string
+	// keys, where it looks at those), each counted as often as it is written,
 	// nor a script's error, which it cuts to what is shown of one (failed).
 	// The exporter measures the line it reads, as it did.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10), strconv.Itoa(decode.MaxDepth), strconv.Itoa(spec.MaxOutput)) // #nosec G204 -- the interpreter is the operator's --python.path
@@ -1155,9 +1162,9 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 }
 
 // startEnded stops a worker whose answers ended before it said it was
-// ready, and is why its start failed: it exited. Why it did is on its
-// stderr, which is whole only once the process has been waited for, so that
-// is waited for, until overrun, the start's own limit, or the scrape's end.
+// ready, and returns why its start failed: it exited. The reason is on its
+// stderr, which is complete only once the process has been waited for. So it
+// waits for that, until overrun (the start's own limit) or the scrape's end.
 func (w *pythonWorker) startEnded(ctx context.Context, overrun <-chan time.Time) error {
 	w.stop()
 	select {
@@ -1169,10 +1176,10 @@ func (w *pythonWorker) startEnded(ctx context.Context, overrun <-chan time.Time)
 }
 
 // startOverran stops a worker that has not said it is ready within limit,
-// and is why its start failed. What it says is what was true when the limit
-// ran out, so that is asked before the worker is stopped: stopped, every
-// worker has exited, and an operator told so of one that was only slow looks
-// for a crash that did not happen.
+// and returns why its start failed. That reason states what was true when
+// the limit ran out, so it is asked before the worker is stopped. Once
+// stopped, every worker has exited, and an operator told so about one that
+// was only slow would look for a crash that did not happen.
 func (w *pythonWorker) startOverran(limit time.Duration) error {
 	defer w.stop()
 	select {
@@ -1183,11 +1190,11 @@ func (w *pythonWorker) startOverran(limit time.Duration) error {
 	return w.startFailure(fmt.Errorf("the interpreter did not start within %s: it was still running and had not said it was ready, so it was stopped; it did not crash: look at how busy the machine is and at how long the libraries the collector declares take to import", limit))
 }
 
-// startFailure is err, the failure of a start that ended with the
-// interpreter still running, with what the interpreter had written to stderr
-// by then. How much that is depends on when it was stopped, so the failure
-// is recognised without it (model.SameFailureText): a start that is too slow
-// on every scrape is one failure to the log, however far each got.
+// startFailure returns err, the failure of a start that ended with the
+// interpreter still running, with what the interpreter had written to
+// stderr by then. How much that is depends on when it was stopped, so the
+// failure is recognised without it (model.SameFailureText). A start that is
+// too slow on every scrape is one failure to the log, however far each got.
 func (w *pythonWorker) startFailure(err error) error {
 	tail := strings.TrimSpace(w.stderr.String())
 	if tail == "" {
@@ -1201,17 +1208,16 @@ func (w *pythonWorker) startFailure(err error) error {
 }
 
 // pythonWorkerEnvironment is the environment a worker starts in: the
-// exporter's own, and MALLOC_ARENA_MAX=1 unless the operator has set that
-// variable, whose value then stands.
+// exporter's own, plus MALLOC_ARENA_MAX=1 unless the operator has set that
+// variable, in which case the operator's value stands.
 //
-// glibc gives a second thread a malloc arena of its own, for which it
-// reserves 64 MiB of address space, used or not. A worker has a second
-// thread, the one that watches its parent, and limits.max_script_memory
-// bounds its address space: without the variable a worker that is ready
-// holds about 82 MiB where its interpreter needs 17, and the difference is
-// taken from what the limit leaves the script. With one arena both threads
-// allocate from the same heap. Other C libraries and systems ignore the
-// variable.
+// glibc gives a second thread its own malloc arena, and reserves 64 MiB of
+// address space for it, used or not. A worker has a second thread (the one
+// that watches its parent), and limits.max_script_memory bounds its address
+// space. Without the variable, a ready worker holds about 82 MiB where its
+// interpreter needs 17, and the difference is taken from what the limit
+// leaves the script. With one arena both threads allocate from the same
+// heap. Other C libraries and systems ignore the variable.
 func pythonWorkerEnvironment(environ []string) []string {
 	for _, entry := range environ {
 		if strings.HasPrefix(entry, pythonArenaVariable+"=") {
@@ -1257,18 +1263,19 @@ func (w *pythonWorker) gone() bool {
 // call runs one request in the worker, and returns its answer line and how
 // long the script ran.
 //
-// The request is handed over first: written, and read and parsed by the
+// The request is handed over first: written, then read and parsed by the
 // worker, which then says it has it (pythonRequestTaken). That takes as long
 // as the response is large, so it is bounded by the probe's deadline, or by
-// pythonHandoverTimeout when that comes first, and not by timeout,
-// limits.script_timeout, whose clock starts when the worker has the request:
-// a trivial script given a large response does not time out. A worker that
-// turns out dead before it has the request fails with pythonWorkerGone.
+// pythonHandoverTimeout when that comes first. It is not bounded by timeout
+// (limits.script_timeout), whose clock starts when the worker has the
+// request, so a trivial script given a large response does not time out. A
+// worker that turns out dead before it has the request fails with
+// pythonWorkerGone.
 //
-// What ends the wait for the answer says what the run failed of: the
-// script's own time, errPythonTimeout; the probe's deadline, where that
-// comes before it, a pythonDeadlineError; or the probe being abandoned, the
-// context's error.
+// What ends the wait for the answer tells what the run failed of:
+//   - the script's own time: errPythonTimeout;
+//   - the probe's deadline, where that comes first: a pythonDeadlineError;
+//   - the probe being abandoned: the context's error.
 func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Duration) ([]byte, time.Duration, error) {
 	handover := time.Now().Add(pythonHandoverTimeout)
 	probeDeadline, hasDeadline := ctx.Deadline()
@@ -1342,11 +1349,11 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 	}
 }
 
-// describe explains why a worker failed, with hint after it, and the end
-// of what it wrote to stderr, which is where CPython reports a crash or a
-// failed start. What it wrote is the operator's: a script may print the
-// data there, and a library may quote it in a warning, so a probe's caller
-// is told only that it is in the exporter's log.
+// describe explains why a worker failed, followed by hint and the end of
+// what it wrote to stderr, which is where CPython reports a crash or a
+// failed start. What it wrote is for the operator only: a script may print
+// the data there, and a library may quote it in a warning. So a probe's
+// caller is only told that it is in the exporter's log.
 func (w *pythonWorker) describe(err error, hint string) error {
 	message := "the interpreter exited"
 	if err != nil {
@@ -1359,10 +1366,10 @@ func (w *pythonWorker) describe(err error, hint string) error {
 	return model.WithOperatorDetail(errors.New(message+": "+shownStderr(tail)+hint), message+hint+"; what it wrote to stderr is in the exporter's log")
 }
 
-// memoryHint says, of a worker that died mid-run under a memory limit, that
-// the limit may be why: a C library such as lxml that cannot allocate may
-// end the interpreter instead of raising a MemoryError the script would
-// report.
+// memoryHint says, for a worker that died mid-run under a memory limit,
+// that the limit may be the cause. A C library such as lxml that cannot
+// allocate may end the interpreter instead of raising a MemoryError the
+// script would report.
 func (w *pythonWorker) memoryHint() string {
 	if w.maxMemory <= 0 {
 		return ""

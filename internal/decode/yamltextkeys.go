@@ -6,28 +6,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A decoded body's keys are text, the keys of JSON objects, and a YAML
+// A decoded body's keys are text, like the keys of JSON objects. A YAML
 // mapping's keys may be numbers, booleans and null, which the YAML library
-// decodes into a map of any keys: model.Normalize writes each as its text,
-// fmt.Sprint's. Keys written otherwise can be one text: 1 and 1.0 are both
-// "1", true and True "true", a key and an alias of it the key's text. The
-// library tells keys apart by how they are written, so it refuses none of
-// them, and keeps the later of two that decode into one value, 16 and 0x10
-// among them, without a word; and of two that are only one text, Normalize
-// kept whichever the map gave it last, which Go's map order picks at random.
-// A key written twice fails the scrape, and so does one written twice
-// otherwise: yamlKeysAsText finds them in the parsed document, by the lines
-// they are written on, in the library's words for a key written twice, and
-// yamlTextKeys, where a mapping is decoded with the keys of the mappings
-// merged into it with <<, which only the decoded value shows. A null key,
-// which has no text, is refused too, rather than read as "<nil>".
+// decodes into a map of any keys; model.Normalize writes each as its text,
+// fmt.Sprint's. Keys written differently can then be one text: 1 and 1.0 are
+// both "1", true and True are "true", and a key and an alias of it are the
+// key's text. The library tells keys apart by how they are written, so it
+// refuses none of them. It silently keeps the later of two keys that decode
+// into one value, 16 and 0x10 among them. Of two keys that are only one
+// text, Normalize kept whichever the map gave it last, which Go's map order
+// picks at random. A key written twice fails the scrape, and so does one
+// written twice in different ways. yamlKeysAsText finds those in the parsed
+// document, by the lines they are written on, in the library's words for a
+// key written twice. yamlTextKeys finds them where a mapping is decoded with
+// the keys of mappings merged into it with <<, which only the decoded value
+// shows. A null key, which has no text, is refused too, instead of being
+// read as "<nil>".
 
-// yamlKeysAsText refuses a document with a mapping two of whose keys, written
-// otherwise, are the same text, or with a null key, after the library has
-// decoded it and so has refused any key written twice alike. Each mapping
-// is read once, as the document is written, the keys merged into it apart;
-// only one with a key that is no text as written is looked into: keys that
-// are all text the library has told apart already.
+// yamlKeysAsText refuses a document with a null key, or with a mapping two
+// of whose keys, written differently, are the same text. It runs after the
+// library has decoded the document, so any key written twice the same way
+// is already refused. Each mapping is read once, as written, without the
+// keys merged into it. Only a mapping with a key that is not text as written
+// is looked into, since the library has told apart keys that are all text.
 func yamlKeysAsText(root *yaml.Node) error {
 	var problems []string
 	var walk func(n *yaml.Node)
@@ -46,10 +47,10 @@ func yamlKeysAsText(root *yaml.Node) error {
 	return yamlFailure(&yaml.TypeError{Errors: problems})
 }
 
-// yamlMappingKeysAsText adds to problems those of mapping's keys: a key that
-// is the text of an earlier one, `line 2: mapping key "1" already defined at
-// line 1`, naming it by that text, which is what the decoded body would have
-// held twice, and a key that is null.
+// yamlMappingKeysAsText adds to problems those of mapping's keys: a null
+// key, and a key that is the text of an earlier one, `line 2: mapping key
+// "1" already defined at line 1`. The problem names the key by that text,
+// which is what the decoded body would have held twice.
 func yamlMappingKeysAsText(mapping *yaml.Node, problems []string) []string {
 	plain := true
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
@@ -110,11 +111,11 @@ func yamlKeyAsText(key *yaml.Node) (string, bool) {
 }
 
 // yamlTextKeys is v with each mapping of any keys made a mapping of their
-// text, as model.Normalize makes it, refusing one two of whose keys are the
-// same text: of a mapping as it is written yamlKeysAsText has refused that,
-// and a null key wherever it is, so these are keys merged into a mapping
-// with <<, written otherwise than the mapping's own, as 1.0 beside 1, which
-// the library keeps both of.
+// text, as model.Normalize makes it. It refuses a mapping two of whose keys
+// are the same text. yamlKeysAsText has already refused that for a mapping
+// as written, and a null key anywhere. So these are keys merged into a
+// mapping with <<, written differently from the mapping's own (1.0 beside
+// 1), which the library keeps both of.
 func yamlTextKeys(v any) (any, error) {
 	switch x := v.(type) {
 	case map[any]any:

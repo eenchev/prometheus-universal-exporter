@@ -1,25 +1,28 @@
 package pagekit
 
-// SortableScript defines sortable(content, tableID, filterID, noun), which
-// makes the table of tableID in the element content sortable and its rows
-// filtered by the search box of filterID, and returns the function that
-// arranges the table again, for the page to call after it swaps new
-// content in. It is text for a page's own script, inside the function that
-// script runs in, so it adds nothing to the page's global names.
+// SortableScript defines sortable(content, tableID, filterID, noun). It makes
+// the table tableID inside the element content sortable, filters its rows by
+// the search box filterID, and returns the function that arranges the table
+// again, for the page to call after it swaps new content in. It is text for a
+// page's own script, inside the function that the script runs in, so it adds
+// nothing to the page's global names.
 //
-// The table sorts by the column whose heading is clicked, the other way at
-// a second click: numbers, a heading with data-sort="num", by each cell's
-// data-value, and text as it reads, the numbers in it by their value, job2
-// before job10, a letter's case no matter; a tie, and the order before any
-// click, is the rows' data-order. Its rows are filtered as the box is
-// typed in, matching in any case the text each row carries in data-match,
-// and the element with data-rows-of="<tableID>" says how many of the noun
-// (plural) match. The headings are made buttons here, the table marked
-// sortable, with aria-sort on each heading: without JavaScript they are
-// plain headings, as nothing would sort the table, and the filter's form,
-// hidden, is shown. The table is in the content, which a refresh
-// replaces, so the order chosen and the text typed are kept here and put
-// back on the new table, the box keeping focus and its caret where it was.
+// The table sorts by the column whose heading is clicked, and the other way
+// at a second click. Numbers (a heading with data-sort="num") sort by each
+// cell's data-value, and text sorts as it reads, with the numbers in it by
+// their value (job2 before job10) and case ignored. A tie, and the order
+// before any click, follow the rows' data-order.
+//
+// The rows are filtered as the box is typed in, matching, in any case, the
+// text that each row carries in data-match, and the element with
+// data-rows-of="<tableID>" says how many of the noun (plural) match.
+//
+// The headings are made into buttons here, and the table is marked sortable,
+// with aria-sort on each heading. Without JavaScript they stay plain
+// headings, since nothing would sort the table, and the filter's form stays
+// hidden. The table is in the content, which a refresh replaces, so the
+// chosen order and the typed text are kept here and put back on the new
+// table, with the box keeping focus and its caret where it was.
 const SortableScript = SortOrderScript + `
   function sortable(content, tableID, filterID, noun) {
     let column = -1, down = false, typed = "";
@@ -95,14 +98,14 @@ const SortableScript = SortOrderScript + `
 `
 
 // SortOrderScript defines what every sortable table of the pages sorts and
-// marks by, SortableScript's, whose rows are in the page, and the debug
-// page's series tables, whose rows are drawn from an answer's data, the
-// first of them alone: textOrder(x, y), which orders text as it reads, the
-// numbers in it by their value, job2 before job10, a letter's case no
-// matter; and markSorted(heads, sorted, down), which sets aria-sort on each
-// heading of heads, ascending or descending on sorted, the heading sorted
-// by (null for none), and none on the others, as SortableStyle marks them.
-// It is text for a page's own script, as SortableScript is.
+// marks by: SortableScript's tables, whose rows are in the page, and the
+// debug page's series tables, whose rows are drawn from an answer's data
+// (only the first of them). It defines textOrder(x, y), which orders text as
+// it reads, with the numbers in it by their value (job2 before job10) and
+// case ignored, and markSorted(heads, sorted, down), which sets aria-sort on
+// each heading of heads: ascending or descending on sorted, the heading
+// sorted by (null for none), and none on the others, as SortableStyle marks
+// them. It is text for a page's own script, as SortableScript is.
 const SortOrderScript = `
   const textOrder = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"}).compare;
   function markSorted(heads, sorted, down) {
@@ -110,13 +113,13 @@ const SortOrderScript = `
   }
 `
 
-// SortableStyle styles a table SortableScript made sortable and its filter
-// form, form.filter.table. Each heading's button shows the order it is
-// sorted by: ↕ for a column not sorted by, ↑ or ↓ for the one sorted by. A
-// number's column (th.num) has the mark before its name, so the name ends
-// where the column's numbers end. The space between a mark and the name is
-// \00a0, a no-break space: a space after an escape such as \2195 ends the
-// escape and is no part of the text, so "\2195 " is the mark alone, flush
+// SortableStyle styles a table that SortableScript made sortable, and its
+// filter form, form.filter.table. Each heading's button shows the order it
+// is sorted by: ↕ for a column not sorted by, and ↑ or ↓ for the one sorted
+// by. A number column (th.num) has the mark before its name, so the name
+// ends where the column's numbers end. The space between a mark and the name
+// is \00a0, a no-break space: a space after an escape such as \2195 ends the
+// escape and is not part of the text, so "\2195 " is the mark alone, flush
 // with the name.
 const SortableStyle = `
 table.sortable th button { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }

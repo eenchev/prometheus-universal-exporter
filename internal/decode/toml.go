@@ -11,39 +11,39 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The toml decoder reads a TOML document with github.com/BurntSushi/toml,
+// The toml decoder reads a TOML document with github.com/BurntSushi/toml
 // into the values the json decoder makes, so that a jq rule reads it as it
-// reads JSON: a table as a map[string]any, an array, an array of tables
-// among them, as a []any, a string, a boolean, an integer as an int, and a
-// float as a float64, nan and inf included, which the rules read as NaN and
-// +Inf. A date or a time, which JSON has not, is its text: an offset
-// date-time in RFC 3339 (1979-05-27T07:32:00Z, 1979-05-27T00:32:00-07:00,
-// with the fraction of a second it was written with), a local date-time as
-// 1979-05-27T07:32:00, a local date as 1979-05-27 and a local time as
-// 07:32:00, so that time_format reads it as written.
+// reads JSON. A table is a map[string]any, and an array (an array of tables
+// included) is a []any. A string is a string, a boolean a bool, an integer
+// an int, and a float a float64, nan and inf included, which the rules read
+// as NaN and +Inf. A date or a time, which JSON lacks, is its text, so that
+// time_format reads it as written: an offset date-time in RFC 3339
+// (1979-05-27T07:32:00Z, 1979-05-27T00:32:00-07:00, with the fraction of a
+// second it was written with), a local date-time as 1979-05-27T07:32:00, a
+// local date as 1979-05-27 and a local time as 07:32:00.
 //
-// The library keeps no bound of its own on what a document costs, and two
-// things a target's answer may hold cost it far more than their size:
+// The library has no bound of its own on what a document costs. Two things
+// a target's answer may hold cost it far more than their size:
 //
 //   - Arrays and inline tables nested one inside another are parsed by a
 //     function that calls itself for each, so a body of nothing but [ would
-//     take a stack frame for each byte. Nesting is bounded at MaxDepth, as
-//     every decoder's is, before the library sees the body (tomlNesting).
+//     take a stack frame per byte. Nesting is bounded at MaxDepth, as for
+//     every decoder, before the library sees the body (tomlNesting).
 //   - A key is looked up from the root for each of its parts, and each
 //     table the parts open is remembered by its whole name, so a key costs
-//     the square of how deep its tables are: a mebibyte of keys each 32
-//     tables deep took three seconds, and a single key 10,000 deep three. So
-//     the parts a value is named by from the root, those of its [table]
-//     header, of its key and of the keys of the inline tables around it, may
-//     be no more than maxTOMLTables, also counted before the library sees
-//     the body. A real document is a few tables deep.
+//     the square of how deep its tables are. A mebibyte of keys each 32
+//     tables deep took three seconds, and a single key 10,000 deep three.
+//     So a value may be named from the root by at most maxTOMLTables parts:
+//     those of its [table] header, of its key, and of the keys of the inline
+//     tables around it. This is also counted before the library sees the
+//     body. A real document is a few tables deep.
 
-// maxTOMLTables is how many parts a value of a TOML document may be named
-// by from the root, through its table header, its key and the keys of the
-// inline tables around it: the tables it lies in, and its own key. Within
-// it, a document costs the library less than ten times what a flat one of
-// its size does: a mebibyte of keys of 16 parts each, or of inline tables
-// nested 15 deep, took it a second, where one of flat keys took 0.13.
+// maxTOMLTables is how many parts may name a value of a TOML document from
+// the root, through its table header, its key and the keys of the inline
+// tables around it: the tables it lies in, plus its own key. Within this
+// limit a document costs the library less than ten times what a flat one of
+// the same size does. A mebibyte of keys of 16 parts each, or of inline
+// tables nested 15 deep, took it a second; one of flat keys took 0.13.
 const maxTOMLTables = 16
 
 // decodeTOML decodes body as a TOML document.
@@ -70,10 +70,10 @@ func decodeTOML(body []byte) (any, error) {
 const maxTOMLMessage = 256
 
 // tomlParseError is the library's error with no more of the body in it than
-// a failure may quote: its message may quote a token of any length, and is
+// a failure may quote. Its message may quote a token of any length, so it is
 // cut past maxTOMLMessage bytes, with its length, as a decoder cuts a value
-// it quotes; the last key the library read, which it adds, is left out, as
-// it may be any length too.
+// it quotes. The last key the library read, which it adds, is left out, as
+// it may be of any length too.
 func tomlParseError(parse toml.ParseError) error {
 	// The message is the library's own, or that of the error it wraps,
 	// which it does not export but writes after its prefix.
@@ -168,17 +168,17 @@ func tomlTime(t time.Time) string {
 }
 
 // tomlNesting refuses a body whose arrays and inline tables nest deeper than
-// MaxDepth, or a value of which is named by more than maxTOMLTables parts,
-// before the library reads it. It reads the body as the
-// library's lexer does as far as the two depend on it: comments, the four
-// kinds of string, the brackets of table headers, arrays and inline tables,
-// and where a key stands. Where it cannot follow the body it refuses it,
-// rather than leave the rest to the library: what lies past that place is
-// unscanned, and bounded by nothing, so a body the library reads otherwise
-// than the scan does, as it once read one starting with a second byte order
-// mark, would reach the library's recursion with no bound at all. A body the
-// scan cannot follow is no TOML, and the library would fail at the same
-// place; the message is the exporter's.
+// MaxDepth, or that has a value named by more than maxTOMLTables parts,
+// before the library reads it. It reads the body as the library's lexer
+// does, as far as the two checks depend on it: comments, the four kinds of
+// string, the brackets of table headers, arrays and inline tables, and
+// where a key stands. Where it cannot follow the body, it refuses the body
+// instead of leaving the rest to the library. What lies past that place is
+// unscanned and bounded by nothing. A body the library reads differently
+// from the scan (as it once read one starting with a second byte order
+// mark) would then reach the library's recursion with no bound at all. A
+// body the scan cannot follow is not TOML, and the library would fail at
+// the same place; the message is the exporter's.
 func tomlNesting(body []byte) error {
 	// The library passes over one byte order mark of its own, UTF-8 or
 	// either UTF-16 one, after the one Decode took off the response.

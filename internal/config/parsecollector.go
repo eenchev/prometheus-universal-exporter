@@ -12,21 +12,21 @@ import (
 
 // The debug page (exporter/debugpage.go) runs a collector written in a
 // browser against a response, without putting it in force. The collector is
-// read here, as the loader reads one of the collectors list, so that what the
-// debug page accepts the configuration accepts and the other way round, and
-// a mistake is reported in the words, and at the line, a load would report it.
+// read here the way the loader reads one of the collectors list. So the
+// debug page and the configuration accept the same collectors, and a mistake
+// is reported in the words, and at the line, that a load would use.
 // Four things a load does are not done:
 //
 //   - ${NAME} references are never expanded, whatever --config.expand-env
 //     says: the debug page's answer would show the exporter's environment;
-//   - no file the collector names is opened, as WithoutNamedFiles loads;
-//   - the files of the request's credentials are not required, such as an
-//     sshfile collector's known_hosts_file: the collector's request block is
-//     never made (model.Collector.RequestNotMade), and the debug page
-//     refuses a key that names a file. With WithRequestMade, for a request
-//     that is made, both are as a load has them;
-//   - the expression caches are not sized for it (expr.ReserveExpressions),
-//     which is the configuration in force's to do: a debug page's collector
+//   - no file the collector names is opened, as in a load WithoutNamedFiles;
+//   - the files of the request's credentials, such as an sshfile
+//     collector's known_hosts_file, are not required: the collector's
+//     request block is never made (model.Collector.RequestNotMade), and the
+//     debug page refuses a key that names a file. With WithRequestMade, for
+//     a request that is made, both are as in a load;
+//   - the expression caches are not sized for it (expr.ReserveExpressions).
+//     That is for the configuration in force to do: a debug page's collector
 //     sizing them to its own few expressions would have the configuration's
 //     compiled again and again.
 
@@ -36,20 +36,20 @@ type ParseOption func(*parseOptions)
 type parseOptions struct{ requestMade bool }
 
 // WithRequestMade reads a collector whose request block is made, as the
-// debug page's playground's is with --web.debug.dangerous when it fetches a
-// target itself: the files its request needs are required, and a grpc
-// collector's descriptor files are read, as a load requires and reads them.
-// ${NAME} references are still left as written.
+// debug page's playground does with --web.debug.dangerous when it fetches a
+// target itself. The files its request needs are required, and a grpc
+// collector's descriptor files are read, as in a load. ${NAME} references
+// are still left as written.
 func WithRequestMade() ParseOption {
 	return func(o *parseOptions) { o.requestMade = true }
 }
 
 // ParseCollector reads document, one collector as it is written under
-// collectors: — a mapping that starts with its name — and checks it as Load
+// collectors: (a mapping that starts with its name), and checks it as Load
 // checks a collector of the configuration. refuse, when not nil, is given the
-// collector as written, before it is checked, and may refuse it: the
-// debug page refuses what it does not run. The configuration returned holds
-// the collector alone, its defaults filled in, with the warnings a load would
+// collector as written, before it is checked, and may refuse it: the debug
+// page refuses what it does not run. The returned configuration holds only
+// the collector, with its defaults filled in, and the warnings a load would
 // give for it.
 func ParseCollector(document []byte, refuse func(*model.Collector) error, opts ...ParseOption) (*model.Config, error) {
 	var options parseOptions

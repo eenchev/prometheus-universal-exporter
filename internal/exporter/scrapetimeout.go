@@ -55,16 +55,17 @@ const (
 // interval, which is rarely more than minutes.
 const maxScrapeTimeout = time.Hour
 
-// probeBudget reads the scrape timeout Prometheus sent and returns how long the
-// probe may take. A missing, unparseable, non-positive or non-finite header
-// gives no budget, so a probe from something other than Prometheus behaves as
-// before: Inf is no length of time to wait, and counted as the longest one it
-// would bound the probe by an hour in place of --probe.default-timeout.
-// An offset larger than the timeout would leave nothing; the probe then keeps
-// half the timeout rather than failing at once. A timeout above
-// maxScrapeTimeout counts as that. Any positive timeout is a budget, however
-// small: one below a nanosecond, which rounds to none, is a nanosecond and
-// ends the probe at once, rather than no header at all and thirty seconds.
+// probeBudget reads the scrape timeout Prometheus sent and returns how long
+// the probe may take. A missing, unparseable, non-positive or non-finite
+// header gives no budget, so a probe from something other than Prometheus
+// behaves as before. Inf is no length of time to wait; counted as the
+// longest one, it would bound the probe by an hour in place of
+// --probe.default-timeout. An offset larger than the timeout would leave
+// nothing, so the probe then keeps half the timeout rather than failing at
+// once. A timeout above maxScrapeTimeout counts as that. Any positive
+// timeout is a budget, however small. One below a nanosecond, which rounds
+// to none, is a nanosecond and ends the probe at once, rather than counting
+// as no header at all and thirty seconds.
 func probeBudget(h http.Header, offset time.Duration) time.Duration {
 	raw := strings.TrimSpace(h.Get(scrapeTimeoutHeader))
 	if raw == "" {
@@ -112,12 +113,12 @@ func ValidateDefaultProbeTimeout(timeout time.Duration) error {
 // take; zero leaves it unbounded.
 func (s *Server) SetDefaultProbeTimeout(timeout time.Duration) { s.defaultProbeTimeout = timeout }
 
-// probeDeadline is the budget of a probe: Prometheus's scrape timeout less the
-// offset when it sent one, else the default timeout, whatever timeout
-// parameter the probe gave, unless the default is 0. source says where it
-// came from, and that the timeout parameter was capped when it asked for
-// more, so an error at the default's end does not read as the parameter
-// having been ignored.
+// probeDeadline is the budget of a probe. It is Prometheus's scrape timeout
+// less the offset when Prometheus sent one, else the default timeout,
+// whatever timeout parameter the probe gave, unless the default is 0.
+// source says where the budget came from, and that the timeout parameter
+// was capped when it asked for more, so an error at the default's end does
+// not read as if the parameter had been ignored.
 func (s *Server) probeDeadline(h http.Header, overrides fetch.RequestOverrides) (budget time.Duration, source string) {
 	if budget := probeBudget(h, s.timeoutOffset); budget > 0 {
 		return budget, budgetFromScrapeTimeout

@@ -9,9 +9,9 @@ import (
 )
 
 // The exporter sends requests of its own besides its collectors', such as
-// the OTLP export's. Their headers and TLS settings are held to what a
-// collector's request is held to when the configuration loads, by the same
-// code, so a setting Go would refuse to send is a load error for both rather
+// the OTLP export's. When the configuration loads, their headers and TLS
+// settings are checked by the same code and rules as a collector's request.
+// So a setting Go would refuse to send is a load error for both, rather
 // than a failure of every request. These are built with every request type.
 
 // CheckHeaders applies the checks of a collector's request.headers to headers
@@ -43,11 +43,12 @@ func CheckHeaderValue(value string) error {
 	return checkHeaderValue(value)
 }
 
-// CheckClientTLS refuses a tls block that names a client certificate without
-// its key, or a key without its certificate, as a collector's request.tls is
-// refused, and one whose files cannot be read or hold no certificate or key:
-// unlike a collector's, which are read at the first request to a target,
-// these are needed from the start, by a request the exporter makes on its own.
+// CheckClientTLS refuses a tls block that names a client certificate
+// without its key, or a key without its certificate, as a collector's
+// request.tls is refused. It also refuses one whose files cannot be read or
+// hold no certificate or key. Unlike a collector's files, which are read at
+// the first request to a target, these are needed from the start, by a
+// request the exporter makes on its own.
 func CheckClientTLS(t model.TLSConfig) error {
 	if err := CheckClientTLSKeys(t); err != nil {
 		return err
@@ -70,14 +71,15 @@ func CheckClientTLSKeys(t model.TLSConfig) error {
 }
 
 // TemplatedFields names the fields of a collector whose {{param_...}}
-// placeholders a probe's parameters fill, as their own errors name them:
-// request.path, what requestTemplates renders, such as request.body and
-// request.headers.<name>, and the values of transform.labels that hold a
-// placeholder, such as transform.labels.tenant (labelparams.go). It is how
-// the configuration knows that a placeholder anywhere else would be used as
-// written, without a second list of where placeholders work to keep in step
-// with this one. The labels of the metric rules, which have no path of
-// their own in a collector, are asked for one by one (TemplatedRuleLabel).
+// placeholders a probe's parameters fill, using the names their own errors
+// use. These are request.path, the fields requestTemplates renders (such as
+// request.body and request.headers.<name>), and the values of
+// transform.labels that hold a placeholder, such as transform.labels.tenant
+// (labelparams.go). The configuration uses it to know that a placeholder
+// anywhere else would be used as written, without a second list of
+// placeholder locations to keep in sync with this one. The labels of the
+// metric rules, which have no path of their own in a collector, are
+// checked one by one (TemplatedRuleLabel).
 func TemplatedFields(c *model.Collector) []string {
 	var fields []string
 	if HasPathParams(c.Request.Path) {

@@ -7,11 +7,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// validateSecretStores checks secret_stores and every reference to one in
-// the configuration (fetch/secretstore.go): a key that names a credential
-// file may hold a reference to a store the configuration has, and no other
-// key may. The exporter's own credentials, web.basic_auth's, are compared
-// at every request it answers, from files it stats, and take none.
+// validateSecretStores checks secret_stores and every reference to a store
+// in the configuration (fetch/secretstore.go). A key that names a credential
+// file may hold a reference to a store the configuration has; no other key
+// may. The exporter's own credentials, web.basic_auth's, take none: they are
+// compared at every request it answers, from files it stats.
 func validateSecretStores(c *model.Config) error {
 	if err := fetch.ValidateSecretStores(c.SecretStores); err != nil {
 		return err

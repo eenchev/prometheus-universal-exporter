@@ -1,24 +1,23 @@
 # Modbus
 
 The `modbus` request type reads holding and input registers, coils and
-discrete inputs from a device that speaks Modbus TCP — a PLC, an inverter,
-an energy meter, or a gateway with serial devices behind it — and hands
-their values to the transforms as a JSON document. The collector says
-where each value is and what it is, a 32-bit float in two registers or a
-bit, and the type reads it as a number, so a metric rule is one `jq`
-expression away.
+discrete inputs from a device that speaks Modbus TCP (a PLC, an inverter, an
+energy meter, or a gateway with serial devices behind it). It hands their
+values to the transforms as a JSON document. The collector says where each
+value is and what it is, such as a 32-bit float in two registers or a bit,
+and the type reads it as a number, so a metric rule is one `jq` expression
+away.
 
 It only reads: the functions that write a register or a coil are not in
 the code.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with modbus](#building-with-modbus)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with modbus](#building-with-modbus)).
 
 ## Building with modbus
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=modbus              # bin/prometheus-universal-exporter
@@ -26,10 +25,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=modbus -t exporter:modbus .
 go build -tags "$(sh tools/request-type-tags.sh '' '' modbus)" .
 ```
 
-The tag is `request_type_modbus`. A configuration with an `modbus` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_modbus`. A build without the type refuses a
+configuration with a `modbus` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -90,8 +89,12 @@ collectors:
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets). |
 
 A probe takes `timeout` and `param_<name>` parameters for the collector's
-[label values](REQUESTS.md#in-label-values). The decoder is `json`; use
-`jq`, `yq` or `python`. A scale, such as a register in tenths of a volt, is
+[label values](REQUESTS.md#in-label-values).
+
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`. A scale, such as a register in tenths of a volt, is
 arithmetic in the expression: `.volts_raw / 10`.
 
 ## Reads
@@ -144,11 +147,11 @@ collector's. Its `request` may set `timeout`.
 
 ## Limits
 
-A scrape ends at its deadline, the probe's `timeout` or the scrape
-timeout, and after 10 seconds when it has neither. One connection is made
-for each scrape and closed after its last read; many devices take only a
-few connections at once, so scrape a device from one exporter, and no more
-often than it answers.
+A scrape ends at its deadline: the probe's `timeout` or the scrape timeout,
+or 10 seconds when it has neither. One connection is made for each scrape
+and closed after its last read. Many devices take only a few connections at
+once, so scrape a device from one exporter, and no more often than it
+answers.
 
 ## Errors and self-metrics
 

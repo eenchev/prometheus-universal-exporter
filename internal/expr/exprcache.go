@@ -17,23 +17,23 @@ import (
 // Expressions are compiled once and reused by every scrape. Parsing and
 // compiling a jq program costs far more than running it on a typical
 // response, and a collector like the status page demo evaluates dozens of
-// them per scrape. Configuration validation compiles every expression a
+// them per scrape. Configuration validation compiles every expression that a
 // configuration holds, so a scrape normally finds its programs already here,
-// and a syntax error is reported at startup rather than on the first scrape.
+// and a syntax error is reported at startup instead of at the first scrape.
 //
 // The caches are keyed by the expression text (and, for XPath, the namespace
-// bindings), so two collectors sharing an expression share its program. Each
-// is bounded, so a configuration reloaded many times with changing
-// expressions cannot grow it forever, and keeps the expressions in use
-// compiled: it holds two generations, the recent one and the one before.
-// A lookup finds an expression in either; one found only in the older is
-// moved to the recent one. When the recent generation reaches the bound it
-// becomes the older one, and what the older one held and nobody asked for
-// since is dropped. An expression asked for at least once per generation is
-// therefore never compiled again, however many others come and go, and the
-// cache never holds more than twice its bound. A cache that was simply
-// emptied at its bound instead recompiled almost every lookup once a
-// configuration had more distinct expressions than that.
+// bindings), so two collectors that share an expression share its program.
+// Each cache is bounded, so a configuration reloaded many times with
+// changing expressions cannot grow it forever, while the expressions in use
+// stay compiled. It holds two generations, the recent one and the one
+// before. A lookup finds an expression in either, and one found only in the
+// older generation is moved to the recent one. When the recent generation
+// reaches the bound, it becomes the older one, and whatever the older one
+// held that nobody asked for since is dropped. An expression asked for at
+// least once per generation is therefore never compiled again, however many
+// others come and go, and the cache never holds more than twice its bound. A
+// cache that was simply emptied at its bound recompiled almost every lookup
+// once a configuration had more distinct expressions than the bound.
 
 // DefaultCacheEntries is each cache's bound per generation unless the
 // configuration asks for more (ReserveExpressions).
@@ -121,21 +121,25 @@ func (c *exprCache[T]) len() int {
 // Every jq program also has the value-parsing helpers, parse_bytes,
 // parse_duration, parse_time, parse_percent and parse_quantity (values.go).
 
-// JQVariables are bound in every jq program, in this order: $root, the whole
-// decoded document, so an expression evaluated against one item of a
-// metric's items can still look things up elsewhere in the response;
-// $status, the response's HTTP status; $headers, its headers by lower-case
-// name; $timings, how long the phases of the request it answered took;
-// $tls, the TLS connection the request was sent on; $url, where the request
-// went after its redirects; $redirects, how many redirects led there;
-// $http_version, the version of HTTP the answer came in; $remote_ip, the
-// address the request's connection was made to; $params, the probe's
-// parameters by name, in a transform's expressions; and $scrape_time and
-// $last_success, when the scrape began and when the last one that
-// succeeded did, in seconds since the epoch.
+// JQVariables are bound in every jq program, in this order:
+//   - $root: the whole decoded document, so an expression evaluated against
+//     one item of a metric's items can still look things up elsewhere in
+//     the response;
+//   - $status: the response's HTTP status;
+//   - $headers: its headers, by lower-case name;
+//   - $timings: how long the phases of the request took;
+//   - $tls: the TLS connection that the request was sent on;
+//   - $url: where the request went after its redirects;
+//   - $redirects: how many redirects led there;
+//   - $http_version: the version of HTTP that the answer came in;
+//   - $remote_ip: the address that the request's connection was made to;
+//   - $params: the probe's parameters by name, in a transform's expressions;
+//   - $scrape_time and $last_success: when the scrape began and when the
+//     last successful one did, in seconds since the epoch.
+//
 // Every program has them all, whatever the collector's request type, so a
-// rule that names one compiles anywhere and reads null where the request
-// has nothing to give (JQBindings).
+// rule that names one compiles anywhere and reads null where the request has
+// nothing to give (JQBindings).
 var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params", "$scrape_time", "$last_success"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
@@ -206,11 +210,11 @@ func CompileJQProgram(expression string) (*JQProgram, error) { return jqPrograms
 
 // JQProgram is a compiled jq expression. Most expressions of a metric rule,
 // and nearly all of those evaluated once per item, only read a field, such
-// as .id or .status.code, and running a gojq program for that costs over
-// twenty times what looking the field up does, most of it in the evaluation
-// environment gojq sets up for every run. So an expression that is a field
-// path alone is recognised when it compiles, from gojq's own parse of it, and
-// Lookup reads it directly.
+// as .id or .status.code. Running a gojq program for that costs over twenty
+// times as much as looking the field up, mostly in the evaluation
+// environment that gojq sets up for every run. An expression that is a bare
+// field path is therefore recognised when it compiles, from gojq's own parse
+// of it, and Lookup reads it directly.
 type JQProgram struct {
 	Code *gojq.Code
 	// path is the field names in order, when isPath: none for ".".
@@ -234,9 +238,9 @@ type JQProgram struct {
 
 // Lookup evaluates the program directly when it is a field path and every
 // step of it is an object or null, as gojq does: a field of an object is its
-// value, null when it has none, and a field of null is null. Otherwise ok is
-// false, and the program is run: a field of anything else is gojq's error to
-// report, and whatever is not a field path is gojq's to evaluate.
+// value, or null when it has none, and a field of null is null. Otherwise ok
+// is false and the program is run: a field of anything else is gojq's error
+// to report, and anything that is not a field path is gojq's to evaluate.
 func (p *JQProgram) Lookup(input any) (value any, ok bool) {
 	if !p.isPath {
 		return nil, false
@@ -366,12 +370,12 @@ func newXPathProgram(expression string, namespaces map[string]string) (*XPathPro
 
 // XPathProgram is a compiled XPath expression that many goroutines may use at
 // once. Unlike a jq program, an *xpath.Expr may not be shared: Evaluate runs
-// the expression's query tree in place, keeping its position in fields of the
-// tree, and Select clones the same tree while it may be being run. So the
-// program keeps a pool of compiled copies, and each use takes one of its own:
-// a scrape takes a copy the last one returned, and only when every copy is in
-// use is another compiled, which costs about as much as a scrape of a small
-// document.
+// the expression's query tree in place, keeping its position in fields of
+// the tree, and Select clones the same tree while it may be running. The
+// program therefore keeps a pool of compiled copies, and each use takes its
+// own: a scrape takes the copy that the last one returned, and only when
+// every copy is in use is another compiled, which costs about as much as a
+// scrape of a small document.
 type XPathProgram struct {
 	pool sync.Pool
 	// sums are the expression's calls of sum() in its own context, nil for

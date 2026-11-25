@@ -1,11 +1,11 @@
 # Redis and Valkey
 
-The `redis` request type reads a Redis or Valkey server, which speak the same
-protocol: its `INFO`, and the replies of read-only commands the collector
-lists, such as the length of a queue, handed to `jq`, `yq` or `python` as one
-JSON document. Use it where a server's own numbers, or the size of what an
-application keeps in it, are what you want as metrics, and a dedicated
-exporter for it is one more thing to run:
+The `redis` request type reads a Redis or Valkey server (they speak the same
+protocol). It hands the server's `INFO`, and the replies of read-only
+commands that the collector lists, such as the length of a queue, to `jq`,
+`yq` or `python` as one JSON document. Use it where a server's own numbers,
+or the size of what an application keeps in it, are what you want as
+metrics, and a dedicated exporter would be one more thing to run:
 
 - memory used against `maxmemory`, clients connected and blocked, hits and
   misses, evictions, from `INFO`;
@@ -115,14 +115,17 @@ request:
 
 ## Sentinel
 
-With `sentinel`, the target is a Sentinel rather than the server: the
-scrape asks it which server is the primary of `sentinel.master` now, with
-`SENTINEL GET-MASTER-ADDR-BY-NAME`, and what it knows of it, with
-`SENTINEL MASTER`, on a connection of its own, closed before the primary is
-dialed; then it reads that server as it reads any target, `INFO` and the
-commands, logged in with the collector's `username` and `password_file`.
-After a failover, the next scrape reads the new primary, whatever the
-Sentinel the target names.
+With `sentinel`, the target is a Sentinel instead of the server.
+
+1. The scrape asks the Sentinel which server is the primary of
+   `sentinel.master` now, with `SENTINEL GET-MASTER-ADDR-BY-NAME`, and what
+   it knows of it, with `SENTINEL MASTER`. This uses a connection of its
+   own, closed before the primary is dialed.
+2. It then reads that server as it reads any target, `INFO` and the
+   commands, logged in with the collector's `username` and `password_file`.
+
+After a failover, the next scrape reads the new primary, whatever Sentinel
+the target names.
 
 ```yaml
 request:
@@ -158,15 +161,18 @@ not the servers' account: a Sentinel's `requirepass` is its own. Without
 written as `sentinel monitor` names it, and takes no placeholder;
 `username` needs `password_file` beside it.
 
-A master the Sentinel does not know fails the scrape, saying so. The
-primary it names is held to `allowed_targets` and `denied_targets` as the
-target is, before it is dialed and at the address dialed, and the cloud
-metadata service is refused; one refused is never connected to. Over TLS,
-`rediss://` or a `tls` block, both connections speak TLS, the primary's
-certificate verified for `tls.server_name` or else the address the
-Sentinel answered, most often an IP address; set `tls.server_name` when
-the servers' certificates name a host. The Sentinel's replies and the
-primary's are read against the response limit together.
+A master that the Sentinel does not know fails the scrape, saying so.
+
+- The primary that the Sentinel names is held to `allowed_targets` and
+  `denied_targets` as the target is, before it is dialed and at the address
+  dialed, and the cloud metadata service is refused. A refused primary is
+  never connected to.
+- Over TLS (`rediss://` or a `tls` block), both connections speak TLS. The
+  primary's certificate is verified for `tls.server_name`, or else for the
+  address that the Sentinel answered, most often an IP address. Set
+  `tls.server_name` when the servers' certificates name a host.
+- The Sentinel's replies and the primary's are read against the response
+  limit together.
 
 ## What a scrape reads
 
@@ -178,11 +184,11 @@ before the next:
   `info_sections` nor `commands` is set;
 - each of `commands`, in order.
 
-So a collector of `commands` alone sends no `INFO`; give it `info_sections`
-too for both. The connection is closed when the scrape is over, the next
-scrape making its own: a scrape is a handful of commands at most every few
-seconds, and a connection kept between them would need a keepalive, an idle
-timeout and a limit of its own for no gain worth them.
+A collector of `commands` alone therefore sends no `INFO`; give it
+`info_sections` too for both. The connection is closed when the scrape is
+over, and the next scrape makes its own. A scrape is a handful of commands
+at most every few seconds, and a connection kept between scrapes would need
+a keepalive, an idle timeout and a limit of its own for little gain.
 
 The answer is a JSON document:
 
@@ -200,16 +206,17 @@ The answer is a JSON document:
 - `info` holds each section by its heading in lower case, `_` for a blank,
   each an object of its `name:value` lines. It is there when `INFO` was sent.
 - A value that is a number is a JSON number, written exactly as the server
-  wrote it, so a 64-bit counter keeps every digit; `1.00M`, `55.12%`,
-  `7.2.4` and `00000000` stay text. A value `INFO` writes for people, such
-  as `used_memory_human`, has the number beside it, `used_memory`, which is
-  the one to read; where a reply has only such text, the
+  wrote it, so a 64-bit counter keeps every digit. `1.00M`, `55.12%`,
+  `7.2.4` and `00000000` stay text.
+- A value that `INFO` writes for people, such as `used_memory_human`, has
+  the number beside it, `used_memory`, which is the one to read. Where a
+  reply has only such text, the
   [value-parsing helpers](CONFIGURATION.md#value-parsing-helpers) read it:
-  `parse_bytes` reads `1.00M` as 1048576 and `parse_percent` `55.12%` as
-  0.5512. A value made of `name=value` pairs joined
-  by commas — a keyspace line, a replica's `slave0` line, every
-  `cmdstat_<command>` line of `commandstats` — is an object of them, each
-  value read the same way.
+  `parse_bytes` reads `1.00M` as 1048576, and `parse_percent` reads `55.12%`
+  as 0.5512.
+- A value made of `name=value` pairs joined by commas (a keyspace line, a
+  replica's `slave0` line, every `cmdstat_<command>` line of
+  `commandstats`) is an object of them, each value read the same way.
 - `commands` holds each command's reply under its `name`. It is there when
   `commands` was set.
 
@@ -234,11 +241,12 @@ commands:
 
 The command and its subcommand are matched in any case. An argument is sent
 as one bulk string, exactly as written, so a key with a blank or a quote in
-it needs no escaping, and YAML's numbers, `[ZCOUNT, q, 0, 100]`, are sent as
-the text they are written as. An argument may hold `{{param_name}}`
-placeholders, filled from the probe's `param_<name>` parameters, as a path's
-are ([Path parameters](REQUESTS.md#path-parameters)), with any value; the
-command's name and subcommand may not.
+it needs no escaping, and YAML's numbers, as in `[ZCOUNT, q, 0, 100]`, are
+sent as the text that they are written as. An argument may hold
+`{{param_name}}` placeholders, filled from the probe's `param_<name>`
+parameters, as a path's are ([Path parameters](REQUESTS.md#path-parameters)),
+with any value. The command's name and subcommand may not hold
+placeholders.
 
 Only these commands are taken, with the arguments after the name, or the
 name and subcommand, that each takes; anything else is refused when the
@@ -258,15 +266,17 @@ configuration loads:
 | `EXISTS`, `PFCOUNT` | one key or more | a number |
 | `HMGET` | a key and one field or more | a list |
 
-These read, and answer no more than what they read: no command writes, lists
-keys (`KEYS`, `SCAN`), dumps a collection without a bound (`LRANGE`,
-`SMEMBERS`), blocks (`BLPOP`, `XREAD`), or shows the server's settings, a
-password among them, or its other clients (`CONFIG GET`, `CLIENT LIST`). A
-reply is mapped kind by kind: an integer as a number, a string as text, a
-nil as `null`, an array as a list; a string reply is never read as a number,
-so a counter kept with `INCR` and read with `GET` is `"17"`, which `jq`'s
-`tonumber` reads. An error reply, such as `WRONGTYPE`, fails the scrape with
-the command and the server's words.
+These commands read, and answer no more than what they read. No command
+writes, lists keys (`KEYS`, `SCAN`), dumps a collection without a bound
+(`LRANGE`, `SMEMBERS`), blocks (`BLPOP`, `XREAD`), or shows the server's
+settings, including a password, or its other clients (`CONFIG GET`,
+`CLIENT LIST`).
+
+A reply is mapped kind by kind: an integer as a number, a string as text, a
+nil as `null`, and an array as a list. A string reply is never read as a
+number, so a counter kept with `INCR` and read with `GET` is `"17"`, which
+`jq`'s `tonumber` reads. An error reply, such as `WRONGTYPE`, fails the
+scrape with the command and the server's words.
 
 ## Examples
 
@@ -295,8 +305,8 @@ the probe:
 /probe?collector=queue_length&target=redis-master.cache:6379&param_queue=emails
 ```
 
-The replicas of a primary, and how far behind each is, in seconds since it
-last answered and in bytes of the replication stream, from
+The replicas of a primary, and how far behind each one is, in seconds since
+it last answered and in bytes of the replication stream, from
 `INFO replication`; on a replica, how long ago it heard from its primary:
 
 ```yaml
@@ -379,48 +389,55 @@ targets:
         ca_file: /etc/exporter/redis/tenant-ca.pem
 ```
 
-So one collector serves servers that each take a password of their own. A
-target's `password_file` replaces the collector's, and is the password of
-the collector's user, or of the target's own `username`, which replaces
-the collector's and needs the target's own `password_file`: one without it
-is refused when the file loads, since the collector's password is not
-another user's. A target that names neither logs in with the collector's
-account. A target's `tls` replaces the
-collector's whole block, a key it leaves out not being taken from the
-collector's; written, even as `tls: {}`, it asks for TLS, which a
-`redis://` target, asking for plaintext, contradicts, refused when the file
-loads. A target cannot turn off the TLS its collector asks for. Its
-password and TLS files are read at each scrape, as the collector's are, and
-by [`--dry-run`](CONFIGURATION.md#dry-run), which warns of them under the
-target's name; the debug report shows its `AUTH user ***`. None of these
-keys holds a placeholder, and no probe parameter sets them: a probe always
-logs in as the collector does. A target's account and block are part of its
-[cache key](CONFIGURATION.md#response-caching), so targets that log in
-differently never share an answer, nor a trip to the server.
+One collector therefore serves servers that each take a password of their
+own.
+
+- **Account.** A target's `password_file` replaces the collector's. It is
+  the password of the collector's user, or of the target's own `username`,
+  which replaces the collector's and needs the target's own `password_file`.
+  A `username` without it is refused when the file loads, because the
+  collector's password is not another user's. A target that names neither
+  logs in with the collector's account.
+- **TLS.** A target's `tls` replaces the collector's whole block: a key that
+  it leaves out is not taken from the collector's. Written, even as
+  `tls: {}`, it asks for TLS. A `redis://` target asks for plaintext, so the
+  two together are refused when the file loads. A target cannot turn off
+  the TLS that its collector asks for.
+- **Files.** Its password and TLS files are read at each scrape, as the
+  collector's are, and by [`--dry-run`](CONFIGURATION.md#dry-run), which
+  warns about them under the target's name. The debug report shows its
+  `AUTH user ***`.
+- None of these keys holds a placeholder, and no probe parameter sets them:
+  a probe always logs in as the collector does.
+- A target's account and block are part of its
+  [cache key](CONFIGURATION.md#response-caching), so targets that log in
+  differently never share an answer or a trip to the server.
 
 ## Limits
 
-Everything the server answers a scrape is read against `max_response_bytes`,
-or `limits.max_response_bytes`, 10 MiB when neither is set, counted in the
-bytes of the replies as they come off the connection. A string whose
-declared length is past what is left fails the scrape before a byte of it is
-read, and no more is held for one than the server has sent of it, so a
-broken or hostile server's `$1000000000` costs the bytes that came, never a
-gigabyte; an array whose elements could not fit fails the same way. Either
-counts in `http_exporter_series_limit_exceeded_total` as a limit exceeded.
-Arrays nest at most 16 deep and a line of a reply, but a string's data, is
-at most 64 KiB; a server past either, or one that answers no RESP2 at all,
-fails the scrape saying it is no RESP2 reply.
+Everything that the server answers a scrape is read against
+`max_response_bytes`, or `limits.max_response_bytes`, 10 MiB when neither is
+set, counted in the bytes of the replies as they come off the connection.
 
-The document the replies make is held to the same limit: JSON writes a
-control character as six bytes (`\u0001`) and a quote or a backslash as two,
-so replies within the limit can make a document past it, which fails the
-scrape as a limit exceeded too, saying how large the document was.
+- A string whose declared length is past what is left fails the scrape
+  before a byte of it is read. No more is held for a string than the server
+  has sent of it, so a broken or hostile server's `$1000000000` costs the
+  bytes that came, never a gigabyte. An array whose elements could not fit
+  fails the same way. Either case counts in
+  `http_exporter_series_limit_exceeded_total` as an exceeded limit.
+- Arrays nest at most 16 deep, and a line of a reply, other than a string's
+  data, is at most 64 KiB. A server past either, or one that does not answer
+  in RESP2 at all, fails the scrape, saying that it is not a RESP2 reply.
+
+The document that the replies make is held to the same limit. JSON writes a
+control character as six bytes (`\u0001`) and a quote or a backslash as
+two, so replies within the limit can make a document past it. That also
+fails the scrape as an exceeded limit, saying how large the document was.
 
 The connection, the TLS handshake and every command end at the probe's
-deadline, its `timeout` or the scrape's, 30 seconds without one: a server
-that stops answering fails the scrape when it comes, with the deadline's
-error and the command it was waiting on.
+deadline: its `timeout`, or the scrape's, 30 seconds without one. A server
+that stops answering fails the scrape at the deadline, with the deadline's
+error and the command that the scrape was waiting on.
 
 ## Errors and self-metrics
 
@@ -447,24 +464,26 @@ Requests
      Redis-Command: XINFO GROUPS events
 ```
 
-With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics)
-a scrape is labelled `url="redis://host:port/db"`, `rediss://` over TLS, and
-`http_method="INFO"` when it sends `INFO` alone, `http_method="COMMANDS"`
-when it sends the collector's commands alone, and
-`http_method="INFO+COMMANDS"` when it sends `info_sections`' `INFO`s and the
-commands.
+With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics),
+a scrape is labelled `url="redis://host:port/db"` (`rediss://` over TLS) and:
+
+- `http_method="INFO"` when it sends `INFO` alone;
+- `http_method="COMMANDS"` when it sends the collector's commands alone;
+- `http_method="INFO+COMMANDS"` when it sends the `INFO`s of
+  `info_sections` and the commands.
 
 ## Limitations
 
 - **RESP2 only.** The client never sends `HELLO 3`, and every Redis and
   Valkey server answers RESP2 to a client that does not.
-- **No cluster routing.** A collector reads the server its target names, or
-  the primary its Sentinel names; a cluster's nodes are each a target, and
-  a command on a key another node holds fails with the `MOVED` error.
-- **Text values only.** The document is JSON, whose strings are text, so a
-  reply holding bytes that are not UTF-8 — a serialized object, a
-  compressed value, a counter written in binary, or a hash field named so —
-  fails the scrape, naming the command, rather than being put in the
+- **No cluster routing.** A collector reads the server that its target
+  names, or the primary that its Sentinel names. Each of a cluster's nodes
+  is a target, and a command on a key that another node holds fails with
+  the `MOVED` error.
+- **Text values only.** The document is JSON, whose strings are text. A
+  reply holding bytes that are not UTF-8 (a serialized object, a compressed
+  value, a counter written in binary, or a hash field with such a name)
+  fails the scrape, naming the command, instead of being put in the
   document with U+FFFD in place of those bytes. Read such a key's size or
   kind instead, with `STRLEN`, `TYPE` or `OBJECT ENCODING`.
 - **One connection per scrape.** No connection is kept between scrapes, so

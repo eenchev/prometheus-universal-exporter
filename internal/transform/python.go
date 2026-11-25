@@ -19,11 +19,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// pythonInput is one request to a worker. The body goes to it once: a
-// script's response.text is its response.body, and so is its data when the
-// decoder gives the script the body as text, so the worker makes the three
-// one string (DataIsBody) rather than being sent, and parsing, a copy for
-// each. A large body would otherwise cost three times its size to hand over.
+// pythonInput is one request to a worker. The body is sent once. A script's
+// response.text is its response.body, and so is its data when the decoder
+// gives the script the body as text. So the worker makes the three one
+// string (DataIsBody) instead of receiving and parsing a copy of each.
+// Otherwise a large body would cost three times its size to hand over.
 type pythonInput struct {
 	Mode       string         `json:"mode"`
 	Script     string         `json:"script"`
@@ -69,16 +69,16 @@ type pythonOutput struct {
 	// State is the state the script left, as JSON, for a collector with
 	// transform.state (pythonstate.go); "" when the worker wrote none.
 	State string `json:"state"`
-	// Shown is the error of a script that failed as the worker cut it, in
-	// place of Error: one of more than 16,384 characters, or whose line
-	// limits.max_output_bytes does not hold, as the exporter would have
-	// shown it (shownByWorker).
+	// Shown is the error of a failed script as the worker cut it, used
+	// instead of Error. That is an error of more than 16,384 characters, or
+	// one whose line does not fit in limits.max_output_bytes, shown as the
+	// exporter would have shown it (shownByWorker).
 	Shown []any `json:"shown"`
 	// read says readPythonAnswer read the answer (pythonanswer.go), which
-	// leaves no Metrics: series are the metrics as the series they stand
-	// for, up to the first that is none, whose error seriesErr is, and
-	// count is how many the script emitted. normalized says Data is what
-	// model.Normalize makes of it already.
+	// leaves Metrics empty. series holds the metrics as the series they
+	// stand for, up to the first that is not one; seriesErr is that one's
+	// error. count is how many the script emitted. normalized says Data is
+	// already what model.Normalize makes of it.
 	read       bool
 	series     []model.Metric
 	seriesErr  error
@@ -88,10 +88,10 @@ type pythonOutput struct {
 
 // pythonMetric is a metric as a script emitted it. metric(...) makes its
 // name, type and help text, its value a float, its labels text and its
-// timestamp whole milliseconds, but a script can also append to metrics
-// itself, so each is read as whatever it is, and checked here as metric(...)
-// checks it: what is wrong is reported naming the metric and the argument
-// rather than as the JSON decoder's error about a field of this struct.
+// timestamp whole milliseconds. But a script can also append to metrics
+// itself. So each field is read as whatever it is, and checked here as
+// metric(...) checks it. An error names the metric and the argument,
+// instead of being the JSON decoder's error about a field of this struct.
 type pythonMetric struct {
 	Name      any
 	Help      any
@@ -112,11 +112,12 @@ func pythonMetricFrom(index int, raw any) (pythonMetric, error) {
 }
 
 // A float that is NaN or infinite has no JSON form, and the worker and the
-// exporter exchange JSON. Each side writes one as a string no data holds —
-// NUL, a marker, the value, NUL — and the other reads it back as the float.
-// Going to the worker, the marker is replaced in the encoded line with NaN,
-// Infinity or -Infinity, which Python's json reads as floats; coming back,
-// the worker writes the marker, and pythonFloats turns it into the float.
+// exporter exchange JSON. Each side writes such a float as a string no data
+// contains: NUL, a marker, the value, NUL. The other side reads it back as
+// the float. Towards the worker, the marker is replaced in the encoded line
+// with NaN, Infinity or -Infinity, which Python's json reads as floats.
+// Coming back, the worker writes the marker and pythonFloats turns it into
+// the float.
 const nonFiniteMarker = "\x00pue-nonfinite:"
 
 var nonFiniteValues = map[string]float64{
@@ -355,11 +356,12 @@ func pythonSeries(ctx context.Context, out *pythonOutput) (*model.MetricSet, err
 	return set, nil
 }
 
-// shareHelp gives each series a script made without a help text the first
-// one a series of its name was made with. A metric's help is its family's,
-// written once, with the first of its series: a script that said it for a
-// later series alone, as one does that makes the first in a branch of its
-// own, said it for the metric, and it was left out without a word.
+// shareHelp gives each series a script made without a help text the help
+// of the first series of its name that had one. A metric's help belongs to
+// its family and is written once, with the first series. A script might set
+// it only on a later series, for example when it makes the first one in a
+// separate branch. That help was meant for the metric, but was silently
+// dropped.
 func shareHelp(series []model.Metric) {
 	missing, said := false, false
 	for i := range series {
@@ -385,16 +387,17 @@ func shareHelp(series []model.Metric) {
 	}
 }
 
-// prometheusFromPython reads back what a pre-script of a prometheus transform
-// left in data: the {"metrics": [...]} document pythonPrometheusData gave it,
-// each series a mapping of name, type, help, labels and timestamp, and value,
-// or buckets, sum and count for a histogram, quantiles, sum and count for a
-// summary. A histogram or summary without sum or count, or with None for it,
-// has none, as one the target wrote without it, and is checked as one read
-// from the target is (model.Histogram.Settle): a histogram's count and the
-// +Inf entry of its buckets are each read as the script left them, also when
-// they differ or when it left neither. One left with nothing at all, no
-// buckets or quantiles, no sum and no count, is refused (emptySeriesError).
+// prometheusFromPython reads back what a pre-script of a prometheus
+// transform left in data: the {"metrics": [...]} document from
+// pythonPrometheusData. Each series is a mapping of name, type, help,
+// labels and timestamp, plus value, or buckets, sum and count for a
+// histogram, or quantiles, sum and count for a summary. A histogram or
+// summary without sum or count, or with None for it, has none, like one
+// the target wrote without it. It is checked like one read from the target
+// (model.Histogram.Settle). A histogram's count and the +Inf entry of its
+// buckets are each read as the script left them, even when they differ or
+// when both are missing. A series left with nothing at all (no buckets or
+// quantiles, no sum and no count) is refused (emptySeriesError).
 func prometheusFromPython(data any) (model.MetricSet, error) {
 	document, ok := data.(map[string]any)
 	list, listed := document["metrics"].([]any)
@@ -422,10 +425,10 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 		return model.Metric{}, errors.New("has no name")
 	}
 	m := model.Metric{Name: name, Type: model.UntypedMetricType}
-	// A type, a help or labels of another kind than a series has is the
-	// script's mistake, as a value of another kind is: read as none given,
-	// the series was exported untyped, without its help or without its
-	// labels, which made another series of it. None is none given.
+	// A type, help or labels of the wrong kind is the script's mistake, like
+	// a value of the wrong kind. Read as not given, the series was exported
+	// untyped, without its help, or without its labels, which made it a
+	// different series. None means not given.
 	switch kind := series["type"].(type) {
 	case nil:
 	case string:
@@ -563,12 +566,13 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 	return m, nil
 }
 
-// emptySeriesError is the error of a histogram or a summary a pre-script left
-// with nothing: none of its parts, its buckets or quantiles, no sum and no
-// count. The decoder never reads such a series from a target, and it would be
-// exported as a TYPE line with no sample under it. It is what a misspelled
-// key leaves, "bucket" for "buckets", so the error says which keys such a
-// series has and which this one has, the first of them when they are many.
+// emptySeriesError is the error for a histogram or summary that a
+// pre-script left with nothing: no buckets or quantiles, no sum and no
+// count. The decoder never reads such a series from a target, and it would
+// be exported as a TYPE line with no sample under it. A misspelled key
+// causes it, such as "bucket" for "buckets". So the error lists the keys
+// such a series has and the keys this one has, the first few if there are
+// many.
 func emptySeriesError(kind, name, parts string, series map[string]any) error {
 	const shown = 12
 	keys := model.SortedKeys(series)
@@ -625,10 +629,10 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
 	}
-	// The run counts in the statistics it takes here, once, however it ends
-	// and whatever a reload does to its collector meanwhile: the ones its
-	// trip carries, and for a run that carries none those kept under the
-	// collector's name (PythonPool.statsOf).
+	// The run is counted once in the statistics it takes here, however it
+	// ends and whatever a reload does to its collector meanwhile. These are
+	// the statistics its trip carries, or, for a run without any, those
+	// kept under the collector's name (PythonPool.statsOf).
 	timer := scriptTimerFrom(ctx)
 	spec := pythonWorkerSpec(pythonPath, c)
 	spec.stats = pool.statsOf(timer.carried(), c.Name)
@@ -667,26 +671,25 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		}
 	}
 	if out != nil && out.Log != "" {
-		// What the script printed and logged, its first 4 KiB of the one
-		// and twenty lines of the other, for whoever debugs it; it counts
-		// against max_output_bytes only as far as that. A debug probe's
-		// report shows it (WithRuleLogger). A script that failed has both
-		// with its failure, where the failure's line had the room: of
-		// what it printed its last 1,024 characters, written at warn,
-		// since they are what was printed just before it failed and are
-		// wanted without a second run at debug.
+		// Keep what the script printed and logged for whoever debugs it:
+		// the first 4 KiB of printed output and twenty log lines. It counts
+		// against max_output_bytes only up to that. A debug probe's report
+		// shows it (WithRuleLogger). A failed script has both with its
+		// failure, if the failure's line had room. Of the printed output
+		// that is the last 1,024 characters, written at warn. They are what
+		// was printed just before the failure, and are wanted without a
+		// second run at debug.
 		printed, logged := pythonLogLines(out.Log)
 		logger := ruleLogger(ctx)
 		switch {
 		case printed != "" && err != nil:
 			// It goes with the failure (PrintedBeforeFailure), which is
-			// logged once and then sparingly while it repeats: a line of
-			// its own was written at every scrape of a script that fails
-			// at every one. A script that prints what it was sent while
-			// it is being written prints a token, and this is in the log
-			// of an exporter that was not asked for a script's output:
-			// what reads as a credential is masked, as in any text a
-			// failure carries.
+			// logged once and then sparingly while it repeats. A separate
+			// line was written at every scrape of a script that fails
+			// every time. A script under development that prints its input
+			// prints a token, and this reaches the log of an exporter that
+			// never asked for script output. So anything that looks like a
+			// credential is masked, as in any text a failure carries.
 			err = &failedAfterPrinting{error: err, printed: fetch.RedactText(printed)}
 		case printed != "":
 			logger.Debug("python "+what+" printed", "collector", c.Name, "output", printed)
@@ -708,10 +711,10 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }
 
-// failedAfterPrinting is a script's failure with the last of what the
-// script printed before it, which is no part of the failure's text: a
-// failure is told apart from another by its text, and what was printed
-// differs from one scrape to the next.
+// failedAfterPrinting is a script's failure together with the last part of
+// what the script printed before it. That output is not part of the
+// failure's text, because failures are told apart by their text, and the
+// printed output differs from one scrape to the next.
 type failedAfterPrinting struct {
 	error
 	printed string
@@ -719,11 +722,11 @@ type failedAfterPrinting struct {
 
 func (e *failedAfterPrinting) Unwrap() error { return e.error }
 
-// PrintedBeforeFailure is the last 1,024 characters of what a Python
-// script printed before it failed with err, what reads as a credential in
-// them masked, and "" for a script that printed nothing and for an error
-// that is no script's failure. Whoever logs the failure writes it beside
-// it.
+// PrintedBeforeFailure is the last 1,024 characters a Python script printed
+// before it failed with err, with anything that looks like a credential
+// masked. It is "" for a script that printed nothing and for an error that
+// is not a script failure. Whoever logs the failure writes it next to the
+// failure.
 func PrintedBeforeFailure(err error) string {
 	var failed *failedAfterPrinting
 	if errors.As(err, &failed) {
@@ -786,10 +789,10 @@ func countedPythonResult(st *PythonStats, c *model.Collector, what string, timeo
 	// (pythonanswer.go); any other line is read as every line was.
 	out, read := readPythonAnswer(line)
 	if !read {
-		// Numbers are read as the JSON decoder reads a response's: as
-		// json.Number, which model.Normalize makes an int, or a *big.Int
-		// past int64, so an ID a pre-script passes through keeps every
-		// digit rather than being rounded to the nearest float64 above
+		// Numbers are read the same way the JSON decoder reads a
+		// response's: as json.Number. model.Normalize makes that an int, or
+		// a *big.Int past int64. So an ID a pre-script passes through keeps
+		// every digit instead of being rounded to the nearest float64 above
 		// 2^53.
 		out = &pythonOutput{}
 		decoder := json.NewDecoder(bytes.NewReader(line))
@@ -801,11 +804,11 @@ func countedPythonResult(st *PythonStats, c *model.Collector, what string, timeo
 	}
 	if !out.OK {
 		pool.recordRun(st, pythonRunScriptError)
-		// A traceback past what an error holds is shown by its end, the
-		// exception's own line and the frames before it (scripterror.go):
-		// by the worker already where it might not have fitted the output
-		// limit whole.
-		// The answer goes back with the failure for what the script
+		// A traceback longer than an error holds is shown by its end: the
+		// exception's own line and the frames before it (scripterror.go).
+		// The worker already does this where the whole might not fit the
+		// output limit.
+		// The answer goes back with the failure, for what the script
 		// logged before it failed (runPython).
 		if out.Shown != nil {
 			return out, model.Errorf("python %s failed: %s", what, shownByWorker(out.Shown))
@@ -820,16 +823,16 @@ func countedPythonResult(st *PythonStats, c *model.Collector, what string, timeo
 //
 // A probe reports how long its Python ran in
 // http_exporter_script_duration_seconds. The scripts run deep inside the
-// transform, so the probe hands them a timer through the context, and they add
-// the time each script ran, as limits.script_timeout measures it: the
-// pre-script and the python transform together, without starting an
-// interpreter or handing it the response.
+// transform, so the probe passes them a timer through the context. Each
+// script adds its run time as limits.script_timeout measures it: the
+// pre-script and the python transform together, excluding interpreter
+// start and handing over the response.
 //
-// The timer also carries, the same way and for the same scripts, the worker
-// statistics the probe's runs count in (PythonStats), which the probe took
-// for the collector it read: a run finds them with the timer, and asks for
-// none by its collector's name, which a reload may have given to another
-// collector since.
+// The timer also carries, the same way and for the same scripts, the
+// worker statistics that the probe's runs count in (PythonStats). The probe
+// took them for the collector it read. A run finds them through the timer
+// and does not look them up by its collector's name, which a reload may
+// have given to another collector since.
 type ScriptTimer struct {
 	mu    sync.Mutex
 	total time.Duration
@@ -875,15 +878,19 @@ func (t *ScriptTimer) Seconds() (float64, bool) {
 	return t.total.Seconds(), t.ran
 }
 
-// pythonScriptData is what a script gets as data, by decoder: the parsed
-// document of JSON, YAML, graphite, NDJSON, logfmt, TOML, INI and InfluxDB line protocol; CSV rows, mappings by header or lists
-// without one; the text of text, HTML and XML; and, for Prometheus
-// exposition, {"metrics": [...]}, each series a mapping of its name, type,
-// help, labels and value — or a histogram's buckets, sum and count, a
-// summary's quantiles, sum and count — and its timestamp when it has one. A
-// histogram or summary the target wrote without a _sum or a _count has no
-// sum or count key. A histogram's +Inf bucket is among its buckets with the
-// count the target gave it, which its count key need not be the same as
+// pythonScriptData is what a script gets as data, by decoder:
+//   - JSON, YAML, graphite, NDJSON, logfmt, TOML, INI and InfluxDB line
+//     protocol: the parsed document;
+//   - CSV: rows, as mappings by header, or lists without one;
+//   - text, HTML and XML: the text;
+//   - Prometheus exposition: {"metrics": [...]}. Each series is a mapping
+//     of its name, type, help, labels and value (or a histogram's buckets,
+//     sum and count, or a summary's quantiles, sum and count), plus its
+//     timestamp when it has one.
+//
+// A histogram or summary the target wrote without a _sum or a _count has
+// no sum or count key. A histogram's +Inf bucket is among its buckets with
+// the count the target gave it, which may differ from its count key
 // (model.Histogram).
 func pythonScriptData(d *decode.Decoded) any {
 	switch d.Kind {
@@ -942,13 +949,13 @@ func pythonPrometheusData(set model.MetricSet) map[string]any {
 	return map[string]any{"metrics": metrics}
 }
 
-// firstUnreadableLabel is the first, by name, of a series' labels a script
-// gave whose value is no text, and why it is none. The labels are a map,
-// gone through in no order: of two that are no text the failure named
-// whichever came first, another on the next scrape, which the log took for a
-// new failure each time (model.SameFailureText). So once one fails they are
-// gone through again in the order of their names; read is what the value is
-// read as before it is made text.
+// firstUnreadableLabel returns the first, by name, of a series' labels from
+// a script whose value is not text, and why. The labels are a map with no
+// order. With two such labels, the failure named whichever came first, and
+// another one on the next scrape. The log then took it for a new failure
+// each time (model.SameFailureText). So once one fails, they are checked
+// again in name order. read is what the value is read as before it is
+// made text.
 func firstUnreadableLabel(labels map[string]any, read func(any) any) (string, error) {
 	names := make([]string, 0, len(labels))
 	for name := range labels {

@@ -56,14 +56,18 @@ The file is `root` / target / `path`:
 | `/probe?collector=textfile&target=nightly` | `root/nightly/batch.prom` |
 | `/probe?collector=textfile&path=backup.prom` | `root/backup.prom` |
 
-`target` is optional. It names a file or a directory under `root`, and may be
-written relative to `root`, as an absolute path inside it, or as a `file://`
-URL of one: `nightly`, `/var/lib/node_exporter/textfile_collector/nightly` and
-`file:///var/lib/node_exporter/textfile_collector/nightly` are the same target.
-A `file://` URL is read as a URL, percent-escapes decoded:
-`file:///var/lib/node_exporter/textfile_collector/a%20b.prom` is the file
-`a b.prom`, and a `%` that is part of a file's name is written `%25`. The two
-plain forms are paths and are taken as written.
+`target` is optional. It names a file or a directory under `root`, and may
+be written relative to `root`, as an absolute path inside it, or as a
+`file://` URL of one: `nightly`,
+`/var/lib/node_exporter/textfile_collector/nightly` and
+`file:///var/lib/node_exporter/textfile_collector/nightly` are the same
+target.
+
+- A `file://` URL is read as a URL, with percent-escapes decoded:
+  `file:///var/lib/node_exporter/textfile_collector/a%20b.prom` is the file
+  `a b.prom`, and a `%` that is part of a file's name is written `%25`.
+- The two plain forms are paths and are taken as written.
+
 With a target that names the file, `path` can be left out of the collector:
 
 ```yaml
@@ -79,13 +83,15 @@ With a target that names the file, `path` can be left out of the collector:
 /probe?collector=any_textfile&target=backup.prom
 ```
 
-A target, `path` or path parameter that would lead outside `root` — `..`, an
-absolute path elsewhere, a symbolic link pointing out — is refused: a target
-with `400 Bad Request` before anything is read, a `path` or path parameter as a
-failed scrape. A path parameter fills exactly one file or directory name and
-may not contain `/` or `\`, nor be `.` or `..`. A placeholder's default is
-held to the same rule when the configuration loads, since every probe that
-left the parameter out would fail on it: `collector "files" request.path: the
+A target, `path` or path parameter that would lead outside `root` (`..`, an
+absolute path elsewhere, a symbolic link pointing out) is refused: a target
+with `400 Bad Request` before anything is read, and a `path` or path
+parameter as a failed scrape.
+
+A path parameter fills exactly one file or directory name. It may not
+contain `/` or `\`, nor be `.` or `..`. A placeholder's default is held to
+the same rule when the configuration loads, because every probe that left
+the parameter out would fail on it: `collector "files" request.path: the
 default of param_dir is "..", which no probe could use (path parameter
 param_dir must not be ".."), so every probe that leaves param_dir out would
 fail; change the default`. An empty default, `{{param_sub:}}`, adds nothing
@@ -195,18 +201,21 @@ localfile_files_skipped 0
 | `localfile_scrape_error{file}` | `1` when the file was left out — it could not be read, decoded or transformed, or it broke a rule below — and `0` otherwise. |
 | `localfile_files_skipped` | Matching files not read because the directory had more than `max_files`. |
 
-**One bad file does not sink the rest.** A file that fails at any stage is left
-out alone: its series are missing, its `localfile_scrape_error` reads `1`, and
-the reason is logged as a warning naming the file and the stage. Every other
-file's series are answered, and the probe succeeds. The collector's
-self-metrics count the failure as usual — a malformed file in
-`http_exporter_parse_errors_total`, an oversized one in
-`http_exporter_series_limit_exceeded_total`. That includes a metric rule with
-`error_mode: fail`: it fails its file, not the probe. A rule with
-`error_mode: log` is [logged](LOGGING.md) for each file by itself, with the
-`file`: `metric extraction failed` once and then as a repeat, and
-`metric extraction recovered` when that file has its value again, whatever
-the file is named. Alert on a file left out:
+**One bad file does not sink the rest.** A file that fails at any stage is
+left out on its own: its series are missing, its `localfile_scrape_error`
+reads `1`, and the reason is logged as a warning naming the file and the
+stage. Every other file's series are answered, and the probe succeeds.
+
+- The collector's self-metrics count the failure as usual: a malformed file
+  in `http_exporter_parse_errors_total`, an oversized one in
+  `http_exporter_series_limit_exceeded_total`.
+- A metric rule with `error_mode: fail` fails its file, not the probe.
+- A rule with `error_mode: log` is [logged](LOGGING.md) for each file
+  separately, with the `file`: `metric extraction failed` once and then as a
+  repeat, and `metric extraction recovered` when that file has its value
+  again, whatever the file is named.
+
+Alert on a file left out:
 
 ```promql
 localfile_scrape_error == 1
@@ -235,22 +244,24 @@ with a dot matches only a pattern that starts with one, as in a shell, so the
 hidden temporary files many writers rename into place are not read half-written.
 With `*.prom`, a temporary `batch.prom.$$` is not read either.
 
-The directory is `root`, or the directory under it the probe's or static
-target's `target` names; `/probe?collector=textfiles&target=nightly` reads
-`root/nightly`. There is no file to name, so the `path` and `param_<name>`
-probe parameters, and `request.path` in a static target, are refused. A
-directory collector whose [label values hold
-placeholders](REQUESTS.md#in-label-values) has something for a
-`param_<name>` to fill: it takes the parameters its labels name, for the
-series of every file, refuses any other as unused, and still refuses `path`;
-a static target gives them under `params`.
+The directory is `root`, or the directory under it that the probe's or
+static target's `target` names: `/probe?collector=textfiles&target=nightly`
+reads `root/nightly`. There is no file to name, so the `path` and
+`param_<name>` probe parameters, and `request.path` in a static target, are
+refused.
 
-Any file a collector can decode can be read this way, not only `.prom`. Each
-file's decoder is chosen as for one file: from its extension with
-`decoder.type: auto`, or the collector's `decoder.type`. The collector's one transform applies to every file, so a
-directory read by one collector should hold files of one shape — `*.prom`
-passed through, `*.json` status files with `jq`, `*.txt` or `*.log` lines with
-`regex`:
+A directory collector whose
+[label values hold placeholders](REQUESTS.md#in-label-values) does have
+something for a `param_<name>` to fill. It takes the parameters that its
+labels name, for the series of every file, refuses any other as unused, and
+still refuses `path`. A static target gives them under `params`.
+
+Any file that a collector can decode can be read this way, not only `.prom`.
+Each file's decoder is chosen as for one file: from its extension with
+`decoder.type: auto`, or the collector's `decoder.type`. The collector's one
+transform applies to every file, so a directory read by one collector should
+hold files of one shape: `*.prom` passed through, `*.json` status files with
+`jq`, or `*.txt` or `*.log` lines with `regex`:
 
 ```yaml
   - name: status_files
@@ -297,20 +308,27 @@ A refused file is a failed file: it is logged, its `localfile_scrape_error`
 reads `1` and its `localfile_mtime_seconds` is reported. `max_age` applies to
 each file, and `limits.max_metrics` to the whole answer.
 
-Files are read four at a time, and answered in name order whichever finished
-first. Reading the directory is one read for the
-[bounds on reads](#what-it-takes-from-node_exporter): left running by a probe
-that gave up on it, it is one of the collector's four abandoned reads. It ends
-with the probe's `timeout` or
-deadline. **A deadline does not lose what was read.** The files read by then
-are answered; a file still being read, or not reached, fails alone —
-`localfile_scrape_error` `1`, its mtime reported when it was taken, and a log
-line saying it was not read before the deadline. No further file is started.
-An answer cut short this way is not cached, since `cache.ttl` would go on
-serving the files it did not reach as failed; the next probe reads the
-directory again. A read the exporter's shutdown cut short, on a static target,
-publishes nothing and logs no failure, as any static target scrape the
-shutdown ends. Only a directory that could not even be listed in time fails the probe.
+Files are read four at a time, and answered in name order, whichever
+finished first. Reading the directory counts as one read for the
+[bounds on reads](#what-it-takes-from-node_exporter): if a probe gives up on
+it while it is still running, it is one of the collector's four abandoned
+reads. It ends with the probe's `timeout` or deadline.
+
+**A deadline does not lose what was read.**
+
+- The files read by then are answered.
+- A file still being read, or not reached, fails on its own:
+  `localfile_scrape_error` is `1`, its mtime is reported when it was taken,
+  and a log line says that it was not read before the deadline. No further
+  file is started.
+- An answer cut short this way is not cached, because `cache.ttl` would go
+  on serving the files that it did not reach as failed. The next probe reads
+  the directory again.
+- A read that the exporter's shutdown cut short, on a static target,
+  publishes nothing and logs no failure, like any static target scrape that
+  the shutdown ends.
+
+Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
@@ -348,10 +366,10 @@ as `windows-1252`, unless it starts with a byte order mark (see
 [collector-wide labels](CONFIGURATION.md#collector-wide-labels) apply as usual.
 
 Transforms and Python scripts see the file as a response without a status
-(`$status` is `null` in jq and yq, `response.status_code` is `None` in Python)
-and with three headers: `Content-Type` from the extension, `Content-Length`,
-and `Last-Modified`, the file's modification time. A pre-script can use the
-last to publish the file's age.
+(`$status` is `null` in jq and yq, and `response.status_code` is `None` in
+Python) and with three headers: `Content-Type` from the extension,
+`Content-Length`, and `Last-Modified`, the file's modification time. A
+pre-script can use the last one to publish the file's age.
 
 ## What it takes from node_exporter
 
@@ -366,9 +384,9 @@ in:
   stays inside `root`; an absolute link is refused even when it points inside,
   because where it leads depends on where `root` is mounted. Give each
   collector the narrowest directory that holds its files.
-- **Only regular files.** A directory, device, socket or named pipe is refused
-  without being read, and files are opened non-blocking, so a named pipe can
-  never hang a scrape the way it would hang a plain `cat`.
+- **Only regular files.** A directory, device, socket or named pipe is
+  refused without being read, and files are opened non-blocking, so a named
+  pipe can never hang a scrape the way it would hang a plain `cat`.
 - **No torn reads.** A writer that rewrites a file in place can be caught
   half-way. A file whose size or modification time changes while it is read is
   read again, and a scrape fails rather than export a mix of two versions if it
@@ -388,24 +406,25 @@ in:
   scrape — a `502` that Prometheus records as `up` 0 for the probe — and the
   modification time is also available to transforms.
 - **Bounded reads.** A read stops at the collector's response limit, and a
-  probe returns when its `timeout` or Prometheus's scrape timeout ends even if
-  the file lives on a network filesystem that has stopped answering (see
+  probe returns when its `timeout` or Prometheus's scrape timeout ends, even
+  if the file lives on a network filesystem that has stopped answering (see
   [Probe deadlines](CONFIGURATION.md#probe-deadlines)). A read cannot be
-  cancelled, though, so the read itself goes on, abandoned by its probe; a
-  collector may have at most four such reads. Once four abandoned reads have
-  not returned, a probe fails at once — `collector "textfile" already has 4 file
-  reads that have not returned` — rather than adding another, and reads resume
-  as the filesystem answers. Reads whose probe is still waiting for them are
-  not counted, so any number of probes may read a filesystem that answers at
-  the same time.
+  cancelled, though, so the read itself goes on, abandoned by its probe.
+  - A collector may have at most four such abandoned reads. Once four have
+    not returned, a probe fails at once (`collector "textfile" already has 4
+    file reads that have not returned`) instead of adding another, and reads
+    resume as the filesystem answers.
+  - Reads whose probe is still waiting for them are not counted, so any
+    number of probes may read a filesystem that answers at the same time.
 - **Least privilege.** The published image runs as the unprivileged user
-  `exporter`, so the files must be readable by it; a file it may not read fails
-  the scrape with `permission denied` rather than being skipped silently.
+  `exporter`, so the files must be readable by it. A file that it may not
+  read fails the scrape with `permission denied` instead of being skipped
+  silently.
 
-A collector with `path` reads one file per probe; one with `files` reads a
-[whole directory](#reading-a-directory) as node_exporter does, each file checked
-on its own and labelled with its name, so a broken file is named and fails
-alone.
+A collector with `path` reads one file per probe. One with `files` reads a
+[whole directory](#reading-a-directory) as node_exporter does, each file
+checked on its own and labelled with its name, so a broken file is named and
+fails on its own.
 
 ## Errors and self-metrics
 
@@ -430,9 +449,9 @@ http_exporter_scrapes_total{collector="textfile",http_method="READ",url="file://
 
 Mount the directory into the exporter's pod read-only with the chart's
 `extraVolumes` and `extraVolumeMounts`. A volume shared with the job that
-writes the files, such as a PersistentVolumeClaim, works wherever the pod runs;
-a `hostPath` reads the directory of whichever node the pod is scheduled on, so
-pin the pod to that node:
+writes the files, such as a PersistentVolumeClaim, works wherever the pod
+runs. A `hostPath` reads the directory of whichever node the pod is
+scheduled on, so pin the pod to that node:
 
 ```yaml
 extraVolumes:

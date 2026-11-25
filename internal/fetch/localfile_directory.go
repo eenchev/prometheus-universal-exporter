@@ -26,14 +26,14 @@ import (
 //	  root: /var/lib/node_exporter/textfile_collector
 //	  files: ["*.prom"]
 //
-// Every file directly in the directory — root, or the directory under it the
-// target names — whose name matches one of the patterns is read, decoded and
-// transformed on its own, and its series get a file label naming it. A file
-// that cannot be read, decoded or transformed fails alone: its series are
-// left out, localfile_scrape_error{file} reads 1 for it, the reason is
-// logged, and every other file's series are answered as usual. That is the
-// point of reading a directory this way rather than concatenating it: one
-// broken file must not sink the rest.
+// The directory is root, or the directory under it that the target names.
+// Every file directly in it whose name matches one of the patterns is read,
+// decoded and transformed on its own, and its series get a file label
+// naming it. A file that cannot be read, decoded or transformed fails
+// alone: its series are left out, localfile_scrape_error{file} reads 1 for
+// it, the reason is logged, and every other file's series are answered as
+// usual. That is why a directory is read this way rather than concatenated:
+// one broken file must not sink the rest.
 //
 // Reading a directory is bounded, because a directory is easy to fill:
 //
@@ -49,11 +49,12 @@ import (
 // A refused file is a failed file: its mtime is reported, and its scrape
 // error reads 1.
 //
-// An sshfile collector with request.files reads a directory on a remote host
-// by the same code, through an SFTP session instead of an os.Root
-// (readSourceDirectory, fileSource), and an s3file collector the objects
-// under a prefix of a bucket, so this file carries the three types' build
-// constraint.
+// The same code serves two other types (readSourceDirectory, fileSource):
+//   - an sshfile collector with request.files reads a directory on a remote
+//     host, through an SFTP session instead of an os.Root;
+//   - an s3file collector reads the objects under a prefix of a bucket.
+//
+// So this file carries the three types' build constraint.
 
 const (
 	// DefaultLocalFileMaxFiles is request.max_files when unset.
@@ -148,11 +149,11 @@ func maxListedEntries(c *model.Collector) int {
 	return max(10*c.Request.MaxFiles, 1000)
 }
 
-// awaitDirectory waits for a directory read, done, or for ctx to end,
+// awaitDirectory waits for a directory read (done) or for ctx to end,
 // whichever comes first, and answers what progress holds then. When ctx
-// ends first, abandon is called, the read is told to start no further file,
-// and the files it has not read fail alone; only a directory not yet listed
-// fails the whole read.
+// ends first, abandon is called and the read is told to start no further
+// file. The files it has not read fail alone. Only a directory not yet
+// listed fails the whole read.
 func awaitDirectory(ctx context.Context, full string, progress *directoryProgress, done <-chan error, abandon func()) (*DirectoryRead, error) {
 	var read *DirectoryRead
 	select {
@@ -240,9 +241,10 @@ func (p *directoryProgress) snapshot(unfinished func(name string) error) *Direct
 }
 
 // readSourceDirectory reads the matching files of root/dir in src into
-// progress: it lists the directory, decides from each file's size which are
-// read, and reads those, several at a time. An error is returned only when the directory
-// itself cannot be read; a file that cannot be is recorded as failed.
+// progress. It lists the directory, decides from each file's size which are
+// read, and reads those, several at a time. An error is returned only when
+// the directory itself cannot be read. A file that cannot be read is
+// recorded as failed.
 func readSourceDirectory(src fileSource, c *model.Collector, dir string, progress *directoryProgress) error {
 	rootDir := c.Request.Root
 	name := dir

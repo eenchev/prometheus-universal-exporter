@@ -20,20 +20,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// An sshfile read reads through an SFTP session what localfile reads through
-// an os.Root (filereads.go): sftpSource is the fileSource of request.root on
-// the host.
+// An sshfile read uses an SFTP session the way localfile uses an os.Root
+// (filereads.go): sftpSource is the fileSource of request.root on the host.
 //
-// The operating system confines an os.Root's names; an SFTP server confines
-// nothing but to what the account may read. So every name is resolved here
-// before it is used: request.root, once a read, and then each name under it,
-// component by component, every symbolic link on the way followed as the
-// server would follow it, with Lstat and ReadLink. A name that resolves
-// outside root is refused (errLeavesRoot), and the server is handed the
-// resolved path, which has no link left in it to follow. A link changed
-// between that check and the open is followed by the server: what the
-// exporter can then read is what the account can, which is why it should be
-// one that can read nothing else it must not.
+// The operating system confines the names of an os.Root. An SFTP server
+// confines nothing beyond what the account may read. So every name is
+// resolved here before it is used: request.root once per read, then each
+// name under it, component by component. Every symbolic link on the way is
+// followed as the server would follow it, with Lstat and ReadLink. A name
+// that resolves outside root is refused (errLeavesRoot). The server gets
+// the resolved path, which has no links left to follow. A link changed
+// between that check and the open is followed by the server. The exporter
+// can then read whatever the account can, so the account should be unable
+// to read anything else it must not.
 
 // sshMaxLinks is how many symbolic links one name may lead through, as
 // Linux's own limit, before it is refused as a loop.
@@ -72,10 +71,10 @@ func (s *sftpSource) run(read func() error) error {
 	return read()
 }
 
-// abandon closes the files the read has open, each on its own: a close
-// waits for the server's answer. A directory being listed, or whose
-// listing is being closed, is abandoned too, which ends its listing at
-// once, the host answering or not, and waits for nothing.
+// abandon closes the files the read has open, each separately, because a
+// close waits for the server's answer. A directory being listed, or whose
+// listing is being closed, is abandoned too. This ends its listing at
+// once, whether or not the host answers, and waits for nothing.
 func (s *sftpSource) abandon() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,9 +218,9 @@ func (f *sftpFile) Close() error {
 	return f.File.Close()
 }
 
-// sftpDir lists a directory on the host, a batch at a time as the
-// directory read asks for entries (sftpLister), so the bound on the entries
-// a scrape lists is the bound on what is asked of the host and held in
+// sftpDir lists a directory on the host one batch at a time, as the
+// directory read asks for entries (sftpLister). So the bound on the
+// entries a scrape lists also bounds what is asked of the host and held in
 // memory.
 type sftpDir struct {
 	lister *sftpLister
@@ -260,10 +259,10 @@ func startSFTP(ctx context.Context, key sshConnKey, client *ssh.Client) (io.Clos
 	return &sftpConn{Client: session}, nil
 }
 
-// sftpConn is what an sshfile connection holds beside its SSH connection:
-// its SFTP session, which it is closed with, and whether the host did not
-// close a listing's session on it in time, which the connection's listings
-// share (sftpLister.hostKeepsSessions).
+// sftpConn is what an sshfile connection holds besides its SSH connection:
+// its SFTP session, which is closed with it, and whether the host failed to
+// close a listing's session on it in time. The connection's listings share
+// that flag (sftpLister.hostKeepsSessions).
 type sftpConn struct {
 	*sftp.Client
 	listingSessionsKept atomic.Bool
@@ -286,10 +285,10 @@ func (c *sshConnCache) size() int {
 	return len(c.entries)
 }
 
-// session runs read on a connection for key, with a fileSource of root on it,
-// within ctx. A read that loses its connection is run once more, on a new
-// one, while ctx lasts. shown is what a debug probe's request section shows
-// of the read.
+// session runs read on a connection for key, with a fileSource of root on
+// it, within ctx. If a read loses its connection, it is run once more on a
+// new one while ctx lasts. shown is what a debug probe's request section
+// shows of the read.
 func (c *sshConnCache) session(ctx context.Context, key sshConnKey, collector string, limit int, root, shown string, read func(*sftpSource) error) error {
 	for attempt := 0; ; attempt++ {
 		entry, reused, err := c.get(ctx, key, collector, limit)
@@ -367,8 +366,8 @@ func (c *sshConnCache) directory(ctx context.Context, key sshConnKey, collector 
 	}
 }
 
-// abandon is a scrape giving up on its read: the files the read has open
-// are closed, and the read is given sshAbandonGrace to return, after which
+// abandon handles a scrape giving up on its read. The files the read has
+// open are closed, and the read gets sshAbandonGrace to return. After that
 // the connection is dropped. The connection is released when the read
 // returns.
 func (c *sshConnCache) abandon(entry *sshConn, src *sftpSource, done <-chan error) {

@@ -11,14 +11,14 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A metric rule's time_format says the text its expression gives is a time,
-// and the series' value is that time in Unix seconds, its fraction kept: the
-// date a report was written on, the time a job last ran. It is a name —
-// rfc3339, rfc1123 — or a layout: the reference time written the way the
-// text writes its times, as Go's time package, Promtail and Telegraf take
-// theirs. time_zone is the zone a text that names none of its own is read
-// in, UTC unless set. scale applies to the seconds; value_map does not go
-// with it, since each of the two turns the text into the number.
+// A metric rule's time_format says that the text its expression gives is a
+// time. The series' value is that time in Unix seconds, fraction kept: the
+// date a report was written, the time a job last ran. time_format is a name
+// (rfc3339, rfc1123) or a layout: the reference time written the way the
+// text writes its times, as in Go's time package, Promtail and Telegraf.
+// time_zone is the zone used for text that names no zone; the default is
+// UTC. scale applies to the seconds. value_map cannot be combined with it,
+// since each of the two turns the text into the number.
 
 // The names a time_format can have in place of a layout.
 const (
@@ -29,11 +29,11 @@ const (
 // timeReference is the time a layout is written with.
 const timeReference = "Mon Jan 2 15:04:05 MST 2006"
 
-// namedTimeLayout is the layout a time_format that is a name reads text
-// with. rfc3339 reads fractional seconds though its layout has none, as any
-// layout does whose seconds have no zeros after them. rfc1123 is the date of
-// an HTTP header, whose zone is GMT, and the same with a numeric zone, which
-// the text's last character tells apart.
+// namedTimeLayout is the layout used to read text when time_format is a
+// name. rfc3339 reads fractional seconds although its layout has none, as
+// does any layout whose seconds have no zeros after them. rfc1123 is the
+// date of an HTTP header with zone GMT, or the same with a numeric zone; the
+// last character of the text tells them apart.
 func namedTimeLayout(format, text string) (string, bool) {
 	switch {
 	case strings.EqualFold(format, timeFormatRFC3339):
@@ -47,10 +47,10 @@ func namedTimeLayout(format, text string) (string, bool) {
 	return "", false
 }
 
-// ruleTime is the text a rule with time_format extracted as the series'
-// value: the time it writes, in Unix seconds, scaled. The text is trimmed as
-// value_map's is. Text that is no time in the format is the rule's failure,
-// naming the text and the format.
+// ruleTime is the series' value for text extracted by a rule with
+// time_format: the time it writes, in Unix seconds, scaled. The text is
+// trimmed as for value_map. Text that is not a time in the format is a
+// failure of the rule, naming the text and the format.
 func ruleTime(rule model.MetricRule, text string) (float64, error) {
 	text = strings.TrimSpace(text)
 	layout, named := namedTimeLayout(rule.TimeFormat, text)
@@ -66,14 +66,14 @@ func ruleTime(rule model.MetricRule, text string) (float64, error) {
 		return 0, unreadTime(rule.TimeFormat, text, named, err)
 	}
 	seconds := t.Unix()
-	// A zone the text names by an abbreviation, EET or PST, is one of
-	// time_zone's own, or UTC or GMT. Any other the time package reads as a
-	// zone of that name at UTC, hours off without a word: an abbreviation
-	// alone says no offset, so that is the rule's failure instead. GMT with
-	// hours after it, GMT+3 or GMT-5, does say its offset, and the time
-	// package gives the zone it makes up that offset but leaves the time
-	// where UTC would have it, so the hours are taken off here: 09:00 GMT+3
-	// is 06:00 UTC. For GMT alone they are none.
+	// A zone abbreviation in the text, such as EET or PST, must be one of
+	// time_zone's own, or UTC or GMT. The time package reads any other as
+	// a zone of that name at UTC, silently hours off. An abbreviation alone
+	// gives no offset, so it is a failure of the rule instead. GMT with
+	// hours, such as GMT+3 or GMT-5, does give its offset. The time package
+	// gives the zone it makes up that offset but leaves the time where UTC
+	// would have it, so the hours are subtracted here: 09:00 GMT+3 is 06:00
+	// UTC. For GMT alone there are no hours.
 	if location := t.Location(); location != zone && location != time.UTC && !hasNumericZone(layout) {
 		switch name, offset := t.Zone(); {
 		case strings.HasPrefix(name, "GMT"):
@@ -92,11 +92,11 @@ func hasNumericZone(layout string) bool {
 	return strings.Contains(layout, "-07") || strings.Contains(layout, "Z07")
 }
 
-// unreadTime is the failure of text that is no time in a time_format. It
-// says what is wrong in the exporter's own words and quotes the text cut as
-// every such error cuts it, where the time package's error quotes all of it;
-// only a part out of its range, the 30th of February, is named as the
-// package names it.
+// unreadTime is the failure for text that is not a time in a time_format.
+// It says what is wrong in the exporter's own words and quotes the text,
+// cut as every such error cuts it; the time package's error quotes all of
+// it. Only a part out of its range, such as the 30th of February, is named
+// the way the package names it.
 func unreadTime(format, text string, named bool, err error) error {
 	var parse *time.ParseError
 	if errors.As(err, &parse) && strings.HasSuffix(parse.Message, "out of range") {
@@ -119,10 +119,10 @@ var (
 	timeZonesMu sync.Mutex
 )
 
-// timeLocation is the zone a time_zone names: UTC when it names none, and
-// otherwise a zone of the IANA database, which the binary carries
-// (time/tzdata, in the main package) for a host that has no zone files.
-// Local is refused: it would read the same text differently on each host.
+// timeLocation is the zone a time_zone names: UTC when it names none,
+// otherwise a zone of the IANA database. The binary carries that database
+// (time/tzdata, in the main package) for hosts without zone files. Local is
+// refused because it would read the same text differently on each host.
 func timeLocation(name string) (*time.Location, error) {
 	if name == "" || name == "UTC" {
 		return time.UTC, nil
@@ -154,11 +154,11 @@ func timeLocation(name string) (*time.Location, error) {
 	return zone, nil
 }
 
-// timeProbe is a time each part of which is written differently from the
+// timeProbe is a time whose every part is written differently from the
 // reference time's, whatever element writes it: year, month, day, weekday,
 // hour on either clock and its half of the day, minute, second, fraction
-// and zone. A layout writes it as itself only when it has no element at
-// all, and reads back from what it wrote the parts it has.
+// and zone. A layout writes it unchanged only when it has no element at
+// all, and reads back the parts it has from what it wrote.
 var timeProbe = time.Date(2001, time.February, 3, 4, 5, 6, 789000000, time.UTC)
 
 // timeLayoutIs says what a layout is, at the end of every refusal of one that
@@ -166,13 +166,14 @@ var timeProbe = time.Date(2001, time.February, 3, 4, 5, 6, 789000000, time.UTC)
 // layout of another convention.
 const timeLayoutIs = "a layout is the reference time, " + timeReference + `, written as the text writes its times, such as "2006-01-02 15:04:05" for text like 2026-10-03 09:00:00`
 
-// checkTimeLayout checks a time_format at load: a name, or a layout with a
-// year, a month and a day. A layout in another convention, yyyy-mm-dd or
-// %Y-%m-%d, has no element of the reference time and would read no text at
-// all, and one without a whole date reads a time of the year 0 or of the
-// first of a month, which is no Unix time anyone meant. A layout with blanks
-// around it reads no text either, since the text is read without its own,
-// and one with the hour of a 12-hour clock and no PM reads the morning only.
+// checkTimeLayout checks a time_format at load: it must be a name, or a
+// layout with a year, a month and a day. A layout in another convention,
+// yyyy-mm-dd or %Y-%m-%d, has no element of the reference time and would
+// read no text at all. A layout without a whole date reads a time in year 0
+// or on the first of a month, which is no Unix time anyone meant. A layout
+// with blanks around it reads no text either, since the text is trimmed
+// before reading. A layout with a 12-hour clock hour and no PM reads only
+// morning times.
 func checkTimeLayout(format string) error {
 	if _, named := namedTimeLayout(format, ""); named {
 		return nil

@@ -96,12 +96,11 @@ func CollectorNames(c *model.Config) []string {
 // CaptureLogs sends slog's default logger to a JSON buffer until the test
 // ends, and returns the buffer.
 //
-// Anything consuming these logs parses them, so one differently shaped line is
-// not a cosmetic problem: it is a line the consumer drops or chokes on. The
-// failure this guards against is a log written through slog's default logger
-// rather than the exporter's own, which without newLogger installing the
-// default would come out as `2026/09/18 21:43:35 ERROR ...` in the middle of an
-// otherwise JSON stream.
+// Whatever consumes these logs parses them. So one line in another shape is
+// not cosmetic: the consumer drops it or chokes on it. This guards against a
+// log written through slog's default logger rather than the exporter's own.
+// Without newLogger installing the default, such a line would come out as
+// `2026/09/18 21:43:35 ERROR ...` in the middle of an otherwise JSON stream.
 func CaptureLogs(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	previous := slog.Default()
@@ -154,10 +153,10 @@ func FirstLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// WaitFor polls done until it is true, and fails the test after half a
-// minute, naming what it waited for. The bound is for what never happens,
-// not a measure of how soon it should: what is waited for takes
-// milliseconds, and on a machine with every CPU busy elsewhere it has been
+// WaitFor polls done until it is true. After half a minute it fails the
+// test, naming what it waited for. The bound is for what never happens, not
+// a measure of how soon it should happen. What is waited for takes
+// milliseconds, but on a machine with every CPU busy elsewhere it has been
 // seen to take more than five seconds.
 func WaitFor(t *testing.T, what string, done func() bool) {
 	t.Helper()

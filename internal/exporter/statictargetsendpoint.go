@@ -18,21 +18,22 @@ import (
 // The static targets endpoint, --web.static-targets-path, serves the latest
 // result of every static target together, for Prometheus to scrape like any
 // other exporter's metrics. Each target is scraped on its own interval
-// (statictargetschedule.go), and a scrape of the endpoint only reads what the
-// last scrape of each target left: the targets are never contacted on
-// Prometheus's schedule, and a slow target never slows the endpoint.
+// (statictargetschedule.go). A scrape of the endpoint only reads what the last
+// scrape of each target left. The targets are never contacted on Prometheus's
+// schedule, and a slow target never slows the endpoint.
 //
-// A target's result is its metrics, with the target's labels, or the last good
-// result marked stale under cache.stale_if_error, and its health metrics,
-// http_exporter_target_up, http_exporter_target_scrape_duration_seconds and
+// A target's result is its metrics with the target's labels, or the last good
+// result marked stale under cache.stale_if_error. It also has its health
+// metrics: http_exporter_target_up,
+// http_exporter_target_scrape_duration_seconds and
 // http_exporter_target_last_success_timestamp_seconds.
-// Every series carries static_target, the target's name, since the targets
-// share one endpoint and the same metric from two targets must stay two
-// series. A target that has not been scraped yet is absent, and one removed
-// from the file is dropped with the reload. ?targets= narrows a read to the
-// targets it names (requestedStaticTargets). The merge of the results is kept
-// until a scrape publishes a result or a reload changes the targets
-// (currentStaticView), so reads between two scrapes only write it.
+// Every series carries static_target, the target's name. The targets share
+// one endpoint, and the same metric from two targets must stay two series. A
+// target not scraped yet is absent. A target removed from the file is dropped
+// with the reload. ?targets= narrows a read to the targets it names
+// (requestedStaticTargets). The merge of the results is kept until a scrape
+// publishes a result or a reload changes the targets (currentStaticView), so
+// reads between two scrapes only write it.
 
 // DefaultStaticTargetsPath is where the static targets are served unless
 // --web.static-targets-path says otherwise.
@@ -68,39 +69,39 @@ func (s *Server) staticTargetsEndpoint() string {
 	return s.staticTargetsPath
 }
 
-// publishStaticResult records set as target's latest result, for the
-// endpoint, and queues it for OTLP when the target is exported that way. Its
-// data came from the target at fetched: its http_exporter_result_age_seconds
-// is worked out again at every read of the endpoint, so it says how old the
-// data is when Prometheus reads it, not how old it was when the scrape made
-// it. fetched is zero for a result without that series. at is when the result
-// was scraped, for its points over OTLP (scrapeTime).
+// publishStaticResult records set as target's latest result for the endpoint,
+// and queues it for OTLP when the target is exported that way. Its data came
+// from the target at fetched. Its http_exporter_result_age_seconds is worked
+// out again at every read of the endpoint, so it gives the data's age when
+// Prometheus reads it, not when the scrape made it. fetched is zero for a
+// result without that series. at is when the result was scraped, for its
+// points over OTLP (scrapeTime).
 //
 // Over OTLP every series carries static_target too, as on the endpoint. Two
 // targets of one collector, without labels or an OTLP identity of their own,
-// arrive under the same resource with the same series, and without it the
+// arrive under the same resource with the same series. Without the label, the
 // later target's values would replace the earlier's in the pending export.
 //
-// read is the configuration the scrape read the target and its collector in.
-// A reload may have removed the target while its scrape was in flight, or
-// changed it or its collector, or removed either and brought it back: the
-// result then goes nowhere, over OTLP included (targetStands). Published, it
-// would stand for a target with another definition, and where that target's
-// own first scrape had ended sooner, replace its result until the next turn.
-// That is asked under the lock the result is stored under, which the
-// followed configuration is replaced under (storeFollowed): a scrape that
-// read what a reload retired stores before any scrape that read what the
-// reload put in force has begun, or not at all.
+// read is the configuration in which the scrape read the target and its
+// collector. While the scrape was in flight, a reload may have removed the
+// target, changed it or its collector, or removed either and brought it back.
+// The result then goes nowhere, OTLP included (targetStands). If published,
+// it would stand for a target with another definition. Where that target's
+// own first scrape had ended sooner, it would replace that result until the
+// next turn. The check is made under the lock the result is stored under,
+// which is also the lock the followed configuration is replaced under
+// (storeFollowed). So a scrape that read what a reload retired stores before
+// any scrape that read what the reload put in force has begun, or not at all.
 func (s *Server) publishStaticResult(read configRead, target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time, at scrapeTime) {
 	// The target is in force by name too: a reload not yet followed has
 	// removed it.
 	if !s.staticTargetInForce(target.Name) {
 		return
 	}
-	// Stored already labelled with its target, as the endpoint and OTLP
-	// serve it, so a read of the endpoint only merges and writes, and the
-	// labelling is done once per scrape rather than once per read. The
-	// stored series are never changed after this: readers share them.
+	// The series are stored already labelled with the target, as the
+	// endpoint and OTLP serve them. A read of the endpoint then only merges
+	// and writes, and labelling happens once per scrape, not once per read.
+	// The stored series never change after this: readers share them.
 	labelled := withStaticTargetLabel(set, target.Name)
 	s.staticMu.Lock()
 	if !read.targetStands(target.Collector, target.Name) {
@@ -125,14 +126,14 @@ func (s *Server) publishStaticResult(read configRead, target model.StaticTarget,
 }
 
 // staticTargetInForce reports whether a target of that name is in force: one
-// of the static target file the manager holds when it is asked, whether or
-// not that file is followed yet. The name is looked up where the names of
-// the file followed were noted (followedConfig.targetNames) when the file in
-// force is that file, as it is but from a reload putting another in force to
-// the following of that reload, which the reload makes at once: every scrape
-// asks this when it ends, and going through the targets for it took a scrape
-// as long as the file is large. For a file not followed they are gone
-// through as they were.
+// of the static target file the manager holds when asked, whether or not that
+// file is followed yet. When the file in force is the followed file, the name
+// is looked up where the followed file's names were noted
+// (followedConfig.targetNames). It is that file except between a reload that
+// puts another file in force and the following of that reload, which the
+// reload makes at once. Every scrape asks this when it ends, and scanning the
+// targets for it made a scrape take as long as the file is large. For a file
+// not followed, the targets are scanned as before.
 func (s *Server) staticTargetInForce(name string) bool {
 	file := s.manager.StaticTargetFile()
 	if names, noted := s.followed.Load().targetNames(file); noted {
@@ -186,8 +187,8 @@ func withStaticTargetLabel(set model.MetricSet, name string) model.MetricSet {
 }
 
 // storedStaticResults returns the latest result of each target of file, by
-// name, with the generation of results they are, and forgets the results of
-// targets no longer in force. Each result's data is aged as of now; with a
+// name, with the generation of those results. It forgets the results of
+// targets no longer in force. Each result's data is aged as of now. With a
 // zero now it is left as stored, for the endpoint's view, which ages it at
 // every read.
 func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time) ([]namedSet, uint64) {
@@ -234,13 +235,13 @@ func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time
 	return out, generation
 }
 
-// staticTargetsView is the endpoint's merge of the targets' results, kept
-// until a scrape publishes a result or a reload changes the targets, so a
-// read of the endpoint between two scrapes neither merges nor, mostly,
-// renders again. merged holds the series as stored; aged are those whose
-// value is the data's age, set at each read; rendered and renderedOM are the
-// exposition of merged when it has no such series, in the text format and in
-// OpenMetrics, served as they are to unfiltered reads.
+// staticTargetsView is the endpoint's merge of the targets' results. It is
+// kept until a scrape publishes a result or a reload changes the targets, so
+// a read between two scrapes does not merge again and mostly does not render
+// again. merged holds the series as stored. aged holds the series whose value
+// is the data's age, set at each read. rendered and renderedOM are the
+// exposition of merged, in the text format and in OpenMetrics, when merged
+// has no such series. They are served as they are to unfiltered reads.
 type staticTargetsView struct {
 	generation uint64
 	file       *model.StaticTargetFile
@@ -282,11 +283,11 @@ func (s *Server) currentStaticView() *staticTargetsView {
 			v.aged = append(v.aged, agedSeries{index: i, target: m.Labels[config.StaticTargetLabel]})
 		}
 	}
-	// An answer with a name that is not classic is written as each
-	// reader's Accept asks (nameescaping.go), so it is not rendered ahead.
-	// What the stored results hold decides it, not the configuration in
-	// force: a reload that takes a collector off utf8 keeps its targets'
-	// results, UTF-8 names and all, until they are scraped again.
+	// An answer with a non-classic name is written as each reader's Accept
+	// asks (nameescaping.go), so it is not rendered ahead. The stored
+	// results decide this, not the configuration in force: a reload that
+	// takes a collector off utf8 keeps its targets' results, UTF-8 names
+	// and all, until they are scraped again.
 	v.utf8Names = hasUTF8Names(&v.merged)
 	if len(v.aged) == 0 && !v.utf8Names {
 		v.rendered = appendMetricSet(nil, &v.merged)
@@ -340,12 +341,12 @@ type namedSet struct {
 // of the same name already has otherwise.
 var errFamilyTypeClash = errors.New("another static target exports this metric with a different type")
 
-// errFamilyNameClash is a target's family whose name is that of a series of
-// another target's histogram or summary, or the reverse: a histogram x is
-// written as x_bucket, x_sum and x_count and a summary x as x, x_sum and
-// x_count, so a gauge x_sum of another target would be a second family of a
-// name the first already writes, which no parser accepts. One target's own
-// result cannot hold both (model.MetricSet.Validate); two targets' can.
+// errFamilyNameClash is a target's family whose name matches a series of
+// another target's histogram or summary, or the reverse. A histogram x is
+// written as x_bucket, x_sum and x_count, and a summary x as x, x_sum and
+// x_count. So a gauge x_sum of another target would be a second family with a
+// name the first already writes, which no parser accepts. One target's result
+// cannot hold both (model.MetricSet.Validate), but two targets' results can.
 var errFamilyNameClash = errors.New("another static target exports a histogram or summary whose series have this metric's name")
 
 // derivedSeriesNames are the names a family of name and typ is written
@@ -385,11 +386,11 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Every target is merged, filtered or not, so which family keeps its type
-	// in a clash — and what is logged about it — does not depend on which
-	// targets a read asked for: a filtered read serves exactly the named
-	// targets' part of what an unfiltered one would. The merge is kept
-	// between scrapes (currentStaticView), so most reads only write it.
+	// Every target is merged, whether the read is filtered or not. So which
+	// family keeps its type in a clash, and what is logged about it, does
+	// not depend on which targets a read asked for. A filtered read serves
+	// exactly the named targets' part of an unfiltered read. The merge is
+	// kept between scrapes (currentStaticView), so most reads only write it.
 	view := s.currentStaticView()
 	if names == nil && view.rendered != nil {
 		format := negotiateFormat(r.Header.Get("Accept"))
@@ -422,11 +423,11 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 // Prometheus renders a scrape config's params list.
 const staticTargetsParam = "targets"
 
-// requestedStaticTargets reads the targets parameter: nil when there is none,
-// so every target is served, else the names it gives. A name no target in
-// force has is refused rather than served as nothing, so a misspelt or
-// removed target fails the scrape where it can be seen; so is a parameter
-// that names no target at all.
+// requestedStaticTargets reads the targets parameter. It returns nil when
+// there is none, so every target is served, and otherwise the names it gives.
+// A name that no target in force has is refused rather than served as
+// nothing, so a misspelt or removed target fails the scrape where it can be
+// seen. A parameter that names no target at all is refused too.
 func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, error) {
 	values, given := query[staticTargetsParam]
 	if !given {
@@ -443,11 +444,11 @@ func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, erro
 	if len(names) == 0 {
 		return nil, fmt.Errorf("the %s parameter names no static target; give one or more names, separated by commas, or leave it out to read every target", staticTargetsParam)
 	}
-	// Every name is asked of one file, the one in force now, where the
-	// names of the file followed were noted (followedConfig.targetNames): a
-	// read that names a few targets then costs as much as it names, not as
-	// much as the file is large. Only for a file not followed yet are its
-	// targets gone through, once for the read, as they were for every read.
+	// Every name is looked up in one file, the one in force now, where the
+	// followed file's names were noted (followedConfig.targetNames). A read
+	// that names a few targets then costs in proportion to the names, not to
+	// the file's size. Only for a file not followed yet are its targets
+	// scanned, once for the read, as they were before for every read.
 	file := s.manager.StaticTargetFile()
 	noted, kept := s.followed.Load().targetNames(file)
 	var known map[string]bool
@@ -471,14 +472,15 @@ func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, erro
 	return names, nil
 }
 
-// mergeStaticTargets puts the targets' results into one exposition: every
-// series labelled with its target, and each family's series together, as the
-// text format requires, in the order the families first appear. A family one
-// target exports with another type than an earlier target is left out for that
-// target and logged, since one family cannot have two types; so is a family
-// named like a series of an earlier target's histogram or summary, and a
-// histogram or summary one of whose series is named like an earlier target's
-// family (errFamilyNameClash). The rest of both targets is served.
+// mergeStaticTargets puts the targets' results into one exposition. Every
+// series is labelled with its target, and each family's series are together,
+// as the text format requires, in the order the families first appear. If a
+// target exports a family with another type than an earlier target, the
+// family is left out for that target and logged, since one family cannot have
+// two types. The same holds for a family named like a series of an earlier
+// target's histogram or summary, and for a histogram or summary with a series
+// named like an earlier target's family (errFamilyNameClash). The rest of
+// both targets is served.
 func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	clashes := map[subjectKey]staticClash{}
 	type family struct {
@@ -489,10 +491,11 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	// derived is, for the name of every series of a histogram or summary
 	// on the endpoint, the family it is a series of.
 	derived := map[string]string{}
-	// A name is as long as its collector's limits.max_metric_name_length
-	// lets it be, which the operator may raise: the lines show it as an
-	// error shows a name (model.ShownName). The clash is remembered under
-	// the whole name, so two names that start alike are two clashes.
+	// A name can be as long as its collector's
+	// limits.max_metric_name_length allows, and the operator may raise that.
+	// So the lines show it the way an error shows a name (model.ShownName).
+	// The clash is remembered under the whole name, so two names that start
+	// alike are two clashes.
 	leftOut := func(target string, m model.Metric, clash error, attrs ...any) {
 		key := staticClashKey(target, m.Name)
 		clashes[key] = staticClash{target: target, metric: m.Name}
@@ -551,12 +554,13 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 // staticClash is a target's metric left out of the endpoint for its type.
 type staticClash struct{ target, metric string }
 
-// settleStaticClashes ends the clashes of the previous read that this one,
-// with results, no longer has. One whose target is still served is logged as
-// back on the endpoint, as a failure that stopped is logged as recovered; one
-// whose target is gone is forgotten without a word, since nothing was fixed.
-// Without this a clash that went away was never said to have, and one that
-// came back within the failure log's memory read as the old one continuing.
+// settleStaticClashes ends the clashes of the previous read that this read,
+// with results, no longer has. A clash whose target is still served is logged
+// as back on the endpoint, the way a failure that stopped is logged as
+// recovered. A clash whose target is gone is forgotten silently, since nothing
+// was fixed. Without this, a clash that went away was never reported as gone,
+// and one that came back within the failure log's memory looked like the old
+// one continuing.
 func (s *Server) settleStaticClashes(clashes map[subjectKey]staticClash, results []namedSet) {
 	served := make(map[string]bool, len(results))
 	for _, result := range results {
@@ -594,12 +598,12 @@ func (s *Server) staticTargetCountMetrics() []model.Metric {
 	}
 }
 
-// recordStaticTargetOutcome notes a scrape of target, at now, as status
-// says it went, and returns when the target last succeeded: now for a
-// success, else the earlier success, zero if there was none. stands is
-// whether the target and its collector are still those the scrape read, as
-// read says (targetStands); when they are not, nothing is noted: the scrape
-// is not one of the target now under the name.
+// recordStaticTargetOutcome notes a scrape of target at now, with the outcome
+// status gives. It returns when the target last succeeded: now for a success,
+// else the earlier success, or zero if there was none. stands reports whether
+// the target and its collector are still those the scrape read, as read says
+// (targetStands). When they are not, nothing is noted, because the scrape is
+// not one of the target now under the name.
 func (s *Server) recordStaticTargetOutcome(read configRead, target model.StaticTarget, status staticScrapeStatus, now time.Time) (lastSuccess time.Time, stands bool) {
 	ok := status.ok
 	s.staticMu.Lock()

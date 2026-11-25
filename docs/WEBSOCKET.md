@@ -1,23 +1,22 @@
 # WebSocket
 
-The `websocket` request type reads messages from a WebSocket endpoint: a
+The `websocket` request type reads messages from a WebSocket endpoint. A
 scrape makes the opening handshake, sends one text message when the
-collector has one — a subscription, a query — reads the messages the
-collector asks for, and closes. Use it for services that publish their
-state on a socket and have no HTTP endpoint for it: a status feed, a
-ticker, a GraphQL subscription's first result.
+collector has one (a subscription or a query), reads the messages that the
+collector asks for, and closes. Use it for services that publish their state
+on a socket and have no HTTP endpoint for it: a status feed, a ticker, or a
+GraphQL subscription's first result.
 
 It stays a pull: a scrape connects, reads and closes, and no connection
 outlives it.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with websocket](#building-with-websocket)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with websocket](#building-with-websocket)).
 
 ## Building with websocket
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=websocket              # bin/prometheus-universal-exporter
@@ -25,10 +24,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=websocket -t exporter:websocket .
 go build -tags "$(sh tools/request-type-tags.sh '' '' websocket)" .
 ```
 
-The tag is `request_type_websocket`. A configuration with an `websocket` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_websocket`. A build without the type refuses a
+configuration with a `websocket` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -122,9 +121,9 @@ exceeded.
 ## Errors and self-metrics
 
 The scrape fails when the handshake is not answered with a 101 as RFC 6455
-has it, naming the status the server gave; when the server chooses a
-subprotocol that was not offered; and when it sends a frame the protocol
-does not allow.
+requires (the error names the status that the server gave), when the server
+chooses a subprotocol that was not offered, and when it sends a frame that
+the protocol does not allow.
 
 ```text
 the handshake with wss://feed.example.com:443/ws: the server answered HTTP status 401, not 101: it does not serve a WebSocket there, or refuses this client

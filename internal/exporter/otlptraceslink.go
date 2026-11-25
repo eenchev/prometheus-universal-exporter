@@ -25,21 +25,21 @@ import (
 //   - with otlp.traces.propagate, its requests to the target carry its
 //     traceparent (fetch.WithTracePropagation).
 //
-// Its trace is decided only at its end, when the log lines have been
-// queued and the observation made, and its requests sent. So its ids are
-// made when it begins — the trace id, the caller's where it sent a
-// traceparent, and the root span's id — and kept in a traceLink, which the
-// trip's context carries. What links to the trace holds the link, and asks
-// it when the link is written out: a log record, when the log export
-// drains it, which then carries the ids only if the trace was exported, and
-// none if it was dropped or not yet decided; an exemplar is only set once
-// the trace is exported. A request cannot wait for the decision, and says
-// what is known of it when it is sent (headTraceSampled).
+// The trace is decided only at its end, after the log lines have been
+// queued, the observation made and the requests sent. So its ids are made
+// when it begins (the trace id, or the caller's when it sent a traceparent,
+// and the root span's id) and kept in a traceLink that the trip's context
+// carries. Whatever links to the trace holds the link and asks it when the
+// link is written out. A log record asks when the log export drains it: it
+// carries the ids only if the trace was exported, and none if the trace was
+// dropped or not yet decided. An exemplar is set only once the trace is
+// exported. A request cannot wait for the decision, and says what is known
+// of it when it is sent (headTraceSampled).
 //
 // Which stage was running when a line was logged is told by the times: the
-// line's time against the stages' (spanAt), the innermost that holds it,
-// else the root. A stage that fails logs its failure before it ends, so
-// that the line is the failed stage's.
+// line's time is matched against the stages' (spanAt), taking the innermost
+// that holds it, else the root. A stage that fails logs its failure before
+// it ends, so that the line is the failed stage's.
 
 // traceLinkState is what became of a linked trace.
 type traceLinkState uint8
@@ -102,10 +102,10 @@ func traceLinkFrom(ctx context.Context) *traceLink {
 	return l
 }
 
-// settle records what became of the trace: exported, with its stage spans,
-// stages and made, as buildSpans made them, or not. What waited for its
-// export is called, outside the lock, or dropped. A run's link keeps its
-// spans and is never exported.
+// settle records what became of the trace: exported or not, and when
+// exported, its stage spans, stages and made, as buildSpans made them. What
+// waited for its export is called outside the lock, or dropped. A run's
+// link keeps its spans and is never exported.
 func (l *traceLink) settle(exported bool, stages []spanStage, made []otlpSpan) {
 	if l == nil {
 		return
@@ -173,10 +173,10 @@ func (l *traceLink) whenExported(f func(traceID, spanID string)) {
 	f(l.ids())
 }
 
-// spanAt is the trace id and the id of the span that was running at, the
-// innermost stage that holds it, else the root, of a trace exported; ok is
-// false for a trace dropped or not yet decided. A run's are those it would
-// have, once its spans are made.
+// spanAt returns, for an exported trace, the trace id and the id of the
+// span that was running at: the innermost stage that holds it, else the
+// root. ok is false for a trace dropped or not yet decided. A run's ids are
+// those it would have once its spans are made.
 func (l *traceLink) spanAt(at time.Time) (trace, span string, ok bool) {
 	if l == nil {
 		return "", "", false
@@ -196,20 +196,20 @@ func (l *traceLink) spanAt(at time.Time) (trace, span string, ok bool) {
 	return trace, span, true
 }
 
-// headTraceSampled is what is known, when a trip sends its requests, of
-// whether its trace will be exported, which their traceparent's sampled
-// flag says, and the tracestate they carry. A debug run's trace is never
-// exported, and withPropagation sends it unsampled whatever this says. A trace is decided at its end,
-// and only two of the rules can decide before: parent_based, by the
+// headTraceSampled is what is known, when a trip sends its requests, about
+// whether its trace will be exported: their traceparent's sampled flag, and
+// the tracestate they carry. A debug run's trace is never exported, and
+// withPropagation sends it unsampled whatever this says. A trace is decided
+// at its end, and only two rules can decide earlier: parent_based, by the
 // caller's sampled flag, and sample_ratio, by the trace id. Either keeps a
-// trace whatever else becomes of it, and so sets the flag, and the ratio's
-// threshold goes in the tracestate (spanTraceState). The threshold and the
-// errors, which keep most of what is exported, are known only at the end:
-// the flag is not set for them, as the W3C asks it to be set only when the
-// caller may have recorded the trace, and a target's tracer that samples
-// by its parent then records its part only of the traces the exporter is
-// sure to keep. otlp.traces.max_per_second may still drop one, as it may
-// drop one its caller sampled.
+// trace whatever else happens to it, so either sets the flag, and the
+// ratio's threshold goes in the tracestate (spanTraceState). The threshold
+// and the errors, which keep most of what is exported, are known only at
+// the end. The flag is not set for them, since the W3C asks for it to be
+// set only when the caller may have recorded the trace. A target's tracer
+// that samples by its parent then records its part only of the traces the
+// exporter is sure to keep. otlp.traces.max_per_second may still drop one,
+// as it may drop one its caller sampled.
 func headTraceSampled(cfg model.OTLPConfig, parent traceParent, id [16]byte) (sampled bool, state string) {
 	t := cfg.Traces
 	switch {
@@ -222,12 +222,12 @@ func headTraceSampled(cfg model.OTLPConfig, parent traceParent, id [16]byte) (sa
 }
 
 // withPropagation returns a context whose trips' requests carry the trace
-// context of the probe or the scrape ctx is for, with otlp.traces.propagate
-// on: link's trace while the trace export is on, and while it is off the
-// caller's, parent, read from header's traceparent, sent as it came, and
-// its tracestate as it was read. A traceparent that could not be read is
-// not passed on, nor a tracestate that could not, as the W3C asks; ctx is
-// returned as it is when there is nothing to send.
+// context of the probe or scrape that ctx is for, with otlp.traces.propagate
+// on. While the trace export is on, that is link's trace. While it is off,
+// it is the caller's, parent, read from header's traceparent and sent as it
+// came, with its tracestate as it was read. As the W3C asks, a traceparent
+// or a tracestate that could not be read is not passed on. ctx is returned
+// as it is when there is nothing to send.
 func withPropagation(ctx context.Context, cfg model.OTLPConfig, link *traceLink, parent traceParent, header http.Header) context.Context {
 	if !cfg.Traces.Propagate {
 		return ctx

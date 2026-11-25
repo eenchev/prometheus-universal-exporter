@@ -19,24 +19,25 @@ import (
 )
 
 // A collector's request.allowed_targets and request.denied_targets say which
-// hosts its requests may reach, whoever names the target: a probe's target
-// parameter comes from whoever can reach /probe, and a redirect from the
-// target itself. Each entry is a host name, a glob of one, such as
-// *.example.com, an IP address or a CIDR network, such as 10.0.0.0/8.
+// hosts its requests may reach, whoever names the target. A probe's target
+// parameter comes from whoever can reach /probe, and a redirect comes from
+// the target itself. Each entry is a host name, a glob of one (such as
+// *.example.com), an IP address, or a CIDR network (such as 10.0.0.0/8).
 //
 // A request is refused when its host, or an address it resolves to, is
-// denied, or when allowed_targets is set and neither its host nor every
-// address it resolves to is allowed. Names are checked against the host as
-// written, before the request and again on every redirect. Addresses are
-// checked where they are known without a second lookup: a connection made
-// straight to the target is checked against the address it was made to, the
-// one address that matters, which also catches a name that resolves
-// elsewhere from one lookup to the next. Behind a proxy the exporter connects
-// to the proxy rather than the target, so it resolves the target's name
-// itself, before the request, and checks those addresses instead. A name the
-// exporter cannot look up is the proxy's to resolve, as it is for any client
-// behind one, unless the collector's own lists name addresses or networks,
-// which could then not be held to.
+// denied. When allowed_targets is set, it is also refused unless its host,
+// or every address it resolves to, is allowed. Names are checked against the
+// host as written, before the request and again on every redirect.
+// Addresses are checked where they are known without a second lookup:
+//   - A direct connection to the target is checked against the address it
+//     was made to. That is the one address that matters, and it also
+//     catches a name that resolves differently from one lookup to the next.
+//   - Behind a proxy the exporter connects to the proxy, not the target. So
+//     it resolves the target's name itself before the request and checks
+//     those addresses instead. If the exporter cannot look up a name, the
+//     proxy resolves it, as for any client behind a proxy. The exception is
+//     when the collector's own lists name addresses or networks, since those
+//     rules could then not be enforced.
 
 // TargetRefusedError is a request refused by the collector's
 // allowed_targets or denied_targets. The exporter answers it 403.
@@ -81,10 +82,10 @@ var metadataAddrs = []netip.Prefix{
 // than a registered domain: an underscore, and a hyphen first or last.
 var hostGlob = regexp.MustCompile(`^[a-z0-9*?_-]([a-z0-9*?_.-]*[a-z0-9*?_-])?$`)
 
-// OutsideASCIIPattern matches what no entry of request.allowed_targets or
-// request.denied_targets holds, a character outside ASCII, for the
-// configuration's JSON Schema: an entry is written in ASCII, as a host is
-// (canonicalHost). What else an entry has to be is the exporter's to refuse.
+// OutsideASCIIPattern matches a character outside ASCII, which no entry of
+// request.allowed_targets or request.denied_targets may hold. It is for the
+// configuration's JSON Schema: an entry is written in ASCII, like a host
+// (canonicalHost). The exporter refuses entries that break its other rules.
 const OutsideASCIIPattern = `[^\x00-\x7F]`
 
 // compileTargetPolicy reads the two lists. With both empty the policy still
@@ -101,11 +102,11 @@ func compileTargetPolicy(allowed, denied []string) (*targetPolicy, error) {
 		{"denied_targets", denied, &p.denyNames, &p.denyNets},
 	} {
 		for _, raw := range list.items {
-			// An entry is held to what a host is (canonicalHost): one with
-			// a character outside ASCII would match no host a request is
-			// made to, or, where lower case turns the character into a
-			// letter, as the Kelvin sign into k, a host other than the one
-			// written.
+			// An entry is held to the rules of a host (canonicalHost). An
+			// entry with a character outside ASCII would match no host a
+			// request is made to. Or, where lower-casing turns the character
+			// into a letter (the Kelvin sign into k), it would match a host
+			// other than the one written.
 			if r, found := outsideASCII(raw); found {
 				return nil, fmt.Errorf("request.%s entry %q has %#U, %s", list.key, raw, r, writtenInASCII)
 			}
@@ -176,10 +177,10 @@ func matchesName(globs []string, host string) (string, bool) {
 	return "", false
 }
 
-// matchesAddr finds the network of nets addr is in. A zone, as in
+// matchesAddr finds the network of nets that addr is in. A zone, as in
 // fe80::1%eth0, says which interface reaches the address, not which address
-// it is, so it is dropped: netip.Prefix.Contains never matches a zoned
-// address, which would slip past every rule.
+// it is, so it is dropped. netip.Prefix.Contains never matches a zoned
+// address, so a zoned address would slip past every rule.
 func matchesAddr(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
 	addr = addr.Unmap().WithZone("")
 	for _, prefix := range nets {
@@ -190,10 +191,10 @@ func matchesAddr(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
-// nat64 is the well-known prefix of RFC 6052: an address in it is an IPv4
-// address, its last four bytes, that a NAT64 gateway translates and sends
-// on. On a network with one, as an IPv6-only subnet of a cloud has,
-// 64:ff9b::a00:1 reaches 10.0.0.1.
+// nat64 is the well-known prefix of RFC 6052. An address in it holds an IPv4
+// address in its last four bytes, which a NAT64 gateway translates and
+// forwards to. On a network with such a gateway, as in a cloud's IPv6-only
+// subnet, 64:ff9b::a00:1 reaches 10.0.0.1.
 var nat64 = netip.MustParsePrefix("64:ff9b::/96")
 
 // translated is the IPv4 address a NAT64 gateway makes of addr, when addr
@@ -207,10 +208,10 @@ func translated(addr netip.Addr) (netip.Addr, bool) {
 	return netip.AddrFrom4([4]byte(b[12:])), true
 }
 
-// refusedBy finds the network of nets that refuses addr: one it is in, or
-// one the IPv4 address a NAT64 gateway would send it on to is in, so that a
-// rule against an IPv4 network holds for the same host written as the
-// gateway reaches it.
+// refusedBy finds the network of nets that refuses addr: one that contains
+// addr, or one that contains the IPv4 address a NAT64 gateway would forward
+// it to. So a rule against an IPv4 network also holds for the same host
+// written in the form the gateway reaches.
 func refusedBy(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
 	if prefix, in := matchesAddr(nets, addr); in {
 		return prefix, true
@@ -302,14 +303,14 @@ func (p *targetPolicy) checkHost(ctx context.Context, host string, resolve, ownD
 	return nameAllowed, nil
 }
 
-// unresolved decides for a host behind a proxy whose name the exporter
-// could not look up itself. That is the ordinary state of a host with no
-// outside DNS, whose proxy resolves every name it is given, so it fails the
-// request only when the collector's own lists name addresses or networks:
-// those rules cannot be held to an address nobody here knows. Otherwise the
-// name rules, which were applied already, are all there is to apply, and the
-// proxy resolves the name. The cloud metadata addresses are then refused by
-// name and by address as written, not by what the proxy resolves a name to.
+// unresolved decides for a host behind a proxy when the exporter could not
+// look up its name itself. That is normal for a host with no outside DNS,
+// whose proxy resolves every name it is given. So it fails the request only
+// when the collector's own lists name addresses or networks, because those
+// rules cannot be applied to an address nobody here knows. Otherwise the
+// name rules, already applied, are all there is, and the proxy resolves the
+// name. The cloud metadata addresses are then refused by name and by address
+// as written, not by what the proxy resolves a name to.
 func (p *targetPolicy) unresolved(host string, nameAllowed bool, lookupErr error) error {
 	if p.hasAddressRules() {
 		return fmt.Errorf("the request goes through a proxy, so %s has to be looked up here to hold it to the addresses and networks in request.allowed_targets and denied_targets, and the lookup failed: %w", host, lookupErr)
@@ -320,12 +321,12 @@ func (p *targetPolicy) unresolved(host string, nameAllowed bool, lookupErr error
 	return nil
 }
 
-// literalAddr is the address host is when it is written as one, which then
-// needs no lookup: an IPv4 or IPv6 address as Go reads them, or an IPv4
-// address in one of the older forms resolvers, curl and proxies still read —
-// one number (2130706433), fewer than four parts (127.1), or parts in
-// hexadecimal or octal (0x7f.0.0.1, 0177.0.0.1) — which would otherwise pass
-// as a name and be turned into the address by whoever resolves it.
+// literalAddr returns the address that host is when it is written as one,
+// which then needs no lookup. That is an IPv4 or IPv6 address as Go parses
+// them, or an IPv4 address in an older form that resolvers, curl and proxies
+// still accept: one number (2130706433), fewer than four parts (127.1), or
+// parts in hexadecimal or octal (0x7f.0.0.1, 0177.0.0.1). Such a form would
+// otherwise pass as a name and be turned into the address by its resolver.
 func literalAddr(host string) (netip.Addr, bool) {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if addr, err := netip.ParseAddr(host); err == nil {
@@ -394,28 +395,27 @@ type policyGuard struct {
 	// must keep to as the first URL did: an https-only collector does not
 	// follow a redirect to http:// and read the answer in plain text.
 	schemes []string
-	// trusted is the collector's request.redirect_trusted_hosts, the hosts
-	// besides the first URL's own origin that a redirect may carry the
-	// request's headers, credentials and body to, and lastHop what was
-	// settled for the redirect followed last (redirecttrust.go).
+	// trusted is the collector's request.redirect_trusted_hosts: the hosts,
+	// besides the first URL's own origin, that a redirect may carry the
+	// request's headers, credentials and body to. lastHop is what was
+	// decided for the last redirect followed (redirecttrust.go).
 	trusted []string
 	lastHop redirectHop
-	// clientCertificate says the request has a TLS client certificate,
-	// the collector's or a static target's own, which every TLS connection
-	// of the request presents: a redirect is not followed over https to a
-	// host that is not trusted. targetCertificate says it is the target's,
-	// for the refusal to name.
+	// clientCertificate says the request has a TLS client certificate, the
+	// collector's or a static target's own, which every TLS connection of
+	// the request presents. A redirect over https to an untrusted host is
+	// then not followed. targetCertificate says the certificate is the
+	// target's, so the refusal can say so.
 	clientCertificate bool
 	targetCertificate bool
 	// socket says the request goes to the collector's request.unix_socket
 	// (unixsocket.go), so no connection is made to an address of the hosts
 	// it checks.
 	socket bool
-	// ipFamily is the request's ip_family, "" for none (ipfamily.go): a
-	// host the request reaches through a proxy, or over the socket, is
-	// connected to by something that chooses the family itself, and is
-	// refused rather than reached over a family the request did not ask
-	// for.
+	// ipFamily is the request's ip_family, "" for none (ipfamily.go). A host
+	// reached through a proxy or over the socket is connected to by
+	// something that chooses the family itself. Such a host is refused
+	// instead of being reached over a family the request did not ask for.
 	ipFamily string
 }
 
@@ -431,11 +431,10 @@ type policyGuardKey struct{}
 
 // withTargetPolicy checks the host of u against the collector's policy and
 // returns a context whose connections and redirects are checked too. c is
-// the collector as the request is made with it, a static target's own tls
-// block in place of the collector's (withTargetTLS), so the client
-// certificate a redirect is judged by is the one the request presents;
-// ownTLS says that block is the target's. ipFamily is the request's
-// ip_family, "" for none.
+// the collector as the request uses it, with a static target's own tls block
+// in place of the collector's (withTargetTLS). So a redirect is judged by
+// the client certificate the request actually presents. ownTLS says that
+// block is the target's. ipFamily is the request's ip_family, "" for none.
 func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error), ownTLS bool, ipFamily string) (context.Context, error) {
 	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != "", targetCertificate: ownTLS, socket: CollectorPolicy(c).UnixSocket != "", ipFamily: ipFamily}
 	if err := guard.check(ctx, u); err != nil {
@@ -445,9 +444,9 @@ func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy
 }
 
 // check applies the policy to the host of u, which the request is about to
-// reach, the first or one a redirect names, and remembers it for the
-// connections. Its addresses are resolved here only when a proxy stands in
-// between; otherwise the connection checks the one it is made to.
+// reach (the first host, or one a redirect names), and remembers it for the
+// connections. Its addresses are resolved here only when a proxy is in
+// between. Otherwise the connection checks the address it is made to.
 func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 	if g.policy == nil {
 		// The lists were refused at load, so this cannot happen.
@@ -477,14 +476,14 @@ func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 	return nil
 }
 
-// overSocket decides for a host whose request goes to a Unix socket, which
-// has no address of its own to hold to the rules: the connection is made to
-// the socket, never to what the host's name resolves to, so the name is not
-// looked up. The name rules and, for an address written as the host, the
-// address rules were applied already (check); what is left is a name that
-// allowed_targets does not list by name, which nothing can show to be
-// allowed, and is refused, as a name behind a proxy that cannot be looked
-// up is (unresolved).
+// overSocket decides for a host whose request goes to a Unix socket. The
+// socket has no address of its own to check: the connection goes to the
+// socket, never to what the host's name resolves to, so the name is not
+// looked up. The name rules, and the address rules for a host written as an
+// address, were already applied (check). What is left is a name that
+// allowed_targets does not list by name. Nothing can show it is allowed, so
+// it is refused, like a name behind a proxy that cannot be looked up
+// (unresolved).
 func (p *targetPolicy) overSocket(host string, nameAllowed bool) error {
 	if _, literal := literalAddr(host); literal || nameAllowed || len(p.allowNames)+len(p.allowNets) == 0 {
 		return nil
@@ -492,39 +491,41 @@ func (p *targetPolicy) overSocket(host string, nameAllowed bool) error {
 	return &TargetRefusedError{Host: host, Reason: "it is not in request.allowed_targets by name, and the request goes to request.unix_socket, whose connection has no address to hold to the list"}
 }
 
-// canonicalHost is host as the policy matches it, which is the name the
+// canonicalHost returns host as the policy matches it, which is the name the
 // request is made to: lower case and without a trailing dot. A host is an IP
-// address or a name, and a name is made only of what a name in the DNS, a
-// hosts file or a container network can hold: letters, digits, '.', '-' and
-// '_'. Within those it is dialed as it is written — an underscore, as
-// my_service, a Docker Compose or Kubernetes name, or hyphens where a
-// registered domain may not have them — so it is checked as written and not
+// address or a name. A name may hold only what a name in the DNS, a hosts
+// file or a container network can hold: letters, digits, '.', '-' and '_'.
+// Within those it is dialed as written, for example an underscore as in
+// my_service (a Docker Compose or Kubernetes name), or hyphens where a
+// registered domain may not have them. So it is checked as written and not
 // held to the rules of an internationalised name.
 //
 // A host with a character outside ASCII is refused, whatever it would
-// convert to, since Go's HTTP client does not send it under one name. It
-// dials, and names in the TLS handshake and in a proxy's CONNECT, the mapped
-// form of the name (idna.Lookup: "ｏrigin.test", with a fullwidth o, is
-// origin.test, and "origin。test" too), and writes the Host header, an
-// HTTP/2 :authority and the request line a proxy reads in the unmapped one
-// (idna.ToASCII: xn--rigin-qr33a.test, xn--origintest-sh3i). A verdict on
-// either form would be a verdict on a name that part of the request is not
-// made to: an allowed name would cover a request a proxy fetches from, or a
-// shared server routes to, a name the lists never allowed, and a denied one
-// would be reached under a spelling the lists do not catch. Over HTTP/2 the
-// two forms do not even meet: the connection is kept under one and looked
-// for under the other, so nothing is sent and the target is dialed again
-// and again. So an internationalised name is written in its ASCII form, the
-// one starting with xn--, which Go sends everywhere as it is written
+// convert to, because Go's HTTP client does not send it under one name:
+//   - It dials, and names in the TLS handshake and in a proxy's CONNECT, the
+//     mapped form (idna.Lookup: "ｏrigin.test", with a fullwidth o, becomes
+//     origin.test, and so does "origin。test").
+//   - It writes the Host header, an HTTP/2 :authority and the request line a
+//     proxy reads in the unmapped form (idna.ToASCII: xn--rigin-qr33a.test,
+//     xn--origintest-sh3i).
+//
+// A verdict on either form would judge a name that part of the request does
+// not go to. An allowed name would cover a request that a proxy fetches
+// from, or a shared server routes to, a name the lists never allowed. A
+// denied one would be reached under a spelling the lists do not catch. Over
+// HTTP/2 the two forms never even meet: the connection is stored under one
+// and looked up under the other, so nothing is sent and the target is
+// dialed again and again. So an internationalised name must be written in
+// its ASCII form, starting with xn--, which Go sends everywhere as written
 // (wirename_test.go shows all of it).
 //
 // Any other character refuses the host too. No resolver here would find
-// such a name, but behind a proxy the name is the proxy's to resolve, and a
-// proxy may read it differently from the policy: a '%' above all, which is
-// how a URL's host carries one ("local%2568ost" parses to the host
-// "local%68ost"), since a proxy that decodes it once more asks for
-// localhost, a name the policy never saw. The same goes for 169.254.169.254
-// with one digit written as an escape.
+// such a name, but behind a proxy the proxy resolves it, and it may read the
+// name differently from the policy. This applies above all to '%', which is
+// how a URL's host carries an escape ("local%2568ost" parses to the host
+// "local%68ost"). A proxy that decodes it once more asks for localhost, a
+// name the policy never saw. The same goes for 169.254.169.254 with one
+// digit written as an escape.
 func canonicalHost(host string) (string, error) {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if r, found := outsideASCII(host); found {
@@ -593,11 +594,11 @@ func viaProxy(proxy func(*http.Request) (*url.URL, error), u *url.URL) bool {
 // proxyOverride, set by tests, decides what goes through a proxy instead.
 var proxyOverride func(*url.URL) bool
 
-// checkConnection applies a request's policy to the address a connection to
-// dialed, host:port, was made to. A dial to a host the request did not
-// check is a dial to a proxy, whose target was checked by name and resolved
-// address already; one when nothing the request checked goes through a
-// proxy is refused, since what it reaches was never checked.
+// checkConnection applies a request's policy to the address that a
+// connection to dialed, host:port, was made to. A dial to a host the request
+// did not check is a dial to a proxy, whose target was already checked by
+// name and resolved address. Such a dial when nothing the request checked
+// goes through a proxy is refused, since what it reaches was never checked.
 func checkConnection(ctx context.Context, dialed string, conn net.Conn) error {
 	guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard)
 	if !ok || guard.policy == nil {

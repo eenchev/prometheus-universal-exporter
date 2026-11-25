@@ -14,19 +14,19 @@ import (
 )
 
 // --healthcheck asks a running exporter whether it is ready, or alive, and
-// exits 0 or 1, for a container health check: the image has no curl or wget
-// to ask with, and a health check written in Python would start an
-// interpreter on every run. It reads nothing but --web.listen-address, starts
-// no server and loads no configuration, so a check is one HTTP request.
+// exits 0 or 1, for a container health check: the image has no curl or wget,
+// and a health check written in Python would start an interpreter on every
+// run. It reads nothing but --web.listen-address, starts no server and loads
+// no configuration, so a check is one HTTP request.
 //
 // /health and /ready are never authenticated (AUTHENTICATION.md), so the
 // check sends no credentials and needs none of the configuration's.
 
 // healthcheckTimeout bounds the whole check: connecting, sending the request
 // and reading the answer. /health and /ready answer at once, from memory, so
-// an exporter that takes longer is not healthy; a container runtime or the
+// an exporter that takes longer is not healthy. A container runtime or the
 // kubelet bounds the command too, and kills it at its own timeout. It is a
-// variable for the tests alone, which wait a fraction of it.
+// variable only for the tests, which wait a fraction of it.
 var healthcheckTimeout = 5 * time.Second
 
 // healthcheckBodyLimit is how much of a failed check's answer is read for
@@ -64,14 +64,16 @@ func (f *healthcheckFlag) Set(value string) error {
 }
 
 // healthcheckURL is the URL of endpoint on the exporter listening on
-// listenAddress, which ValidateListenAddress has accepted. A listener on
-// every address (an empty host, 0.0.0.0, [::] or [::ffff:0.0.0.0]) is asked
-// on 127.0.0.1: the exporter listens with Go's "tcp" network, whose [::]
-// listener is dual-stack and answers IPv4 too, and falls back to IPv4 alone
-// on a host without IPv6, where [::1] could not even be dialed. A name or a
-// particular address is asked as it is, zone included, since the exporter
-// may listen on nothing else. A named port, which the listener resolves, is
-// resolved here too, so the URL carries a number.
+// listenAddress, which ValidateListenAddress has accepted.
+//   - A listener on every address (an empty host, 0.0.0.0, [::] or
+//     [::ffff:0.0.0.0]) is asked on 127.0.0.1. The exporter listens with Go's
+//     "tcp" network, whose [::] listener is dual-stack and answers IPv4 too,
+//     and falls back to IPv4 alone on a host without IPv6, where [::1] could
+//     not even be dialed.
+//   - A name or a particular address is asked as it is, zone included, since
+//     the exporter may listen on nothing else.
+//   - A named port, which the listener resolves, is resolved here too, so the
+//     URL carries a number.
 func healthcheckURL(listenAddress, endpoint string) string {
 	host, port, _ := net.SplitHostPort(listenAddress)
 	if host == "" {

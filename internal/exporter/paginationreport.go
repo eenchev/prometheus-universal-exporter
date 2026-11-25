@@ -11,16 +11,16 @@ import (
 // An http collector with request.pagination fetches every page of its
 // answer, up to request.pagination.max_pages (fetch/pagination.go). A trip
 // that stops there while the target has another page is no failure: its
-// answer is the pages it fetched. But its series then describe part of
-// what the target holds, which looks the same as all of it, so the pages a
-// trip fetched are counted in the collector's self-metrics, a trip stopped
-// at max_pages is counted too, and it is logged at warn level, first in
+// answer is the pages it fetched. But its series then describe part of what
+// the target holds, which looks the same as all of it. So the pages a trip
+// fetched are counted in the collector's self-metrics, and a trip stopped at
+// max_pages is counted too. Such a trip is logged at warn level, first in
 // full and then sparingly as other repeated failures are (failurelog.go),
 // until a trip fetches every page again.
 
 // notePages counts the pages of response in the collector's self-metrics,
-// and the trip when it stopped at max_pages; and when the pages were all
-// accepted, logs that stop, or that the trip fetched every page again.
+// and counts the trip when it stopped at max_pages. When the pages were all
+// accepted, it logs that stop, or that the trip fetched every page again.
 // target is the target as logs show it, keyTarget as the failure log tells
 // targets apart.
 func (s *Server) notePages(ctx context.Context, response *fetch.HTTPResponse, accepted bool, c *model.Collector, rec statsRecorder, target, keyTarget string) {

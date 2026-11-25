@@ -8,64 +8,57 @@ import (
 
 // The README's opening is where a reader decides whether this reads their
 // source at all. It started as an HTTP exporter and kept saying so after it
-// learned gRPC, Graphite, files, SSH, SQL, S3, Kubernetes, Redis, TCP and LDAP; this keeps the tagline and the
-// paragraph after it naming every request type in the tree, and makes a new
-// request type say how the README should name it.
+// learned gRPC, Graphite, files, SSH, SQL, S3, Kubernetes, Redis, TCP and
+// LDAP; this keeps the opening's table of sources naming every request type
+// in the tree, and makes a new request type say how the README should name
+// it.
 
-// readmeSourceNames is, per request type, the words the tagline and the
-// sources paragraph each use for it.
-var readmeSourceNames = map[string]struct{ tagline, sources string }{
-	"http":       {"HTTP", "HTTP services"},
-	"grpc":       {"gRPC", "gRPC services"},
-	"graphite":   {"Graphite", "Graphite servers"},
-	"localfile":  {"a file", "local files"},
-	"sshfile":    {"another host", "over SSH"},
-	"sql":        {"SQL database", "SQL databases"},
-	"dns":        {"DNS name", "DNS records"},
-	"tlscert":    {"TLS certificate", "TLS certificates"},
-	"s3file":     {"S3 bucket", "objects in Amazon S3"},
-	"kubernetes": {"Kubernetes object", "Kubernetes objects"},
-	"redis":      {"Redis server", "Redis and Valkey servers"},
-	"tcp":        {"text protocol over TCP", "services that answer a line sent over TCP"},
-	"ldap":       {"LDAP directory", "LDAP directories"},
-	"sshexec":    {"a command run on another host", "the output of a command run on another host"},
-	"ntp":        {"NTP server", "the clock of an NTP server"},
-	"icmp":       {"host answering a ping", "the echo replies of a host pinged over ICMP"},
-	"snmp":       {"SNMP agent", "SNMP agents"},
-	"smtp":       {"mail server", "mail servers over SMTP"},
-	"modbus":     {"Modbus device", "Modbus TCP devices"},
-	"mqtt":       {"MQTT broker", "the topics of an MQTT broker"},
-	"websocket":  {"WebSocket endpoint", "WebSocket endpoints"},
-	"ftp":        {"FTP server", "files on an FTP server"},
-	"imap":       {"mailbox of a mail account", "the mailboxes of a mail account over IMAP"},
-	"pop3":       {"POP3", "a mailbox over POP3"},
-	"radius":     {"RADIUS server", "RADIUS servers"},
-	"whois":      {"domain's registration", "the registration of a domain over WHOIS"},
-	"sip":        {"SIP server", "SIP servers"},
-	"amqp":       {"AMQP broker", "AMQP brokers"},
-	"nats":       {"NATS server", "NATS servers"},
+// readmeSourceNames is, per request type, the words that the README's table
+// of sources uses for it.
+var readmeSourceNames = map[string]string{
+	"http":       "HTTP APIs",
+	"grpc":       "gRPC services",
+	"graphite":   "Graphite servers",
+	"localfile":  "Local files",
+	"sshfile":    "files on another host over SSH",
+	"sql":        "SQL databases",
+	"dns":        "DNS records",
+	"tlscert":    "TLS certificates",
+	"s3file":     "objects in Amazon S3",
+	"kubernetes": "Kubernetes objects",
+	"redis":      "Redis and Valkey",
+	"tcp":        "Services that answer a line over TCP",
+	"ldap":       "LDAP directories",
+	"sshexec":    "Commands run on another host over SSH",
+	"ntp":        "NTP clocks",
+	"icmp":       "ping (ICMP)",
+	"snmp":       "SNMP agents",
+	"smtp":       "Mail servers (SMTP)",
+	"modbus":     "Modbus TCP devices",
+	"mqtt":       "MQTT topics",
+	"websocket":  "WebSocket endpoints",
+	"ftp":        "Files on an FTP server",
+	"imap":       "IMAP",
+	"pop3":       "POP3",
+	"radius":     "RADIUS logins",
+	"whois":      "domain registrations (WHOIS)",
+	"sip":        "SIP servers",
+	"amqp":       "AMQP queues",
+	"nats":       "NATS with JetStream",
 }
 
-// readmeOpening returns the README's tagline and its sources paragraph: the
-// first two paragraphs of prose after the heading and the badges.
-func readmeOpening(t *testing.T) (tagline, sources string) {
+// readmeOpening returns the README's opening: what stands between the badges
+// and the first section, the tagline and the table of sources among it.
+func readmeOpening(t *testing.T) string {
 	t.Helper()
-	intro, _, ok := strings.Cut(read(t, "README.md"), "\n## How it works")
+	intro, _, ok := strings.Cut(read(t, "README.md"), "\n## Try it")
 	if !ok {
-		t.Fatal("README.md has no \"## How it works\" section; the opening has moved")
+		t.Fatal("README.md has no \"## Try it\" section; the opening has moved")
 	}
-	var prose []string
-	for _, para := range strings.Split(intro, "\n\n") {
-		para = strings.TrimSpace(para)
-		if para == "" || strings.HasPrefix(para, "<") || strings.HasPrefix(para, "#") || strings.HasPrefix(para, "[![") {
-			continue
-		}
-		prose = append(prose, strings.Join(strings.Fields(para), " "))
+	if !strings.Contains(intro, "| Default build | Opt-in build |") {
+		t.Fatal("README.md's opening has no table of sources by build; the opening has moved")
 	}
-	if len(prose) < 2 {
-		t.Fatalf("README.md's opening has %d paragraphs of prose, want a tagline and a sources paragraph", len(prose))
-	}
-	return prose[0], prose[1]
+	return strings.Join(strings.Fields(intro), " ")
 }
 
 func TestReadmeOpeningNamesEveryRequestType(t *testing.T) {
@@ -87,18 +80,15 @@ func TestReadmeOpeningNamesEveryRequestType(t *testing.T) {
 	if len(types) < 6 {
 		t.Fatalf("found %d request types under internal/fetch; the files have moved", len(types))
 	}
-	tagline, sources := readmeOpening(t)
+	opening := readmeOpening(t)
 	for _, typ := range types {
-		names, ok := readmeSourceNames[typ]
+		name, ok := readmeSourceNames[typ]
 		if !ok {
-			t.Errorf("request type %q has no entry in readmeSourceNames: name it in the README's tagline and sources paragraph, then add it", typ)
+			t.Errorf("request type %q has no entry in readmeSourceNames: name it in the README's table of sources, then add it", typ)
 			continue
 		}
-		if !strings.Contains(tagline, names.tagline) {
-			t.Errorf("the README's tagline does not name %q (%s): %q", names.tagline, typ, tagline)
-		}
-		if !strings.Contains(sources, names.sources) {
-			t.Errorf("the README's sources paragraph does not name %q (%s): %q", names.sources, typ, sources)
+		if !strings.Contains(opening, name) {
+			t.Errorf("the README's table of sources does not name %q (%s)", name, typ)
 		}
 	}
 }

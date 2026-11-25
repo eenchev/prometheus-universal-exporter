@@ -47,9 +47,9 @@ const sampleAddress = "192.0.2.1:9100"
 var targetName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // splitDiscovered takes discovered_targets out of a static target file's
-// text: the text of the rest, which the exporter's loader reads, and the
-// entries, with aliases and merge keys replaced by what they stand for.
-// Text without the key, or that is no mapping, is given back as it is.
+// text. It returns the text of the rest, which the exporter's loader reads,
+// and the entries, with aliases and merge keys replaced by what they stand
+// for. Text without the key, or that is no mapping, is given back as it is.
 func splitDiscovered(raw []byte) ([]byte, *yaml.Node) {
 	var doc yaml.Node
 	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
@@ -74,10 +74,10 @@ func splitDiscovered(raw []byte) ([]byte, *yaml.Node) {
 }
 
 // readDiscoveredEntries reads and checks the discovered_targets entries.
-// Each entry is checked as a static target of the file, head its top-level
-// keys, with sampleAddress in place of a discovered address: whatever the
-// entry writes is checked at load, and only the target and the labels of a
-// discovered target are left to check when it is found.
+// Each entry is checked as a static target of the file, with head as its
+// top-level keys and sampleAddress in place of a discovered address. So
+// whatever the entry writes is checked at load. Only the target and the
+// labels of a discovered target are left to check when it is found.
 func readDiscoveredEntries(list *yaml.Node, head []*yaml.Node, conf *model.Config, base string, defaultRefresh time.Duration, defaultWeight int64) ([]*discoveredEntry, error) {
 	if list.Kind != yaml.SequenceNode || len(list.Content) == 0 {
 		return nil, fmt.Errorf("%s must be a list of entries, each a static target with discovery", config.DiscoveredTargetsKey)
@@ -247,11 +247,10 @@ func checkStaticTarget(head []*yaml.Node, target *yaml.Node) (*model.StaticTarge
 	return &f.Targets[0], nil
 }
 
-// sourceSpec is a discovery source of the inputs: its key, which is the
-// same while its owner and its configuration are, its kind (probe or
-// static) and owner (the probe job or the discovered_targets entry), and
-// the owner's weight_label, which its answers' weights are held by
-// (holdWeights).
+// sourceSpec is a discovery source of the inputs. It has its key, which stays
+// the same while its owner and its configuration do; its kind (probe or
+// static); its owner (the probe job or the discovered_targets entry); and the
+// owner's weight_label, by which its answers' weights are held (holdWeights).
 type sourceSpec struct {
 	key, kind, owner string
 	cfg              DiscoveryConfig
@@ -286,18 +285,20 @@ type checkedTarget struct {
 	err    error
 }
 
-// expand is in with the targets the discovery sources found added, found
-// by source key, a source that has not yet answered having none. A probe
-// job's discovered target comes after those it writes and those of the
-// sources before; one listed already, or that the collector refuses, is
-// left out. An entry's discovered target is named by discoveredName, or, when
-// the file writes a target of that name, <entry>_ and hashedAddress, so its
-// name depends on its entry, its address and the file alone, and stays the
-// same from one discovery to the next. A target the checks refuse is left
-// out. skipped says what was left out.
-// checked holds the targets checked before, by their text, and the
-// targets checked now are returned in its place, so a discovery that
-// changes little checks little.
+// expand is in with the targets that the discovery sources found added.
+// found is by source key; a source that has not yet answered has none.
+//   - A probe job's discovered target comes after those the job writes and
+//     those of the sources before it. One already listed, or that the
+//     collector refuses, is left out.
+//   - An entry's discovered target is named by discoveredName. When the file
+//     writes a target of that name, it is named <entry>_ and hashedAddress
+//     instead. So its name depends on its entry, its address and the file
+//     alone, and stays the same from one discovery to the next.
+//   - A target the checks refuse is left out.
+//
+// skipped says what was left out. checked holds the targets checked before,
+// by their text. The targets checked now are returned in its place, so a
+// discovery that changes little checks little.
 func (in *Inputs) expand(found map[string][]discovered, checked map[string]checkedTarget) (out *Inputs, skipped []string, now map[string]checkedTarget) {
 	now = map[string]checkedTarget{}
 	if len(in.sources) == 0 {
@@ -369,10 +370,10 @@ func (in *Inputs) expandProbeJob(j *ProbeJob, found map[string][]discovered, ski
 }
 
 // probeLabels are the labels of a discovered probe target that reach its
-// service discovery group: the __meta_ ones, which Prometheus offers to
-// relabeling and then drops, and those of a label name but job and
-// instance, which the scrape configuration and the allocator set; never
-// another starting with __, which would steer the probe itself.
+// service discovery group. These are the __meta_ ones, which Prometheus
+// offers to relabeling and then drops, and those of a label name other than
+// job and instance, which the scrape configuration and the allocator set.
+// Never another one starting with __, which would steer the probe itself.
 func probeLabels(labels map[string]string) map[string]string {
 	out := map[string]string{}
 	for name, value := range labels {
@@ -405,16 +406,16 @@ func staticLabels(labels map[string]string) map[string]string {
 // size fit for a label value and a log line.
 const maxEscapedAddress = 128
 
-// discoveredName is the name of the target the entry named entry makes of
-// address: <entry>_ and the address escaped, or, when escapeAddress does not
-// take it, its hashedAddress. It is a function of the two alone, never of
-// the other targets, so a target is never renamed by another's coming or
-// going, and it is injective: two addresses of one entry never share a name,
-// and, since no entry's name is another's followed by _ (checked at load),
-// neither do the targets of two entries. escapeAddress is injective on what
-// it takes; a hashedAddress always holds _ followed by an upper-case letter,
-// which an escaped address never does, so the two forms never meet; and
-// two hashedAddresses meet only if two addresses share 64 bits of SHA-256.
+// discoveredName is the name of the target that the entry named entry makes
+// of address. It is <entry>_ and the escaped address, or its hashedAddress
+// when escapeAddress does not take it. It depends on the two alone, never on
+// the other targets, so a target is never renamed when another comes or
+// goes. It is injective: two addresses of one entry never share a name. Since
+// no entry's name is another's followed by _ (checked at load), the targets
+// of two entries never share one either. escapeAddress is injective on what
+// it takes. A hashedAddress always holds _ followed by an upper-case letter,
+// and an escaped address never does, so the two forms never meet. Two
+// hashedAddresses meet only if two addresses share 64 bits of SHA-256.
 func discoveredName(entry, address string) string {
 	if escaped, ok := escapeAddress(address); ok {
 		return entry + "_" + escaped
@@ -423,15 +424,15 @@ func discoveredName(entry, address string) string {
 }
 
 // escapeAddress writes an address made of lower-case letters, digits, ., :,
-// -, [ and ] in the characters of a name, readably for an IPv4 or IPv6
-// address with its port and a lower-case host name: a letter or digit as
-// itself, . as _, and :, -, [ and ] as _ and their byte in upper-case hex
-// (_3A, _2D, _5B, _5D), so 10.0.0.5:9100 is 10_0_0_5_3A9100. It is
-// injective: reading left to right, _ followed by a digit and an upper-case
-// letter is one of the four escapes, since an upper-case letter appears in
-// nothing else, and any other _ is a dot, so the address is read back
-// whole. Any other address, or one escaped longer than maxEscapedAddress,
-// is not taken.
+// -, [ and ] in the characters of a name. It keeps an IPv4 or IPv6 address
+// with its port, and a lower-case host name, readable. A letter or digit is
+// written as itself, . as _, and :, -, [ and ] as _ and their byte in
+// upper-case hex (_3A, _2D, _5B, _5D). So 10.0.0.5:9100 is 10_0_0_5_3A9100.
+// It is injective. Reading left to right, _ followed by a digit and an
+// upper-case letter is one of the four escapes, since an upper-case letter
+// appears in nothing else. Any other _ is a dot. So the address is read back
+// whole. Any other address, or one escaped longer than maxEscapedAddress, is
+// not taken.
 func escapeAddress(address string) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(address); i++ {
@@ -455,10 +456,10 @@ func escapeAddress(address string) (string, bool) {
 // hashedAddressPrefix is how much of the address hashedAddress keeps.
 const hashedAddressPrefix = 48
 
-// hashedAddress names an address escapeAddress does not take: its first
-// hashedAddressPrefix bytes, lower-cased, every byte but a letter or a digit
-// written _, which only helps a reader, then _X and 16 hex digits of the
-// address's SHA-256, which tell it apart.
+// hashedAddress names an address that escapeAddress does not take. The name
+// is the address's first hashedAddressPrefix bytes, lower-cased, with every
+// byte but a letter or a digit written _, which only helps a reader. Then
+// come _X and 16 hex digits of the address's SHA-256, which tell it apart.
 func hashedAddress(address string) string {
 	prefix := address[:min(len(address), hashedAddressPrefix)]
 	readable := strings.Map(func(r rune) rune {

@@ -10,15 +10,15 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A collector usually stands for one backend, or one kind of backend, and each
-// probe of it is a request that backend has to answer. Coalescing
-// (probeflight.go) already makes identical probes share one request, but
+// A collector usually stands for one backend, or one kind of backend, and
+// each probe of it is a request that backend has to answer. Coalescing
+// (probeflight.go) already makes identical probes share one request. But
 // probes of different targets or with different parameters each make their
-// own, so a burst of them — many targets of one collector scraped at the same
-// moment, a slow backend making them pile up — would reach the backend with no
-// bound at all. max_concurrent_probes bounds the trips a collector makes at
-// once: its requests or file reads with the decoding and transforms after
-// them.
+// own. A burst of them, such as many targets of one collector scraped at
+// the same moment or a slow backend making them pile up, would reach the
+// backend with no bound at all. max_concurrent_probes bounds the trips a
+// collector makes at once: its requests or file reads, with the decoding
+// and transforms after them.
 //
 // A probe over the limit is answered 503 Service Unavailable at once, rather
 // than queued behind the others: Prometheus has a scrape timeout, and an
@@ -46,11 +46,11 @@ func maxConcurrentProbes(c *model.Collector) int {
 // own limit. 0 leaves the process unbounded.
 
 // Static target scrapes waiting for a slot wait in line. A freed slot is
-// handed to the first waiter it can serve — its collector under its own limit
-// and the process under --probe.max-concurrent — rather than every waiter
-// being woken to race for it: with many targets waiting, that would wake them
-// all on every release, and a waiter whose collector is still full could
-// keep one whose collector is not from ever being woken.
+// handed to the first waiter it can serve: one whose collector is under its
+// own limit, while the process is under --probe.max-concurrent. Waking every
+// waiter to race for it instead would wake them all on every release when
+// many targets wait, and a waiter whose collector is still full could keep
+// one whose collector is not from ever being woken.
 
 // tripLimiter counts the trips in progress per collector and in all.
 type tripLimiter struct {

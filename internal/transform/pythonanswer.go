@@ -8,31 +8,30 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A worker's answer is one line of JSON, {"ok": true, "log": "...",
-// "metrics": [...]} or the same with "data", and reading it was a third of
-// what a script of five thousand series cost the exporter: encoding/json
-// made a map of every metric and of its labels, a string of every key and a
+// A worker's answer is one line of JSON: {"ok": true, "log": "...",
+// "metrics": [...]}, or the same with "data". Reading it was a third of what
+// a script of five thousand series cost the exporter. encoding/json made a
+// map of every metric and its labels, a string of every key and a
 // json.Number of every number, through reflection, and each map was then
-// read into the series it stands for. readPythonAnswer reads the line
-// itself: a metric as metric(...) appends it becomes its series as it is
-// read, with no map between, and what a pre-script left in data is read by
-// the json decoder (decode.JSONValue), which makes of it what encoding/json
-// and model.Normalize made (decode/jsondiff_test.go).
+// read into its series. readPythonAnswer reads the line itself. A metric in
+// the shape metric(...) appends becomes its series as it is read, with no
+// map in between. What a pre-script left in data is read by the json decoder
+// (decode.JSONValue), which produces what encoding/json and model.Normalize
+// produced (decode/jsondiff_test.go).
 //
-// It reads only what it reads exactly as before. An entry of metrics that is
-// not what metric(...) appends — another type for an argument, a key of the
-// script's own, a key written twice, a value that is not a number — is read
-// by encoding/json as it was and checked by the code that always checked
-// it, so its error is the error it was. And a line that is not an answer as
-// the worker writes it, or is no JSON at all, is not read here: the reader
-// says so and the line is read as it was (countedPythonResult), with the
-// error it then had. pythonanswer_test.go compares the two over every kind
-// of answer.
+// It reads only what it reads exactly as before. Some metrics entries are
+// not what metric(...) appends: another type for an argument, a key of the
+// script's own, a key written twice, or a value that is not a number. These
+// are read by encoding/json and checked by the existing code, so the error
+// stays the same. A line that is not an answer as the worker writes it, or
+// is not JSON at all, is not read here either. The reader reports it and the
+// line is read as before (countedPythonResult), with the same error.
+// pythonanswer_test.go compares the two over every kind of answer.
 
-// pythonAnswerDepth is how deep encoding/json reads arrays and objects,
-// which is how deep a metric of an answer that encoding/json reads may
-// nest, the answer around it counted (skip). What a pre-script left in data
-// is not read by it, and nests as deep as a decoded value does
+// pythonAnswerDepth is how deep encoding/json reads arrays and objects. It
+// is also how deep a metric of an answer read by encoding/json may nest,
+// counting the answer around it (skip). What a pre-script left in data is
+// not read by it; that nests as deep as a decoded value does
 // (decode.MaxDepth, decode.JSONValue).
 const pythonAnswerDepth = 10000
 
@@ -44,10 +43,10 @@ type answerReader struct {
 	// types and label names of a script's metrics are mostly the same from
 	// one metric to the next, and are made strings once.
 	strings [answerStrings]string
-	// values holds label values read before, each in the one place its
-	// hash gives it: a label that says one of a few things, a region or a
-	// state, is made a string once for each, and one that differs in every
-	// series, an ID, costs only the looking.
+	// values holds label values read before, each in the one slot its
+	// hash picks. A label with a few distinct values, such as a region or
+	// a state, becomes a string once per value. A label that differs in
+	// every series, such as an ID, costs only the lookup.
 	values [answerValues]string
 }
 
@@ -217,12 +216,12 @@ func (a *answerReader) metrics(out *pythonOutput) bool {
 	}
 }
 
-// metric reads a metric as metric(...) appends it: an object of name, type,
-// value, labels, help and timestamp, each once at most, the name a string,
-// the type and the help a string or null, the value a number, the labels an
-// object of strings and nulls or null, the timestamp a number or null. It
-// reports false for anything else, a metric that has an error among it,
-// which the caller reads as it was read.
+// metric reads a metric in the shape metric(...) appends it: an object of
+// name, type, value, labels, help and timestamp, each at most once. The name
+// is a string, the type and help a string or null, the value a number, the
+// labels an object of strings and nulls or null, and the timestamp a number
+// or null. It reports false for anything else, including a metric with an
+// error in it; the caller then reads it as before.
 func (a *answerReader) metric() (model.Metric, bool) {
 	metric := model.Metric{Type: model.GaugeMetricType}
 	if !a.take('{') {
@@ -317,11 +316,11 @@ func (a *answerReader) metric() (model.Metric, bool) {
 	}
 }
 
-// labels reads a metric's labels, an object of strings: null leaves a label
-// out, as None does, also one written before it under the same name, since
-// of a name written twice the later counted, and so does an empty string
-// (pythonMetric.metric). A value that is no string, or is the marker of a
-// float that is not finite, is not read here.
+// labels reads a metric's labels, an object of strings. null leaves a label
+// out, as None does, including one written earlier under the same name,
+// since for a name written twice the later one counts. An empty string does
+// the same (pythonMetric.metric). A value that is not a string, or is the
+// marker of a non-finite float, is not read here.
 func (a *answerReader) labels() (map[string]string, bool) {
 	if !a.take('{') {
 		return nil, false
@@ -403,10 +402,10 @@ func (a *answerReader) word(literal string) bool {
 	return true
 }
 
-// text reads the string that starts at pos and returns what is between its
-// quotes, and whether that is plain: printable ASCII without an escape,
-// which is the string as it is. It reports false when no string starts at
-// pos or it does not end.
+// text reads the string that starts at pos. It returns the bytes between
+// its quotes and whether they are plain: printable ASCII without an escape,
+// so the bytes are the string itself. It reports false when no string
+// starts at pos or the string does not end.
 func (a *answerReader) text() (between []byte, plain, ok bool) {
 	if a.pos >= len(a.data) || a.data[a.pos] != '"' {
 		return nil, false, false
@@ -428,11 +427,11 @@ func (a *answerReader) text() (between []byte, plain, ok bool) {
 	return nil, false, false
 }
 
-// string reads the string at pos as encoding/json reads one. place is where
-// in a.strings a string like it was read last, the same text again being
-// the string made then, or answerValue or answerOnce. A worker writes
-// ASCII, so a string without an escape is its own bytes; one with an
-// escape, or with anything else, is read by encoding/json.
+// string reads the string at pos as encoding/json reads one. place is the
+// slot in a.strings where a similar string was last read (the same text
+// again yields the string made then), or answerValue or answerOnce. A worker
+// writes ASCII, so a string without an escape is its own bytes. A string
+// with an escape, or with anything else, is read by encoding/json.
 func (a *answerReader) string(place int) (string, bool) {
 	start := a.pos
 	between, plain, ok := a.text()
@@ -468,10 +467,10 @@ func (a *answerReader) string(place int) (string, bool) {
 	return *remembered, true
 }
 
-// number reads the JSON number at pos as the number of a value or a
-// timestamp is read (pythonNumber of a json.Number). It reports false for
-// what is no number, or is one beyond a float64, which has an error to
-// report.
+// number reads the JSON number at pos the same way the number of a value or
+// a timestamp is read (pythonNumber of a json.Number). It reports false for
+// something that is not a number, or is beyond a float64; that has an error
+// to report.
 func (a *answerReader) number() (float64, bool) {
 	data, i := a.data, a.pos
 	if i < len(data) && data[i] == '-' {
@@ -516,12 +515,12 @@ func (a *answerReader) number() (float64, bool) {
 	return f, true
 }
 
-// skip passes over the value at pos without reading it: to the bracket
-// that closes the one it opens with, or to the end of a string, a number or
-// a literal. depth is how many arrays and objects the value lies inside. It
+// skip passes over the value at pos without reading it: to the bracket that
+// closes the one it opens with, or to the end of a string, number or
+// literal. depth is how many arrays and objects the value lies inside. It
 // reports false for a value that does not end or nests deeper than
-// encoding/json reads; whether what it passed over is a value is for
-// whoever reads it to say (decodePythonValue).
+// encoding/json reads. Whether what it passed over is a valid value is for
+// the reader to decide (decodePythonValue).
 func (a *answerReader) skip(depth int) bool {
 	data, i := a.data, a.pos
 	if i >= len(data) {

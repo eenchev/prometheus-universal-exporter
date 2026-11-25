@@ -9776,11 +9776,13 @@ name `--help`. The target allocator's flags MUST live on its own page,
 `docs/ALLOCATOR.md`, which `docs/FLAGS.md` MUST link.
 
 What the exporter is MUST cover every source it reads, not the first one it
-learned: the README's tagline and the sources paragraph after it MUST each name
-every request type in the tree, and a test MUST find each
-`internal/fetch/requesttype_<name>.go` named in both, failing for a request
-type the test has no README name for, so a new type cannot ship while the
-README still describes the exporter without it.
+learned. The README's opening MUST have a table of the sources it reads, with
+one column for the default build and one for the opt-in build, and the table
+MUST name every request type in the tree, in the column of the build that
+includes it. A test MUST find each `internal/fetch/requesttype_<name>.go`
+named in the opening, and MUST fail for a request type it has no README name
+for, so that a new type cannot ship while the README describes the exporter
+without it.
 
 Each subject above MUST live in a dedicated page under `docs/`, and the README's
 index MUST link every one of them. The Helm chart's own README remains the
@@ -9789,6 +9791,25 @@ reference for chart values, per [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md)
 link to it rather than restate it. Documentation that moves MUST move whole: a
 subject MUST have exactly one home, so that a reader who follows a link is not
 sent back to a shorter version of what they just left.
+
+The user documentation (the README, the pages under `docs/` other than these
+specifications, and the chart's README) and the comments in the code MUST be
+written in plain technical English, so that a reader whose first language is
+not English can follow them:
+
+- Short sentences that each say one thing. A long sentence is split rather
+  than joined with semicolons or nested clauses.
+- The subject first, the verb soon after it, and the active voice: "the
+  exporter retries the request", not "the request is retried".
+- Common words rather than rare or literary ones, and one name for one thing
+  throughout.
+- What something does before why it does it, and a list or a table where the
+  text would otherwise run through many items.
+
+Plain wording MUST NOT cost accuracy: every fact, number, limit and condition
+stays. Error and log messages, configuration keys and anything the text quotes
+keep their exact wording. A Go doc comment MUST start with the name it
+documents followed by a space, as the linter requires.
 
 ---
 

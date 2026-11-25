@@ -36,9 +36,9 @@ import (
 // same name are duplicates, and fail the scrape as duplicates do.
 
 // The values of name_escaping. NameEscapingDots and NameEscapingAllowUTF8
-// are no values of it: they are, with underscores and values, the escaping
-// schemes a scraper can ask an answer for (EscapeName), the first rewriting
-// every name with an underscore in it and the second none.
+// are not values of it. Together with underscores and values, they are the
+// escaping schemes a scraper can request for an answer (EscapeName). dots
+// rewrites every name with an underscore in it; allow-utf-8 rewrites none.
 const (
 	NameEscapingFail        = "fail"
 	NameEscapingUnderscores = "underscores"
@@ -54,11 +54,12 @@ func UTF8Names(c *model.Collector) bool {
 	return c.MetricNameValidationScheme == model.NameValidationUTF8
 }
 
-// EscapeName escapes a metric name (metric true) or a label name that is not
-// classic as a scraper's escaping asks: underscores, dots or values, as
-// Prometheus's own model escapes them; a classic name, and any name under
-// allow-utf-8, is returned as it is. dots writes _dot_ for a dot, __ for an
-// underscore and for any other character a classic name may not have.
+// EscapeName escapes a metric name (metric true) or a non-classic label
+// name as a scraper's escaping requests: underscores, dots or values, the
+// same way Prometheus's own model escapes them. A classic name, and any name
+// under allow-utf-8, is returned unchanged. dots writes _dot_ for a dot, and
+// __ for an underscore and for any other character a classic name may not
+// have.
 func EscapeName(name, scheme string, metric bool) string {
 	if scheme != NameEscapingDots {
 		return escapeName(name, scheme, metric)

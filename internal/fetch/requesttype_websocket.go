@@ -27,9 +27,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The websocket request type reads messages from a WebSocket endpoint: it
-// makes the opening handshake, sends one text message when the collector
-// has one, reads the messages the collector asks for, and closes.
+// The websocket request type reads messages from a WebSocket endpoint. It
+// makes the opening handshake, sends one text message if the collector has
+// one, reads the messages the collector asks for, and closes.
 //
 //	request:
 //	  type: websocket
@@ -40,18 +40,19 @@ import (
 //	  headers: {X-Tenant: acme}
 //	  bearer_token_file: /etc/exporter/token
 //
-// With read_messages: 1 the answer is the message, as the server sent it,
-// for whatever decoder reads it; none within read_window fails the scrape.
-// With more, the answer is a JSON list of the messages that came before
-// the window passed or the server closed, each with its payload as text,
-// json when the text is JSON, or payload_base64 when it is binary.
+// With read_messages: 1, the answer is the message exactly as the server
+// sent it, for whatever decoder reads it. If no message arrives within
+// read_window, the scrape fails. With more, the answer is a JSON list of
+// the messages that arrived before the window passed or the server
+// closed. Each has its payload as text, as json when the text is JSON, or
+// as payload_base64 when it is binary.
 //
-// It stays a pull: a scrape connects, reads and closes; no connection
-// outlives it. RFC 6455, by hand: no extension is offered, so no message is
-// compressed.
+// It is still a pull: a scrape connects, reads and closes, and no
+// connection outlives it. It implements RFC 6455 by hand. No extension is
+// offered, so no message is compressed.
 //
 // The target is the endpoint's URL, ws://host:port/path?query or wss://
-// (ports 80 and 443); a target without a scheme is ws://, or wss:// when
+// (ports 80 and 443). A target without a scheme is ws://, or wss:// when
 // the collector has a tls block.
 //
 // The type imports nothing outside the standard library.

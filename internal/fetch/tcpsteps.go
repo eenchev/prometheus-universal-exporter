@@ -15,16 +15,16 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A tcp collector's request.steps is a conversation: a protocol that needs
-// more than one exchange before it says what a metric needs, as SMTP's
-// EHLO, POP3's CAPA or IMAP's CAPABILITY after their greetings, or a
-// command that only answers after another, as memcached's stats of a slab
-// class. Each step's send is written, after the greeting and STARTTLS when
-// the collector has them, and its answer read until what came of it matches
-// the step's until; the last step without until reads until the server
-// closes the connection. The answer the rules read is the steps' answers
-// one after another, and with request.document each one's text, answer and
-// seconds too.
+// A tcp collector's request.steps is a conversation. It is for a protocol
+// that needs more than one exchange before it returns what a metric needs,
+// such as SMTP's EHLO, POP3's CAPA or IMAP's CAPABILITY after their
+// greetings, or a command that answers only after another, such as
+// memcached's stats of a slab class. Each step's send is written after the
+// greeting and STARTTLS, when the collector has them. Its answer is read
+// until the received text matches the step's until. A last step without
+// until reads until the server closes the connection. The rules read the
+// steps' answers joined in order, and with request.document also each
+// step's text, answer and seconds.
 
 // TCPStep is one step of request.steps: the text written, and the pattern
 // its answer matches once it has all come.
@@ -37,11 +37,11 @@ type TCPStep struct {
 // a session.
 const tcpMaxSteps = 16
 
-// validateTCPSteps checks request.steps: not beside send, send_hex,
-// terminator, answer_bytes or udp, each of which is the one exchange's; at
-// most tcpMaxSteps steps, each with a send, as send is held, and an until
-// Go's regexp compiles, bounded as greeting is, with no placeholder, which
-// every step but the last must have.
+// validateTCPSteps checks request.steps. They may not be combined with send,
+// send_hex, terminator, answer_bytes or udp, which belong to the single
+// exchange. There are at most tcpMaxSteps steps. Each has a send, checked
+// like send, and an until that Go's regexp compiles, bounded like greeting,
+// with no placeholder. Every step but the last must have an until.
 func validateTCPSteps(name string, r TCPConfig) error {
 	if len(r.Steps) == 0 {
 		return nil
@@ -130,10 +130,10 @@ type tcpStepDocument struct {
 	Seconds float64 `json:"seconds"`
 }
 
-// tcpConverse speaks the steps on conn, reading through reader, each
-// answer held, with those before it and the shared bytes of the greeting,
-// to limit; x gets each step, the body, their answers one after another,
-// and how reading stopped.
+// tcpConverse runs the steps on conn, reading through reader. Each answer,
+// together with those before it and the shared bytes of the greeting, is
+// held to limit. x receives each step, the body, their answers joined in
+// order, and how reading stopped.
 func tcpConverse(ctx context.Context, conn net.Conn, reader *bufio.Reader, address tcpAddress, steps []tcpStepRendered, limit, shared int64, x *tcpExchanged) error {
 	var body []byte
 	for i, step := range steps {

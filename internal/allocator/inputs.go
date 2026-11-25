@@ -29,8 +29,8 @@ type Paths struct {
 	// ProbeTargets is the probe targets file (ProbeFile).
 	ProbeTargets string
 	// DiscoveryRefresh is the refresh_interval of a discovery source that
-	// sets none (--discovery.refresh-interval); 0 leaves each kind its
-	// own default (DiscoveryConfig.refresh). It is read with the files, as
+	// sets none (--discovery.refresh-interval). 0 leaves each kind its own
+	// default (DiscoveryConfig.refresh). It is read with the files, since
 	// the sources are checked against it.
 	DiscoveryRefresh time.Duration
 }
@@ -72,9 +72,9 @@ type Inputs struct {
 	// discovered targets are added (expand), what was discovered.
 	digest string
 	// origins are where each static target came from, by its place in
-	// Targets: "" for one the file writes, and the name of the
-	// discovered_targets entry that made one (expandStatic). A place past
-	// its end is a written target's.
+	// Targets: "" for one the file writes, or the name of the
+	// discovered_targets entry that made it (expandStatic). A place past
+	// its end belongs to a written target.
 	origins []string
 	// entries are the static target file's discovered_targets, and
 	// sources every discovery source of them and of the probe jobs.
@@ -82,21 +82,21 @@ type Inputs struct {
 	sources []sourceSpec
 }
 
-// ErrChanged says the input files changed while they were being read: what
-// was checked may not be what would be served, so the attempt is dropped
-// and the files are read again at the next check, or, at the start, after a
+// ErrChanged says the input files changed while they were being read. What
+// was checked may not be what would be served, so the attempt is dropped.
+// The files are read again at the next check, or, at the start, after a
 // moment (cmd/pue-allocator). It is no refusal.
 var ErrChanged = errors.New("the input files changed while they were read")
 
 // LoadInputs reads the input files and checks them as the exporter checks
 // its own: the configuration with config.Load, the static target file with
-// the checks of --static-targets-file, both target files against the
-// configuration. On top of that it refuses a collector_files entry that is
-// absolute or leaves the configuration's directory, since the bundle carries
-// collector files at their paths relative to it, and one whose files would
-// take the place of a bundle's own file on the replicas. The text of every
-// file is read before and after the check, and the two must be the same: the
-// files served are then exactly the files checked.
+// the checks of --static-targets-file, and both target files against the
+// configuration. It also refuses a collector_files entry that is absolute
+// or leaves the configuration's directory, since the bundle carries
+// collector files at their paths relative to it. It also refuses one whose
+// files would take the place of a bundle's own file on the replicas. The
+// text of every file is read before and after the check, and the two must
+// be the same, so the files served are exactly the files checked.
 func LoadInputs(p Paths) (*Inputs, error) {
 	before, err := takeSnapshot(p)
 	if err != nil {
@@ -293,12 +293,14 @@ func takeSnapshot(p Paths) (*snapshot, error) {
 }
 
 // checkCollectorEntries refuses a collector_files entry the bundle cannot
-// carry: an absolute path, one that leaves the configuration's directory,
-// a pattern that would match the bundle's static target file on the
-// replicas, where the bundle's files lie side by side, and an entry of a
-// directory and more whose directory could be one of the names beginning
-// with ".." that the replica's cache directory keeps for itself, where
-// ..data/config.yaml, say, would be read as a collector file.
+// carry:
+//   - an absolute path, or one that leaves the configuration's directory;
+//   - a pattern that would match the bundle's static target file on the
+//     replicas, where the bundle's files lie side by side;
+//   - an entry of a directory and more whose directory could be one of the
+//     names beginning with ".." that the replica's cache directory keeps
+//     for itself, where ..data/config.yaml, say, would be read as a
+//     collector file.
 func checkCollectorEntries(entries []string) error {
 	for _, entry := range entries {
 		if strings.TrimSpace(entry) == "" {
@@ -404,9 +406,9 @@ func readStaticDocument(raw []byte, f *model.StaticTargetFile) (*staticDocument,
 }
 
 // resolved is a copy of n with every alias replaced by a copy of what it
-// names, every merge key (<<) by the keys it merges in, and no anchors or
-// comments: a share holds none of the targets an alias could point into, and
-// a replica reads it as the decoder read the file.
+// names, every merge key (<<) replaced by the keys it merges in, and no
+// anchors or comments. So a share holds none of the targets an alias could
+// point into, and a replica reads it as the decoder read the file.
 func resolved(n *yaml.Node) *yaml.Node {
 	for n.Kind == yaml.AliasNode && n.Alias != nil {
 		n = n.Alias

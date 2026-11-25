@@ -5,19 +5,19 @@ import (
 	"unicode"
 )
 
-// A label is evaluated at every node its rule selects, and one that is an
-// absolute path — `//last/@id`, `count(//row)` — walks the document from
-// its top each time: over four thousand rows the document was walked four
-// thousand times, seconds of a probe, for a value that is the same at every
-// row, since nothing in such an expression is relative to the node.
+// A label is evaluated at every node its rule selects. A label that is an
+// absolute path, such as `//last/@id` or `count(//row)`, walks the document
+// from the top each time. Over four thousand rows the document was walked
+// four thousand times, taking seconds of a probe, for a value that is the
+// same at every row: nothing in such an expression is relative to the node.
 //
 // So a label whose expression cannot depend on the selected node is
-// evaluated once for the rule and the response, at the first node it is
-// asked for at, and every series is given that value: the text or the
-// absence the engine gave there (engineXPathLabel), and for a sum() what
-// the exporter read of its nodes (labelXPathSums), so that a series is
-// made, left without the label or failed exactly as it was when the label
-// was evaluated at its node, the failure naming the node as before.
+// evaluated once per rule and response, at the first node it is asked for.
+// Every series gets that value: the text or absence the engine gave there
+// (engineXPathLabel), and for a sum() what the exporter read of its nodes
+// (labelXPathSums). A series is therefore made, left without the label, or
+// failed exactly as when the label was evaluated at its node, and the
+// failure names the node as before.
 //
 // Whether a label cannot depend on the node is decided from its expression
 // when the rule's labels are planned (xpathConstantLabel), and narrowly:
@@ -63,22 +63,22 @@ var xpathConstantFunctions = map[string]bool{
 }
 
 // xpathConstantLabel reports whether a label's expression, which compiled,
-// cannot depend on the node it is evaluated at. It says so of two shapes
-// alone, blanks around them aside:
+// cannot depend on the node it is evaluated at. It says yes for only two
+// shapes, ignoring surrounding blanks:
 //
-//   - one absolute location path, `/status/@site` or `//row[v > 1]/name`:
-//     it starts with `/` or `//` and is steps and nothing else — no
-//     operator, union, comma or call outside its predicates. What stands
-//     inside a predicate is evaluated relative to the path's own nodes and
-//     never to the selected one, so anything may stand there;
+//   - one absolute location path, `/status/@site` or `//row[v > 1]/name`.
+//     It starts with `/` or `//` and contains only steps: no operator,
+//     union, comma or call outside its predicates. A predicate is evaluated
+//     relative to the path's own nodes, never to the selected one, so
+//     anything may appear inside it.
 //   - one call of a function of xpathConstantFunctions with one such path
-//     for its one argument, `count(//row)`.
+//     as its only argument, `count(//row)`.
 //
-// Of everything else it says no, `concat(/status/@site, '-', @id)` and
-// `//a | b` as well as `//a | //b`, `(//a)[1]` and `string(/a) = 'x'`,
-// which do not depend on the node either: a label wrongly taken to depend
-// on the node costs what it cost, and one wrongly taken not to would be
-// given the first node's value at every other.
+// It says no to everything else. That includes expressions that do not
+// depend on the node either: `concat(/status/@site, '-', @id)`, `//a | b`,
+// `//a | //b`, `(//a)[1]` and `string(/a) = 'x'`. A label wrongly taken to
+// depend on the node costs what it always cost. One wrongly taken not to
+// would be given the first node's value at every other node.
 func xpathConstantLabel(expression string) bool {
 	expression = strings.TrimFunc(expression, unicode.IsSpace)
 	if end, ok := xpathAbsolutePathEnd(expression, 0); ok {
@@ -97,9 +97,9 @@ func xpathConstantLabel(expression string) bool {
 }
 
 // xpathAbsolutePathEnd is where the absolute location path that starts at
-// expression[i:] ends, past the blanks after it; ok is false where none
-// starts. The path is `/` alone, the document, or `/` or `//` and steps
-// with one of the two between each.
+// expression[i:] ends, past the blanks after it. ok is false where no path
+// starts. The path is `/` alone (the document), or `/` or `//` followed by
+// steps, with one of the two between each step.
 func xpathAbsolutePathEnd(expression string, i int) (end int, ok bool) {
 	if !strings.HasPrefix(expression[i:], "/") {
 		return 0, false
@@ -128,10 +128,10 @@ func xpathAbsolutePathEnd(expression string, i int) (end int, ok bool) {
 }
 
 // xpathStepEnd is where the step of a location path that starts at
-// expression[i:] ends, its predicates included; ok is false for what is no
-// step: `.` or `..`, or a node test — a name, with a prefix or without,
-// `*`, `text()`, `node()` or `comment()` — after an `@` or an axis or
-// neither.
+// expression[i:] ends, including its predicates. ok is false for anything
+// that is not a step. A step is `.` or `..`, or a node test (a name, with or
+// without a prefix, `*`, `text()`, `node()` or `comment()`) optionally
+// after an `@` or an axis.
 func xpathStepEnd(expression string, i int) (end int, ok bool) {
 	switch {
 	case i >= len(expression):
@@ -189,9 +189,9 @@ func xpathStepEnd(expression string, i int) (end int, ok bool) {
 }
 
 // xpathPredicatesEnd is where the predicates that follow a step at
-// expression[i:] end, where they start when there are none. A predicate ends
-// at the bracket that closes it, past the predicates and the strings inside
-// it; ok is false for one that is not closed.
+// expression[i:] end, or where they would start when there are none. A
+// predicate ends at the bracket that closes it, skipping the predicates and
+// strings inside it. ok is false for a predicate that is not closed.
 func xpathPredicatesEnd(expression string, i int) (end int, ok bool) {
 	for {
 		open := xpathBlanksEnd(expression, i)

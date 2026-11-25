@@ -24,28 +24,28 @@ import (
 	"github.com/snowflakedb/gosnowflake"
 )
 
-// The snowflake driver is snowflakedb/gosnowflake: built in only with the
-// sql_driver_snowflake tag (SQL_DRIVERS=snowflake), since it brings the
-// AWS and Azure SDKs and Apache Arrow with it, and with gosnowflake's
-// minicore_disabled, which tools/request-type-tags.sh gives with it, so that
-// its init writes no native library to disk to load. A target is the account
-// identifier, such as myorg-myaccount, reached at
+// The snowflake driver is snowflakedb/gosnowflake. It is built in only with
+// the sql_driver_snowflake tag (SQL_DRIVERS=snowflake), since it brings the
+// AWS and Azure SDKs and Apache Arrow with it. It is also built with
+// gosnowflake's minicore_disabled, which tools/request-type-tags.sh gives
+// with it, so its init writes no native library to disk to load. A target
+// is the account identifier, such as myorg-myaccount, reached at
 // <account>.snowflakecomputing.com over HTTPS, always with TLS. The account
-// authenticates with password_file, or with private_key_file, an
-// unencrypted PKCS#8 RSA key, by key-pair authentication. Snowflake has no
-// read-only transaction (the driver refuses one): the role must be one that
-// can only read. The driver aborts the statement at the server when the
-// scrape's deadline comes.
+// authenticates with password_file, or with private_key_file (an
+// unencrypted PKCS#8 RSA key) by key-pair authentication. Snowflake has no
+// read-only transaction (the driver refuses one), so the role must be one
+// that can only read. The driver aborts the statement at the server when
+// the scrape's deadline comes.
 //
 // The driver's platform detection is turned off before any connection can
-// start it: on its first connection it would otherwise ask the EC2, Azure and
-// GCP metadata services and AWS STS, with the ambient AWS credentials, which
-// platform it runs on, outside the exporter's dialer and policy. It reads the
-// switch, an environment variable, when it detects; it has no Config field.
-// The driver's log goes to the exporter's logger (snowflakeLog), at the
-// driver's level of error, which its own init lowers to fatal, logging
-// nothing, when GITHUB_ACTIONS is set: the exporter logs the same wherever
-// it runs.
+// start it. Otherwise, on its first connection, it would ask the EC2, Azure
+// and GCP metadata services and AWS STS, with the ambient AWS credentials,
+// which platform it runs on, outside the exporter's dialer and policy. It
+// reads the switch, an environment variable, when it detects; it has no
+// Config field. The driver's log goes to the exporter's logger
+// (snowflakeLog), at the driver's level of error. The driver's own init
+// lowers that level to fatal, logging nothing, when GITHUB_ACTIONS is set.
+// The exporter logs the same wherever it runs.
 func init() {
 	_ = os.Setenv("SNOWFLAKE_DISABLE_PLATFORM_DETECTION", "true")
 	driverLog := gosnowflake.GetLogger() //nolint:staticcheck // SA1019: still the driver's only way to its log
@@ -65,11 +65,11 @@ func init() {
 	})
 }
 
-// snowflakeServerError recognises Snowflake's answer of an error, which the
+// snowflakeServerError recognises an error answer from Snowflake, which the
 // driver gives as a SnowflakeError, by its error number and SQLSTATE. The
-// driver gives its own failures, such as a connection that could not be
-// made, as a SnowflakeError too, numbered from 260000 to 279999
-// (gosnowflake's ErrCode constants); those are the driver's words, not the
+// driver also gives its own failures, such as a connection that could not
+// be made, as a SnowflakeError, numbered from 260000 to 279999
+// (gosnowflake's ErrCode constants). Those are the driver's words, not the
 // account's, and are told as they are.
 func snowflakeServerError(err error) (string, bool) {
 	var sfErr *gosnowflake.SnowflakeError
@@ -124,11 +124,12 @@ func connectSnowflake(ctx context.Context, spec *sqlConnectSpec) (driver.Conn, e
 	return conn, err
 }
 
-// snowflakeRun runs a statement as sqlPlain does, failing with the policy's
-// refusal when the exporter's dialer refused a new connection to the account
-// on the way, with the response limit's failure when the account's answer
-// was larger than the limit, and with errSnowflakeChunks when the
-// statement's result came in more than one chunk (snowflakeTransport).
+// snowflakeRun runs a statement as sqlPlain does. It fails with the
+// policy's refusal when the exporter's dialer refused a new connection to
+// the account on the way. It fails with the response limit's failure when
+// the account's answer was larger than the limit, and with
+// errSnowflakeChunks when the statement's result came in more than one
+// chunk (snowflakeTransport).
 func snowflakeRun(ctx context.Context, conn *sql.Conn, statement string, args []any, timeout time.Duration) (*sql.Rows, func(), error) {
 	ctx, notes := withSnowflakeNotes(ctx)
 	rows, done, err := sqlPlain(ctx, conn, statement, args, timeout)
@@ -164,42 +165,43 @@ func withSnowflakeNotes(ctx context.Context) (context.Context, *snowflakeNotes) 
 	return context.WithValue(ctx, snowflakeNotesKey{}, notes), notes
 }
 
-// snowflakeTransport is the transport of a snowflake connection: a request
-// to a host other than the account's, and one whose connection to the
-// account the exporter's dialer refused, are answered with 403 Forbidden,
-// and one the account answered with a result larger than the response limit
-// or in more than one chunk with the statement's failure
-// (snowflakeFailedAnswer). The driver retries every
-// request that fails without a response, until the scrape's deadline, and
-// then reports only the deadline, while a 403 it does not retry (gosnowflake
-// retry.go, isRetryableError and isRetryableStatus). A refusal of the
-// connection to the account is noted where the request's context says
-// (withSnowflakeNotes), for the connection or statement that made it to fail
-// with it at once; another failure to connect to the account the driver
-// retries as before.
+// snowflakeTransport is the transport of a snowflake connection. A request
+// to a host other than the account's, or one whose connection to the
+// account the exporter's dialer refused, is answered with 403 Forbidden. A
+// request the account answered with a result larger than the response limit,
+// or in more than one chunk, is answered with the statement's failure
+// (snowflakeFailedAnswer). The driver retries every request that fails
+// without a response until the scrape's deadline, and then reports only the
+// deadline. It does not retry a 403 (gosnowflake retry.go, isRetryableError
+// and isRetryableStatus). A refusal of the connection to the account is
+// noted where the request's context says (withSnowflakeNotes), so the
+// connection or statement that made it fails with it at once. The driver
+// retries any other failure to connect to the account as before.
 //
 // The server leaves each chunk of a result after the first at a presigned
 // cloud storage URL, a host other than the account's, which the exporter
 // does not connect to. The driver would start reading those chunks as soon
 // as the first came, and its reader can wait for a chunk forever, past the
-// scrape's deadline: a download that fails signals the reader without the
-// lock the reader holds from its look for a failure to its wait, so the
-// signal is lost when it comes in between (gosnowflake chunk_downloader.go,
-// downloadChunk and snowflakeChunkDownloader.next), and the statement keeps
-// its connection and its place at max_per_target, the scrape abandoned at
-// its deadline. So the driver is never given a result with chunks: the
-// account's answer to a statement, or to the driver's ask for a statement's
-// result (a path under /queries/), is read whole, the result's first chunk
-// with it (held twice for the moment, that copy and the driver's), and when
-// it names more chunks it is replaced by the statement's failure, noted for
-// snowflakeRun to fail the statement with errSnowflakeChunks.
+// scrape's deadline. A download that fails signals the reader without the
+// lock that the reader holds from its check for a failure to its wait, so
+// the signal is lost when it comes in between (gosnowflake
+// chunk_downloader.go, downloadChunk and snowflakeChunkDownloader.next).
+// The statement then keeps its connection and its place at max_per_target,
+// and the scrape is abandoned at its deadline. So the driver is never given
+// a result with chunks. The account's answer to a statement, or to the
+// driver's request for a statement's result (a path under /queries/), is
+// read whole, with the result's first chunk (held twice for the moment:
+// that copy and the driver's). When it names more chunks, it is replaced by
+// the statement's failure, noted for snowflakeRun to fail the statement
+// with errSnowflakeChunks.
 //
-// That answer is read to limit, the collector's response limit (0 for
-// none), and no further (snowflakeRead): one larger, or gzipped and larger
-// once decompressed, is replaced by the statement's failure too, noted for
-// snowflakeRun to fail with the limit's failure, so that what is held of an
-// answer is at most the limit twice, the copy and the driver's, rather than
-// whatever the account sends or a gzip bomb decompresses to.
+// That answer is read up to limit, the collector's response limit (0 for
+// none), and no further (snowflakeRead). An answer that is larger, or
+// gzipped and larger once decompressed, is also replaced by the statement's
+// failure, noted for snowflakeRun to fail with the limit's failure. So what
+// is held of an answer is at most the limit twice (the copy and the
+// driver's), instead of whatever the account sends or a gzip bomb
+// decompresses to.
 type snowflakeTransport struct {
 	host  string
 	base  *http.Transport
@@ -252,14 +254,14 @@ func (t *snowflakeTransport) RoundTrip(req *http.Request) (*http.Response, error
 // the limit.
 var errSnowflakeTooLarge = errors.New("the answer is larger than the response limit")
 
-// snowflakeRead reads resp's body, an answer of the account, holding it to
-// limit bytes (none at 0), and failing with errSnowflakeTooLarge, having
-// read no more than limit and a byte, when it is larger: at once when its
-// Content-Length says so. A gzipped body (Content-Encoding gzip, which the
-// account sends when the driver asks for it, while Go's transport takes off
-// the gzip it asked for itself before this) is decompressed, to limit and a
-// byte at most, and what it read is the decompressed answer, which replaces
-// the gzipped one: the gzipped copy is let go of as soon as it is
+// snowflakeRead reads resp's body, an answer of the account, up to limit
+// bytes (none at 0). When the body is larger, it fails with
+// errSnowflakeTooLarge, having read no more than limit and a byte; it fails
+// at once when the Content-Length says so. A gzipped body is decompressed,
+// to limit and a byte at most. (The account sends Content-Encoding gzip when
+// the driver asks for it; Go's transport takes off the gzip it asked for
+// itself before this.) What it read is then the decompressed answer, which
+// replaces the gzipped one. The gzipped copy is let go of as soon as it is
 // decompressed, and the driver, which would decompress it again on its own,
 // reads it as it reads a plain answer. A body that is not gzip after all is
 // given as it came, for the driver to fail on as before.
@@ -340,20 +342,20 @@ var snowflakeChunkedError = &gosnowflake.SnowflakeError{Number: gosnowflake.ErrF
 var snowflakeTooLargeError = &gosnowflake.SnowflakeError{Number: gosnowflake.ErrFailedToGetChunk, SQLState: gosnowflake.SQLStateConnectionFailure, Message: "the statement's result came from Snowflake larger than the exporter's response limit"}
 
 // snowflakeQuietLines are the messages of the driver's log lines for
-// snowflakeChunkedError and snowflakeTooLargeError, which the driver logs at
+// snowflakeChunkedError and snowflakeTooLargeError. The driver logs them at
 // error for every statement that fails (connection.go
-// queryContextInternal), and which snowflakeLog logs at debug: the scrape's
+// queryContextInternal), and snowflakeLog logs them at debug: the scrape's
 // own failure says what happened.
 var snowflakeQuietLines = map[string]bool{
 	"error: " + snowflakeChunkedError.Error():  true,
 	"error: " + snowflakeTooLargeError.Error(): true,
 }
 
-// snowflakeFailedAnswer is the account's answer to req failing the
+// snowflakeFailedAnswer is the account's answer to req that fails the
 // statement with failure, in place of a result in more than one chunk or
-// larger than the response limit. It is an answer the driver neither
-// retries nor reads a result from; a 403 would serve as well but for the
-// driver's line about it, the same as for a refused connection.
+// larger than the response limit. The driver neither retries this answer
+// nor reads a result from it. A 403 would serve as well, except for the
+// driver's log line about it, which is the same as for a refused connection.
 func snowflakeFailedAnswer(req *http.Request, failure *gosnowflake.SnowflakeError) *http.Response {
 	body, _ := json.Marshal(map[string]any{
 		"success": false,
@@ -379,18 +381,19 @@ func (t *snowflakeTransport) CloseIdleConnections() { t.base.CloseIdleConnection
 // than one chunk (snowflakeTransport).
 var errSnowflakeChunks = errors.New("the statement's result came from Snowflake in more than one chunk, and the exporter does not fetch the chunks after the first, which the driver would read from a cloud storage URL, a host other than the account's; return fewer rows or columns, with WHERE, GROUP BY or LIMIT, so that the whole result comes in one chunk")
 
-// snowflakeLog hands the driver's log to the exporter's logger, slog's
-// default, which main makes the JSON lines every other line is: the driver
-// writes its own (errors, at the level it sets itself) to stderr, as logfmt
-// lines its formatter makes after taking passwords and tokens out of them,
-// which this reads back. A warning is a warning, an error, fatal or panic
-// message an error, an info message info, and the rest debug; a line that is
-// not the formatter's is logged whole, at info. The driver's error for a
-// result in more than one chunk, or larger than the response limit, is debug
-// (snowflakeQuietLines). A client configuration file the driver finds on
-// its first connection (SF_CLIENT_CONFIG_FILE, or sf_client_config.json
-// beside the executable or in the home directory) replaces this with a log
-// of the driver's own, where the file says.
+// snowflakeLog sends the driver's log to the exporter's logger (slog's
+// default), which main sets up to write the same JSON lines as every other
+// line. The driver writes its own log (errors, at the level it sets itself)
+// to stderr as logfmt lines. Its formatter makes them after taking
+// passwords and tokens out, and this reads them back. A warning maps to a
+// warning, an error, fatal or panic message to an error, an info message to
+// info, and the rest to debug. A line that is not the formatter's is logged
+// whole, at info. The driver's error for a result in more than one chunk,
+// or larger than the response limit, is debug (snowflakeQuietLines). A
+// client configuration file the driver finds on its first connection
+// (SF_CLIENT_CONFIG_FILE, or sf_client_config.json beside the executable or
+// in the home directory) replaces this with a log of the driver's own,
+// where the file says.
 type snowflakeLog struct{}
 
 func (snowflakeLog) Write(p []byte) (int, error) {

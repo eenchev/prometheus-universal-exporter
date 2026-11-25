@@ -34,30 +34,30 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// A grpc call needs its method's input and output message types, to encode
-// the JSON message and decode the answer. They are built at run time
-// (dynamicpb) from descriptors, which request.descriptors says where to find:
+// A grpc call needs its method's input and output message types to encode
+// the JSON message and decode the response. They are built at run time
+// (dynamicpb) from descriptors, found where request.descriptors says:
 //
-//   - reflection asks the target's reflection service, grpc.reflection.v1,
-//     or v1alpha when the server has only that, for the file that defines
-//     the service and the files it imports. The answer is kept per
+//   - reflection asks the target's reflection service, grpc.reflection.v1
+//     (or v1alpha when the server has only that), for the file that defines
+//     the service and the files it imports. The answer is cached per
 //     connection and service for reflectionTTL, so a scrape costs one call
-//     rather than two, and asked again sooner when the method is not found
-//     or its answer does not decode, as after the server was upgraded. A
-//     timer of its own forgets it then, whether or not another call comes,
-//     and at most maxReflectionAnswers answers, of maxReflectionBytes of
-//     files all together, are kept, the one used longest ago forgotten
-//     first: a probe chooses its target, and each target's answer can be
-//     as large as the collector's reflection limit.
+//     instead of two. It is asked again sooner when the method is not found
+//     or the answer does not decode, as after a server upgrade. A separate
+//     timer then drops it, whether or not another call comes. At most
+//     maxReflectionAnswers answers, with maxReflectionBytes of files in
+//     total, are kept, and the least recently used is dropped first. This
+//     bound is needed because a probe chooses its target, and each target's
+//     answer can be as large as the collector's reflection limit.
 //   - protoset reads a FileDescriptorSet from protoset_file.
 //   - proto compiles the .proto files of proto_files, resolving imports in
 //     proto_import_paths, with the well-known types built in.
 //
 // protoset and proto are read when the configuration loads, so a missing
-// method or a message that does not fit fails the configuration, and read
-// again at a call when one of their files has changed: the descriptor set,
-// a .proto file, or a file one imports. The watch of the configuration
-// looks at the same files, while the configuration is in force and while a
+// method or a message that does not fit fails the configuration. They are
+// read again at a call when one of their files has changed: the descriptor
+// set, a .proto file, or a file one imports. The configuration watch checks
+// the same files, both while the configuration is in force and while a
 // reload is refused (ReadFiles). The health service's types are compiled
 // into the exporter, so it needs none of the three.
 
@@ -66,10 +66,11 @@ import (
 const reflectionTTL = 10 * time.Minute
 
 // maxReflectionAnswers and maxReflectionBytes bound the reflection answers
-// kept, across collectors: how many, and how many bytes of files the server
-// sent for them all together. An answer is tens of kilobytes, so the bytes
-// leave room for a thousand services of the largest APIs; an answer larger
-// than them alone is used by the probes that asked for it and not kept.
+// kept across collectors: their number, and the total bytes of files the
+// server sent for them. An answer is tens of kilobytes, so the byte bound
+// leaves room for a thousand services of the largest APIs. An answer larger
+// than the byte bound by itself is used by the probes that asked for it and
+// not kept.
 const (
 	maxReflectionAnswers = 1000
 	maxReflectionBytes   = 128 << 20
@@ -107,10 +108,10 @@ func (m grpcMethod) checkMessage(message string) error {
 	return err
 }
 
-// findMethod looks rpc, package.Service/Method, up among files; source says
-// where they came from, for the errors. A server streaming method is found
-// only when streamed, the collector's stream_messages set, and a unary one
-// only when it is not.
+// findMethod looks up rpc, package.Service/Method, among files. source says
+// where the files came from, for the errors. A server streaming method is
+// found only when streamed (the collector's stream_messages is set), and a
+// unary one only when it is not.
 func findMethod(files *protoregistry.Files, rpc, source string, streamed bool) (grpcMethod, error) {
 	serviceName, methodName, _ := strings.Cut(rpc, "/")
 	d, err := files.FindDescriptorByName(protoreflect.FullName(serviceName))
@@ -174,10 +175,10 @@ type fileSets struct {
 	slots map[string]*fileSetSlot
 }
 
-// fileSetSlot is one set's lock and what it last read: entry when that could
-// be read, and failed, without files, when it could not. A set that could
-// not be read is read again by whoever needs its files (get); failed only
-// says what that reading looked at (looked).
+// fileSetSlot is one set's lock and its last reading: entry when the set
+// could be read, and failed, without files, when it could not. A set that
+// could not be read is read again by whoever needs its files (get). failed
+// only records what that reading looked at (looked).
 type fileSetSlot struct {
 	mu     sync.Mutex
 	entry  *fileSetEntry
@@ -185,10 +186,10 @@ type fileSetSlot struct {
 }
 
 type fileSetEntry struct {
-	// paths are every path the reading looked at: the files it read, and the
-	// places it looked for a file at and found none. stamp is how each was
-	// just before it was looked at, so a file changed while the set was read
-	// is not as stamped, and the set is read again.
+	// paths are all paths the reading looked at: the files it read, and the
+	// places where it looked for a file and found none. stamp records each
+	// path's state just before it was looked at. So a file changed while the
+	// set was read no longer matches its stamp, and the set is read again.
 	paths []string
 	stamp string
 	files *protoregistry.Files
@@ -209,21 +210,23 @@ var descriptorFileRead func(path string)
 // protoCompiles counts the compiles of .proto files, for tests.
 var protoCompiles atomic.Int64
 
-// filesStamp describes files as they are on disk now: for each, its
-// modification time and size, which file its path leads to and its
-// permissions, or that there is none. So the check at each call sees what
-// the configuration's watch sees (config's filesStamp): a file replaced by
-// pointing a symbolic link elsewhere — how Kubernetes publishes a new
-// version of a mounted Secret or ConfigMap, swapping ..data — is another
-// file even when its time and size are those of the old one, and a file
-// whose permissions changed may no longer be readable. Which file the path
-// leads to is told by the file's identity (fileIdentity), which the one
-// stat that follows the path already gives on the systems the exporter is
-// built for and which the watch stamps too, so a file renamed over by one of
-// the same time, size and permissions is another to both; it is not told by
-// resolving the path's links, as the watch also does, which costs a stat of
-// each of its components at every call. The numbers are written through
-// num, which allocates none.
+// filesStamp describes files as they are on disk now. For each it records
+// the modification time and size, which file the path leads to and its
+// permissions, or that there is no file. This way the check at each call
+// sees what the configuration watch sees (config's filesStamp):
+//   - A file replaced by pointing a symbolic link elsewhere is a different
+//     file even when its time and size match the old one. This is how
+//     Kubernetes publishes a new version of a mounted Secret or ConfigMap,
+//     by swapping ..data.
+//   - A file whose permissions changed may no longer be readable.
+//
+// The file a path leads to is identified by fileIdentity. On the systems the
+// exporter is built for, the one stat that follows the path already gives
+// it, and the watch stamps it too. So a file renamed over by one with the
+// same time, size and permissions is a different file to both. It is not
+// found by resolving the path's links, as the watch also does, because that
+// costs a stat of each path component at every call. The numbers are
+// written through num, which allocates nothing.
 func filesStamp(paths []string) string {
 	var b strings.Builder
 	var num [20]byte
@@ -254,10 +257,10 @@ func filesStamp(paths []string) string {
 	return b.String()
 }
 
-// fileIdentity tells which file st, the stat of path following its links,
-// is: by the device and inode the stat already holds (FileIdentity), which
-// the configuration's watch stamps too, and where the system does not say,
-// by resolving the path's links, as the watch also does.
+// fileIdentity identifies the file st is, where st is the stat of path
+// following its links. It uses the device and inode the stat already holds
+// (FileIdentity), which the configuration watch stamps too. Where the system
+// does not provide them, it resolves the path's links, as the watch also does.
 func fileIdentity(path string, st os.FileInfo) (dev, ino uint64, resolved string) {
 	if dev, ino, ok := FileIdentity(st); ok {
 		return dev, ino, ""
@@ -322,10 +325,10 @@ func (s *fileSets) getStamped(key string, read fileSetRead) (*protoregistry.File
 	return entry.files, nil
 }
 
-// looked returns the paths the last reading of the set kept under key looked
-// at, and their stamp, which tells that reading from another. The set is
-// read now when it was never read, or when one of those paths is no longer as
-// it was; whether it can be read makes no difference to the answer.
+// looked returns the paths that the last reading of the set kept under key
+// looked at, and their stamp, which tells that reading apart from another.
+// The set is read now if it was never read, or if one of those paths has
+// changed. Whether it can be read does not change the result.
 func (s *fileSets) looked(key string, read fileSetRead) (paths []string, stamp string) {
 	slot := s.slot(key)
 	defer slot.mu.Unlock()
@@ -373,9 +376,9 @@ func protoKey(paths, importPaths []string) string {
 	return "proto\x00" + strings.Join(paths, "\x00") + "\x01" + strings.Join(importPaths, "\x00")
 }
 
-// proto compiles .proto files. Unless import paths are given, each file's
-// directory is one, and the file is compiled by its name in it; with them,
-// each file must be under one, and is compiled by its path from it, as
+// proto compiles .proto files. Without import paths, each file's directory
+// is an import path and the file is compiled by its name in it. With them,
+// each file must be under one and is compiled by its path from it, as
 // protoc -I does.
 func (s *fileSets) proto(paths, importPaths []string) (*protoregistry.Files, error) {
 	return s.getStamped(protoKey(paths, importPaths), func() (*protoregistry.Files, []string, string, error) {
@@ -383,24 +386,25 @@ func (s *fileSets) proto(paths, importPaths []string) (*protoregistry.Files, err
 	})
 }
 
-// protoLooked is what the last compile of the .proto files looked at
-// (looked): the files themselves, the files they import, through however
-// many files, as the import paths resolved them, and the places in an
-// earlier import path where such a file was looked for and not found.
+// protoLooked returns what the last compile of the .proto files looked at
+// (looked): the files themselves, the files they import at any depth as the
+// import paths resolved them, and the places in an earlier import path
+// where such a file was looked for and not found.
 func (s *fileSets) protoLooked(paths, importPaths []string) (looked []string, stamp string) {
 	return s.looked(protoKey(paths, importPaths), func() (*protoregistry.Files, []string, string, error) {
 		return compileProto(paths, importPaths)
 	})
 }
 
-// compileProto compiles .proto files, and says what it looked at: every
+// compileProto compiles .proto files and reports what it looked at: every
 // path it opened or tried to open, the named files first and the others in
-// order, each stamped just before it was. A file is looked for in each import
-// path in turn, as protoc does, so the place in an earlier import path where
-// it was not found is one of them: a file that appears there is the one
-// compiled from then on. The places a well-known file, google/protobuf/*.proto,
-// was not found at are not: those files are built in. A file in a later
-// import path than the one it was found in is never looked at.
+// order, each stamped just before it was opened. A file is looked for in
+// each import path in turn, as protoc does. So the places in earlier import
+// paths where it was not found are included: a file that appears there is
+// compiled from then on. Places where a well-known file,
+// google/protobuf/*.proto, was not found are not included, since those files
+// are built in. Import paths after the one where a file was found are never
+// checked for it.
 func compileProto(paths, importPaths []string) (*protoregistry.Files, []string, string, error) {
 	protoCompiles.Add(1)
 	stamps := map[string]string{}
@@ -517,16 +521,16 @@ func registerFileTree(files *protoregistry.Files, f protoreflect.FileDescriptor)
 	return files.RegisterFile(f)
 }
 
-// registryOf builds the files of a descriptor set, or of a reflection answer.
-// An import the set does not carry is taken from the types built into the
-// exporter when it has them, as it has the well-known types; otherwise it is
-// an error naming it.
+// registryOf builds the files of a descriptor set or of a reflection answer.
+// An import missing from the set is taken from the types built into the
+// exporter when it has them, such as the well-known types. Otherwise it is
+// an error that names the import.
 //
-// Imports are followed depth first, each file registered after the files it
-// imports, on a stack of its own rather than by recursion: a chain of
-// imports is as long as the set, which a reflection service chooses, and
-// one frame per file would let a long enough chain overflow the goroutine's
-// stack, a fatal error and not a recoverable one.
+// Imports are followed depth first, and each file is registered after the
+// files it imports. This uses an explicit stack instead of recursion. A
+// chain of imports can be as long as the set, which a reflection service
+// chooses. With one frame per file, a long enough chain could overflow the
+// goroutine's stack, which is a fatal error and cannot be recovered.
 func registryOf(protos []*descriptorpb.FileDescriptorProto) (*protoregistry.Files, error) {
 	byName := make(map[string]*descriptorpb.FileDescriptorProto, len(protos))
 	for _, fd := range protos {
@@ -612,10 +616,10 @@ type reflected struct {
 	mostBytes int64
 }
 
-// reflectionCall is a question to a reflection service in flight, which the
-// probes that need the same answer wait for. conn is the connection it was
-// put on: a probe whose connection is a newer one does not wait for a
-// question on a connection that was dropped for not answering.
+// reflectionCall is an in-flight question to a reflection service, which the
+// probes needing the same answer wait for. conn is the connection it was
+// sent on. A probe on a newer connection does not wait for a question on a
+// connection that was dropped for not answering.
 type reflectionCall struct {
 	conn  *grpc.ClientConn
 	done  chan struct{}
@@ -641,44 +645,43 @@ type reflectedEntry struct {
 var reflectionAnswers = &reflected{entries: map[reflectedKey]*reflectedEntry{}, asking: map[reflectedKey]*reflectionCall{}}
 
 // reflectionQuestionTimeout bounds a question to a reflection service. The
-// question belongs to no single probe: it runs detached from the context of
+// question belongs to no single probe. It runs detached from the context of
 // the probe that started it, so that probe's deadline or cancellation does
-// not fail the others waiting for the same answer. It is not ended when no
-// probe waits for it any more either, so a server slower than a probe's
-// timeout is still answered, and its answer serves the probes that follow;
-// what it may take meanwhile is bounded by size instead (askReflection).
+// not fail the others waiting for the same answer. It is also not ended when
+// no probe waits for it any more. So a server slower than a probe's timeout
+// still gets its answer through, and the answer serves the following probes.
+// What it may take meanwhile is bounded by size instead (askReflection).
 var reflectionQuestionTimeout = 30 * time.Second
 
-// maxReflectionFiles is the most files a reflection question takes for one
-// service. A service's file and every file it imports, which is what a
-// reflection service sends, are tens of files, and a few hundred in the
-// largest APIs; 4096 leaves an order of magnitude to spare. It bounds what
-// the response limit alone does not: a server that answers with endless
-// tiny files, each importing the next, costs a round trip, a map entry and
-// a descriptor each.
+// maxReflectionFiles is the maximum number of files a reflection question
+// takes for one service. A reflection service sends the service's file and
+// every file it imports. That is tens of files, and a few hundred in the
+// largest APIs, so 4096 leaves an order of magnitude to spare. It bounds
+// what the response limit alone does not: a server that answers with
+// endless tiny files, each importing the next, costs a round trip, a map
+// entry and a descriptor per file.
 const maxReflectionFiles = 4096
 
-// reflectionLimit is the most bytes of files a collector's reflection
+// reflectionLimit is the maximum bytes of files a collector's reflection
 // question takes: its response limit, but never less than the default one.
-// The limit is the operator's for the answers, which a collector may hold
-// to a kilobyte, and the service's descriptors are not the answer: they can
-// be larger, and the operator does not size them. 10 MiB is past any real
-// service's files, so the floor bounds a hostile server as well as the
-// limit does, and a collector that raises the limit past it raises this.
+// The operator sets the limit for responses, and a collector may set it as
+// low as a kilobyte. The service's descriptors are not a response: they can
+// be larger, and the operator does not size them. 10 MiB is more than any
+// real service's files, so the floor bounds a hostile server as well as the
+// limit does. A collector that raises the limit above it raises this too.
 func reflectionLimit(c *model.Collector) int64 {
 	return max(responseLimit(c), defaultResponseLimit)
 }
 
-// files returns the service's files, asking the server when there is no
-// answer younger than reflectionTTL. limit bounds the bytes of the files the
-// question takes (askReflection, reflectionLimit), and is that of the probe
-// that asks: probes that share the question share its limit. Every caller,
-// the one that started the question included, waits for the shared answer
+// files returns the service's files, asking the server when no answer is
+// younger than reflectionTTL. limit bounds the bytes of files the question
+// takes (askReflection, reflectionLimit). It is the limit of the probe that
+// asks, and probes that share the question share its limit. Every caller,
+// including the one that started the question, waits for the shared answer
 // only as long as its own context allows. The question holds its connection
-// until it ends, so a probe that gives up on it, and drops a connection it
-// takes for dead, does not close the connection under a question a slow
-// server is still answering: the answer arrives, and serves the probes that
-// follow.
+// until it ends. So a probe that gives up and drops a connection it thinks
+// is dead does not close it under a question a slow server is still
+// answering. The answer arrives and serves the following probes.
 func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflectedKey, limit int64, now time.Time) (*protoregistry.Files, error) {
 	conn := held.conn
 	r.mu.Lock()
@@ -725,10 +728,9 @@ func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflecte
 	}
 }
 
-// keepLocked keeps an answer, in place of any kept under its key, for the
-// TTL, forgetting the answers used longest ago while the cache would keep
-// more than its bounds; an answer larger than the bound of bytes alone is
-// not kept.
+// keepLocked keeps an answer for the TTL, replacing any kept under its key.
+// While the cache would exceed its bounds, it drops the least recently used
+// answers. An answer larger than the byte bound by itself is not kept.
 func (r *reflected) keepLocked(key reflectedKey, entry *reflectedEntry) {
 	ttl, most, mostBytes := r.ttl, r.most, r.mostBytes
 	if ttl <= 0 {
@@ -793,7 +795,7 @@ type reflectionStream interface {
 
 // askReflection asks the server's reflection service for the file that
 // defines service and every file it imports. The server chooses how many
-// files that is and how large they are, so the question takes at most limit
+// files that is and how large they are. So the question takes at most limit
 // bytes of files (reflectionLimit) and maxReflectionFiles files, and fails
 // at whichever it passes first.
 func askReflection(ctx context.Context, conn *grpc.ClientConn, service string, limit int64) (*protoregistry.Files, int64, error) {

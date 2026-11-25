@@ -7,16 +7,16 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// limits.max_metrics bounds the series a scrape may produce, and it bounds
-// the memory a scrape takes as well: every transform stops at the first
-// series past the limit, with the error MetricSet.Validate gives a set that
-// is too large (model.MetricCountError), rather than building every series
-// the response describes and counting them afterwards. A 10 MiB body of
-// "1\n" read with the regex (\d+) is five million series, several gigabytes
-// of them, before a count afterwards could refuse it.
+// limits.max_metrics bounds the series a scrape may produce, and so also
+// the memory a scrape takes. Every transform stops at the first series past
+// the limit, with the error MetricSet.Validate gives a set that is too large
+// (model.MetricCountError). It does not build every series the response
+// describes and count them afterwards. A 10 MiB body of "1\n" read with the
+// regex (\d+) is five million series, several gigabytes of them, before a
+// later count could refuse it.
 //
-// The limit travels in the Transform's context, with the count of series made
-// so far, so it spans every rule of the collector, as the limit does.
+// The limit travels in the Transform's context with the count of series
+// made so far, so it spans every rule of the collector, as the limit does.
 
 type seriesBudgetKey struct{}
 
@@ -80,14 +80,13 @@ func seriesRoom(ctx context.Context) int {
 }
 
 // growSeries makes room in metrics for the series of n more things a rule is
-// about to read — items, rows, nodes, matches, a response's own series —
-// each of which makes one series at most: the slice is then made once, at
-// the size it ends with, instead of growing from nothing, which copies every
-// series made so far each time it fills and allocates several times what it
-// ends up holding. The room is never more than limits.max_metrics still
-// leaves, since a transform stops at the first series past that: a response
-// that describes more series than the limit allows gets no more memory for
-// them than the limit does.
+// about to read (items, rows, nodes, matches, a response's own series), each
+// of which makes at most one series. The slice is then allocated once, at
+// its final size. Growing from nothing would copy every series made so far
+// each time it fills, and allocate several times what it ends up holding.
+// The room never exceeds what limits.max_metrics still leaves, since a
+// transform stops at the first series past that. A response that describes
+// more series than the limit allows gets no more memory than the limit does.
 func growSeries(ctx context.Context, metrics []model.Metric, n int) []model.Metric {
 	if room := seriesRoom(ctx); room >= 0 && room < n {
 		n = room

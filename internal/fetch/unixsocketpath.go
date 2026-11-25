@@ -16,21 +16,21 @@ import (
 // one (requesttype_tcp.go), is checked alike in every build that has either
 // type, and its pattern is the schema's in every build.
 
-// maxUnixSocketPath is the longest request.unix_socket the system the
-// exporter runs on can connect to, in bytes: sun_path, the path's room in
-// the socket address, less the NUL that ends it. That is 107 on Linux, and
-// on Windows, whose sun_path is 108 bytes too, and 103 on macOS and the
-// BSDs, whose sun_path is 104; Go's net package refuses a longer path only
-// when it dials.
+// maxUnixSocketPath is the longest request.unix_socket, in bytes, that the
+// exporter's system can connect to. It is sun_path, the path's room in the
+// socket address, less the NUL that ends it. That is 107 on Linux and on
+// Windows, whose sun_path is also 108 bytes, and 103 on macOS and the BSDs,
+// whose sun_path is 104. Go's net package refuses a longer path only when it
+// dials.
 const maxUnixSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
 
-// validateUnixSocket checks a collector's request.unix_socket when
-// the configuration loads: other than "", the key left out, it is an
+// validateUnixSocket checks a collector's request.unix_socket when the
+// configuration loads. Unless it is "" (the key left out), it must be an
 // absolute path with no placeholder or control character, no longer than
-// the system's socket addresses hold (maxUnixSocketPath), and the
-// collector names no proxy. A path too long would load and then fail every
-// request when it dials, so it is refused here. The schema leaves the
-// length alone: the limit is the system's, 107 bytes on Linux and 103 on
+// the system's socket addresses hold (maxUnixSocketPath), and the collector
+// must name no proxy. A path that is too long would load and then fail every
+// request when it dials, so it is refused here. The schema does not check
+// the length: the limit is the system's, 107 bytes on Linux and 103 on
 // macOS, and no one length would be right for both.
 func validateUnixSocket(c *model.Collector, socket string) error {
 	if socket == "" {

@@ -23,16 +23,16 @@ import (
 )
 
 // An aws store reads a secret from AWS Secrets Manager with its
-// GetSecretValue call, the secret named by its name or its ARN: its
+// GetSecretValue call, naming the secret by its name or its ARN. Its
 // SecretString, or its SecretBinary's bytes, is the secret's text.
 //
 // The credentials are those the AWS SDK's default chain finds, as for an
 // s3file collector: the environment, a role for the service account (IRSA),
-// EKS Pod Identity, the instance's role. The SDK's configuration and
-// credential providers are the modules the s3file request type links, and
-// the request is signed with the SDK's signer and sent as it is, so the
-// store adds no module to the binary; it is in the builds that have s3file
-// and in no other.
+// EKS Pod Identity, or the instance's role. The SDK's configuration and
+// credential providers are the modules the s3file request type links. The
+// request is signed with the SDK's signer and sent as it is, so the store
+// adds no module to the binary. It is in the builds that have s3file and in
+// no other.
 
 type awsBackend struct {
 	region, endpoint string

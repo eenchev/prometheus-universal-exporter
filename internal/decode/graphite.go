@@ -32,24 +32,26 @@ import (
 //	             "tags": {"name": "app.web01.requests"}, "value": 42, "time": 1727000000,
 //	             "points": [[40, 1726999940], [42, 1727000000]]}]}
 //
-// where value is the series' points reduced to one by response.graphite.value
-// — the newest point by default, what a dashboard shows — time is the newest
-// point's, in Unix seconds, and points are every point with a value, oldest
-// first. A metric rule reads it like any JSON, with items: .series[].
+// where value is the series' points reduced to one by
+// response.graphite.value (by default the newest point, which is what a
+// dashboard shows), time is the newest point's, in Unix seconds, and points
+// is every point with a value, oldest first. A metric rule reads it like any
+// JSON, with items: .series[].
 //
-// A point without a value — null in the render API, NaN or an infinity on a
-// carbon line — is left out, since Graphite means by it that nothing was
-// written, and a series left with no point is left out altogether: it would
-// otherwise reach the rules as a series without a value, failing them on
-// every scrape. So is one whose newest point is older than
-// response.graphite.max_age, whose writer has stopped, and a series the
+// A point without a value (null in the render API, NaN or an infinity on a
+// carbon line) is left out, since Graphite means by it that nothing was
+// written. A series left with no point is left out altogether: it would
+// otherwise reach the rules as a series without a value and fail them on
+// every scrape. Also left out are a series whose newest point is older than
+// response.graphite.max_age, as its writer has stopped, and a series the
 // render API answered twice, path, tags and points alike, because two
 // expressions matched it. What was left out is reported with the document
 // (GraphiteReport), for the self-metrics and the log.
 //
-// A graphite collector's answer must be render JSON: anything else — the
-// HTML of a login page in front of Graphite, a JSON error — is refused as
-// what it is, rather than read as carbon lines that fail on the first line.
+// A graphite collector's answer must be render JSON. Anything else, such as
+// the HTML of a login page in front of Graphite or a JSON error, is refused
+// as what it is, rather than read as carbon lines that fail on the first
+// line.
 
 // graphiteNow is the clock max_age and a carbon line without a timestamp
 // are measured against; a test sets it.
@@ -62,9 +64,9 @@ type GraphiteReport struct {
 	// answered twice.
 	NoPoints, Stale, Duplicates int
 	// SkippedLines counts the carbon lines skipped under invalid_lines:
-	// skip, and FirstSkipped says which was first and why: an error, so that
-	// the log takes it for the same when only the line it names differs
-	// (model.SameFailureText).
+	// skip. FirstSkipped says which was first and why. It is an error, so
+	// that the log takes it for the same failure when only the line it
+	// names differs (model.SameFailureText).
 	SkippedLines int
 	FirstSkipped error
 }
@@ -220,13 +222,13 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 	return out, nil
 }
 
-// shownPoint is a point of the render API's answer that is no [value,
-// timestamp] of numbers, for the error that says so: as fmt's %v writes the
-// point — text and numbers as they are, null as <nil>, an array as its items
-// between brackets and an object as map[key:value ...], its keys in order —
-// and by no more than its start when that is long, as model.Bare shows a
-// name. The whole of it, which may be most of the answer, is not written to
-// find its start and its length.
+// shownPoint is a point of the render API's answer that is not a [value,
+// timestamp] pair of numbers, for the error that says so. It is written as
+// fmt's %v writes the point: text and numbers as they are, null as <nil>, an
+// array as its items between brackets, and an object as map[key:value ...]
+// with its keys in order. When long, only its start is shown, as model.Bare
+// shows a name. The whole point, which may be most of the answer, is not
+// written out just to find its start and its length.
 func shownPoint(point []any) model.QuotedValue {
 	start := textStart{head: make([]byte, 0, shownPointBytes+1)}
 	start.value(point)
@@ -304,10 +306,10 @@ func jsonFloat(v any) (float64, bool) {
 	return f, err == nil
 }
 
-// parseCarbonLines reads carbon plaintext: `<path> <value> [<timestamp>]` a
-// line. A missing timestamp, or -1, is now, as carbon takes it. Blank lines
-// and lines starting with # are skipped, and so, with skip, is a line that
-// cannot be read, counted in report; without, it fails the decode.
+// parseCarbonLines reads carbon plaintext, a `<path> <value> [<timestamp>]`
+// per line. A missing timestamp, or -1, is now, as carbon takes it. Blank
+// lines and lines starting with # are skipped. With skip, a line that cannot
+// be read is skipped too and counted in report; without, it fails the decode.
 func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteReport) ([]*graphiteSeries, error) {
 	var out []*graphiteSeries
 	byKey := map[string]*graphiteSeries{}
@@ -343,9 +345,9 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 }
 
 // parseCarbonLine reads one carbon line. Its value and its timestamp are
-// numbers as a rule reads the text of one (model.ParseFloat): digits
-// separated by underscores, 1_000, and hexadecimal floating-point, 0x1p-2,
-// which are Go's way of writing a number, are none, and the line is no
+// read as a rule reads a number in text (model.ParseFloat). Go's other ways
+// of writing a number are not numbers here: digits separated by underscores
+// (1_000) and hexadecimal floating-point (0x1p-2). A line with them is not a
 // carbon line.
 func parseCarbonLine(line string, now time.Time) (string, map[string]string, graphitePoint, error) {
 	fields := strings.Fields(line)
@@ -377,10 +379,10 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 
 // parseGraphitePath splits a path from its tags, as Graphite writes a tagged
 // series: name;tag=value;tag=value. The tags always hold name. The path ends
-// at the first ; outside brackets and quotes: a function's name for its
-// result, such as movingAverage(cpu.load;env=prod,'5min'), holds its
-// argument's tags, which are not the result's. The tags after it are split on
-// every ;, which no tag value may hold, while a value may hold quotes and
+// at the first ; outside brackets and quotes, because a function's name for
+// its result, such as movingAverage(cpu.load;env=prod,'5min'), holds its
+// argument's tags, which are not the result's. The tags after the path are
+// split on every ;, which no tag value may hold. A value may hold quotes and
 // brackets, as owner=o'neil does.
 func parseGraphitePath(raw string) (string, map[string]string, error) {
 	path, rest, tagged := cutTopLevel(raw)
@@ -518,9 +520,9 @@ func reduceGraphitePoints(how string, points []graphitePoint) float64 {
 func isFinite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // looksLikeCarbon reports whether a body without a content type that says
-// what it is reads as carbon lines: every line `<path> <number> <number>`,
-// and some path with a dot or a tag, which a Prometheus sample line, whose
-// timestamp would also be a third number, cannot have in its name.
+// what it is reads as carbon lines: every line is `<path> <number> <number>`,
+// and some path has a dot or a tag. A Prometheus sample line, whose
+// timestamp would also be a third number, cannot have those in its name.
 func looksLikeCarbon(body []byte) bool {
 	dotted, lines := false, 0
 	for _, line := range strings.Split(string(body), "\n") {

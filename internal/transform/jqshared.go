@@ -9,36 +9,35 @@ import (
 
 // The rules of a jq or yq collector are usually written about a few lists:
 // one rule for each number an item has, each with the same items expression,
-// such as .components[] or .data.result[]. Evaluating that expression is a
-// run of the jq program over the whole document, and every rule ran it
-// again, to be handed the very items the rule before it was handed.
+// such as .components[] or .data.result[]. Evaluating that expression runs
+// the jq program over the whole document, and every rule ran it again to get
+// the same items the previous rule got.
 //
-// So an items expression that several rules of a collector have is
-// evaluated once in a run of the transform. The first rule that has it
-// reads its items as it always did, one at a time as the program gives
-// them, and keeps each as it goes; the rules after it read what was kept.
-// Nothing a rule does with its items changes: the same items in the same
-// order, each rule's own value, labels, error mode and count of what it
-// carried on without, and an items expression that fails fails for each of
-// its rules, with the error it gave the first.
+// So an items expression shared by several rules of a collector is
+// evaluated once per run of the transform. The first rule that has it reads
+// its items as before, one at a time as the program yields them, and keeps
+// each one. The later rules read what was kept. Nothing a rule does with its
+// items changes: the same items in the same order, each rule's own value,
+// labels, error mode and count of what it skipped. An items expression that
+// fails fails for each of its rules, with the error it gave the first.
 //
 // The first rule still stops at the first series past limits.max_metrics,
-// so what is kept is bounded by it: no more items are kept than the limit
-// left room for series when the rule began. A list with more could never be
-// used whole, whichever rule read it, so it is forgotten at that item, the
-// first rule goes on reading its program, and the rules after it run the
-// expression themselves, as every rule did before.
+// so what is kept is bounded by it. No more items are kept than the limit
+// left room for series when the rule began. A longer list could never be
+// used whole by any rule. So it is dropped at that item, the first rule
+// keeps reading its program, and the later rules run the expression
+// themselves, as every rule did before.
 //
-// A rule whose items expression no later rule has, and no earlier one kept,
-// runs its program as before and keeps nothing, so a collector whose rules
-// each read a list of their own pays nothing for this, not an allocation:
-// the only cost is comparing its expression with those of the rules after
-// it.
+// A rule whose items expression no later rule has, and no earlier rule
+// kept, runs its program as before and keeps nothing. A collector whose
+// rules each read their own list pays nothing for this, not even an
+// allocation. The only cost is comparing each expression with those of the
+// later rules.
 
 // jqSharing is the items kept in one run of the jq transform, by items
 // expression. Every rule of a run reads the same document, with the same
-// $root, $status and $headers, so the expression's text is what tells two
-// evaluations alike: one text is one compiled program (expr.CompileJQ).
+// $root, $status and $headers. So the expression's text alone tells whether
+// two evaluations are alike: one text is one compiled program (expr.CompileJQ).
 type jqSharing struct {
 	lists []*jqItemList
 }
@@ -69,11 +68,11 @@ type jqItems struct {
 	at   int
 }
 
-// items says where the rule with this items expression reads its items:
-// from a list an earlier rule kept, when it returns one with kept set, or
-// from the rule's own program, which the caller then starts; later is the
-// rules after it, for one of which it keeps the items when one has the same
-// expression.
+// items says where the rule with this items expression reads its items.
+// When it returns a list with kept set, they come from a list an earlier
+// rule kept. Otherwise they come from the rule's own program, which the
+// caller then starts. later is the rules after it; items are kept for one
+// of them when it has the same expression.
 func (s *jqSharing) items(ctx context.Context, expression string, later []model.MetricRule) jqItems {
 	for _, list := range s.lists {
 		if list.expression != expression {
@@ -132,8 +131,8 @@ func (i *jqItems) next() (item any, more bool) {
 	return item, more
 }
 
-// expected is how many items the rule is about to read, where that is known
-// before they are read: those of a kept list, or the length of the array or
+// expected is how many items the rule is about to read, when that is known
+// in advance: the length of a kept list, or the length of the array or
 // object an expression such as .items[] iterates (jqIterationLength). A list
 // being kept is given room for them, within its bound.
 func (i *jqItems) expected(data any, expression string) (int, bool) {
@@ -151,14 +150,14 @@ func (i *jqItems) expected(data any, expression string) (int, bool) {
 	return n, ok
 }
 
-// jqIterationLength is how many values an expression of the commonest shape
-// items has gives for data: a path of plain field names and one iteration,
-// as .[], .items[] and .data.result[] are, which gives each element of the
-// array there, or each value of the object. ok is false for any other
-// expression, and for data that has no array or object there, which the
-// program then reports in its own words. It is used to size what the items
-// are gathered in and for nothing else, so the program decides what the
-// items are, here as everywhere.
+// jqIterationLength is how many values the most common shape of items
+// expression gives for data. That shape is a path of plain field names and
+// one iteration, such as .[], .items[] and .data.result[]. It gives each
+// element of the array there, or each value of the object. ok is false for
+// any other expression, and for data with no array or object there; the
+// program then reports that in its own words. The result is used only to
+// size what the items are gathered in. The program alone decides what
+// the items are, here as everywhere.
 func jqIterationLength(data any, expression string) (n int, ok bool) {
 	path, iterates := strings.CutSuffix(expression, "[]")
 	if !iterates || path == "" {

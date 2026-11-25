@@ -9,13 +9,13 @@ import (
 
 // The Python of a configuration's collectors is checked with the interpreter
 // once the configuration has loaded (transform.CheckPythonScripts): a syntax
-// error, a pre_script that never produces data. A problem with a collector
-// that a collector file defines names that file, as a validation error of
-// that collector does (inCollectorFile), at startup, in --dry-run and on
-// reload: that file, not the configuration listing it, is the one to edit.
-// The check gives each problem with the name of its collector, and the file
-// is the one that collector was read from, so the interpreter runs once
-// however many collector files there are and whatever it finds.
+// error, or a pre_script that never produces data. A problem with a
+// collector defined in a collector file names that file, as a validation
+// error of that collector does (inCollectorFile), at startup, in --dry-run
+// and on reload: that file, not the configuration that lists it, is the one
+// to edit. The check reports each problem with the name of its collector,
+// and the file is the one that collector was read from. So the interpreter
+// runs once, however many collector files there are and whatever it finds.
 
 // ValidatePythonScripts refuses a configuration whose Python cannot work,
 // reporting every problem (model.Problems), each naming the collector file

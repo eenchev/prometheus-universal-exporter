@@ -26,11 +26,11 @@ import (
 // to the largest int64, rounded down to a page.
 const cgroupUnlimited = 1 << 60
 
-// minMemoryLimitRatio is the least --runtime.memory-limit-ratio other than
-// 0: below it the Go memory limit leaves the heap almost nothing, so the
-// runtime would collect garbage all the time, and 1e-5 of any container
-// limit is a few kilobytes. Leaving room for the Python workers takes 0.5
-// to 0.95.
+// minMemoryLimitRatio is the smallest --runtime.memory-limit-ratio other
+// than 0. Below it the Go memory limit leaves the heap almost nothing, so
+// the runtime would collect garbage all the time; 1e-5 of any container
+// limit is a few kilobytes. Leaving room for the Python workers takes 0.5 to
+// 0.95.
 const minMemoryLimitRatio = 0.1
 
 // ValidateMemoryLimitRatio refuses a --runtime.memory-limit-ratio outside
@@ -46,15 +46,15 @@ func ValidateMemoryLimitRatio(ratio float64) error {
 	return nil
 }
 
-// A container's limit is on its own cgroup, which /proc/self/cgroup names:
-// "0::/kubepods/.../container" under cgroup v2, and a line naming the memory
-// controller, such as "4:memory:/docker/abc", under v1. With a cgroup
-// namespace, as recent Kubernetes and Docker give a container, that path is
-// "/", and the container's cgroup is mounted at /sys/fs/cgroup itself;
-// without one, the limit is only in the cgroup the path names, while the
-// root holds the host's "max". So the limit is read along that path, from
-// the process's cgroup up to the root, and the smallest found is the one in
-// force: a pod's limit above a container without one counts too.
+// A container's limit is set on its own cgroup, which /proc/self/cgroup
+// names: "0::/kubepods/.../container" under cgroup v2, and a line naming the
+// memory controller, such as "4:memory:/docker/abc", under v1. With a cgroup
+// namespace, which recent Kubernetes and Docker give a container, that path
+// is "/" and the container's cgroup is mounted at /sys/fs/cgroup itself.
+// Without one, the limit is only in the cgroup the path names, and the root
+// holds the host's "max". So the limit is read along that path, from the
+// process's cgroup up to the root, and the smallest one found is in force.
+// A pod's limit above a container without one counts too.
 
 // cgroupPaths reads the process's cgroup v2 path and cgroup v1 memory path
 // from /proc/self/cgroup under root; each is "" when there is none.

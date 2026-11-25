@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -26,12 +25,14 @@ import (
 
 // The radius request type asks a RADIUS server (RFC 2865) to authenticate
 // an account, and reads what it answered and how long it took. Its target
-// is the server, host or host:port, UDP port 1812 when it names none. A
-// scrape sends one Access-Request with request.username and the password of
-// request.password_file, as PAP or CHAP, signed with the shared secret of
-// request.secret_file, and sends it again, the same packet, while no reply
-// comes; or, with mode: status-server, a Status-Server (RFC 5997), which
-// asks whether the server is alive and needs no account.
+// is the server, as host or host:port, with UDP port 1812 when it names
+// none. A scrape sends one of:
+//   - an Access-Request with request.username and the password of
+//     request.password_file, as PAP or CHAP, signed with the shared secret
+//     of request.secret_file. The same packet is sent again while no reply
+//     comes.
+//   - with mode: status-server, a Status-Server (RFC 5997), which asks
+//     whether the server is alive and needs no account.
 //
 //	request:
 //	  type: radius
@@ -41,16 +42,16 @@ import (
 //
 // The answer is one JSON document: the reply's code and name, accepted, how
 // long the reply took and how many times the request was sent. A reply is
-// an answer whatever it says: an Access-Reject is a server that is up and
-// refused the account, which a rule reads from accepted, so an account
-// that should be refused can be watched too.
+// an answer whatever it says. An Access-Reject comes from a server that is
+// up and refused the account, which a rule reads from accepted. So an
+// account that should be refused can be watched too.
 //
 // Every request carries a Message-Authenticator (RFC 3579), which servers
 // patched against forged replies (CVE-2024-3596) require. A reply is taken
-// only when its Response Authenticator verifies with the shared secret,
-// and its Message-Authenticator when it has one; any other datagram is
-// ignored, as one from elsewhere would be, until the deadline. With
-// require_message_authenticator a reply without one fails the scrape.
+// only when its Response Authenticator verifies with the shared secret, and
+// so does its Message-Authenticator when it has one. Any other datagram is
+// ignored, like one from elsewhere, until the deadline. With
+// require_message_authenticator, a reply without one fails the scrape.
 //
 // EAP and MS-CHAP are not spoken, nor RADIUS over TLS.
 
@@ -159,7 +160,19 @@ func init() {
 }
 
 // radiusRequester is the radius request type's Requester.
-type radiusRequester struct{}
+type radiusRequester struct{ parsedTarget[radiusTarget] }
+
+// radiusTarget reads a radius target: label returns the url label of a
+// request of it.
+type radiusTarget struct{}
+
+func (radiusTarget) label(target string) (string, error) {
+	address, err := parseRADIUSTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "radius://" + address.hostPort, nil
+}
 
 // Validate checks a radius collector's request and fills in its defaults:
 // the mode, the shared secret's file, the account the mode needs, and how
@@ -224,36 +237,12 @@ func (radiusRequester) Fetch(ctx context.Context, target string, c *model.Collec
 	return fetchRADIUS(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a radius collector's target.
-func (radiusRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseRADIUSTarget(target)
-	return err
-}
-
-// Label is the url label of a radius request: radius:// and the server.
-func (radiusRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseRADIUSTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "radius://" + address.hostPort, nil
-}
-
 // Method is the http_method label of a radius request: the packet sent.
 func (radiusRequester) Method(c *model.Collector, _ RequestOverrides) string {
 	if radiusRequest(c).Mode == radiusModeStatus {
 		return "STATUS-SERVER"
 	}
 	return radiusMethod
-}
-
-// Display renders a radius target for logs and labels: as written, since
-// it holds no credentials, when it is one at all.
-func (radiusRequester) Display(target string) string {
-	if _, err := parseRADIUSTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
 }
 
 // radiusAddress is a target: the server's host and port.
@@ -298,10 +287,10 @@ func parseRADIUSTarget(raw string) (radiusAddress, error) {
 	return radiusAddress{host: canonical, port: n, hostPort: net.JoinHostPort(canonical, port)}, nil
 }
 
-// radiusCredentials reads the shared secret and, but for a status-server
-// collector, the password. An empty file is a failure: neither a request
-// signed with no secret nor a login with no password is what a collector
-// that names a file means.
+// radiusCredentials reads the shared secret and, except for a status-server
+// collector, the password. An empty file is a failure: a collector that
+// names a file never means a request signed with no secret or a login with
+// no password.
 func radiusCredentials(c *model.Collector) (secret, password string, err error) {
 	r := radiusRequest(c)
 	if secret, err = ReadCredentialFile(r.SecretFile); err != nil {
@@ -396,24 +385,12 @@ func fetchRADIUS(ctx context.Context, target string, c *model.Collector, overrid
 	}
 	at.outcome(fmt.Sprintf("%s after %d of %d sent", doc.Reply, doc.Attempts, *r.Resends+1), false)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
-// radiusPacket writes the request: an Access-Request with the account, as
-// PAP or CHAP, or a Status-Server, each with the NAS-Identifier and a
-// Message-Authenticator, which comes first, as RFC 3579 has it since
+// radiusPacket writes the request: an Access-Request with the account (PAP
+// or CHAP), or a Status-Server. Each carries the NAS-Identifier and a
+// Message-Authenticator, which comes first, per RFC 3579 since
 // CVE-2024-3596. id and authenticator are the request's own.
 func radiusPacket(id byte, authenticator [16]byte, username, password, secret string, r RADIUSConfig) []byte {
 	code := byte(radiusAccessRequest)
@@ -453,10 +430,10 @@ func radiusPacket(id byte, authenticator [16]byte, username, password, secret st
 	return packet
 }
 
-// radiusHidePassword hides a PAP password (RFC 2865 section 5.2): padded
-// with zeros to a multiple of 16 bytes, each block is XORed with the MD5 of
-// the secret and the block before it as it was sent, the Request
-// Authenticator before the first.
+// radiusHidePassword hides a PAP password (RFC 2865 section 5.2). The
+// password is padded with zeros to a multiple of 16 bytes. Each block is
+// XORed with the MD5 of the secret and the previous block as sent. The
+// first block uses the Request Authenticator instead.
 func radiusHidePassword(password, secret string, authenticator [16]byte) []byte {
 	hidden := make([]byte, (len(password)+15)/16*16)
 	copy(hidden, password)
@@ -485,10 +462,10 @@ type radiusAttribute struct {
 	value []byte
 }
 
-// radiusCheckReply reads a datagram as the reply to the request of id and
-// authenticator, and says why it is not when it is not: another id, a
+// radiusCheckReply reads a datagram as the reply to the request with id and
+// authenticator. When it is not that reply, it says why: another id, a
 // length that does not fit, attributes that do not parse, or an
-// authenticator that the shared secret does not make.
+// authenticator that the shared secret does not produce.
 func radiusCheckReply(b []byte, id byte, authenticator [16]byte, secret string) (radiusReply, string) {
 	if len(b) < radiusHeader {
 		return radiusReply{}, fmt.Sprintf("it is %d bytes, shorter than a RADIUS packet", len(b))
@@ -550,9 +527,9 @@ func radiusCheckReply(b []byte, id byte, authenticator [16]byte, secret string) 
 	return reply, ""
 }
 
-// radiusExchange sends the request to address, again each resend_interval
-// while no reply comes and resends are left, and reads datagrams until the
-// reply to it comes or ctx ends. The request sent again is the same packet,
+// radiusExchange sends the request to address. It sends it again every
+// resend_interval while no reply comes and resends are left, and reads
+// datagrams until the reply comes or ctx ends. A resend is the same packet,
 // so a server that answered one whose reply was lost answers the same.
 func radiusExchange(ctx context.Context, address radiusAddress, username, password, secret string, r RADIUSConfig) (radiusDocument, error) {
 	dialer := &net.Dialer{}
@@ -645,11 +622,12 @@ func radiusDescribe(reply radiusReply, r RADIUSConfig) radiusDocument {
 	return doc
 }
 
-// radiusReadFailure words a read that ended without the reply: the
-// deadline, which wraps context.DeadlineExceeded, or the scrape's
-// cancellation, saying how many times the request was sent, how many
-// datagrams were ignored and why the last was; or an error of the socket,
-// such as the refusal an ICMP port unreachable brings.
+// radiusReadFailure describes a read that ended without the reply. It is
+// either:
+//   - the deadline (which wraps context.DeadlineExceeded) or the scrape's
+//     cancellation, saying how many times the request was sent, how many
+//     datagrams were ignored, and why the last one was;
+//   - or a socket error, such as the refusal an ICMP port unreachable brings.
 func radiusReadFailure(ctx context.Context, address radiusAddress, err error, sent, ignored int, lastIgnored string) error {
 	if ctx.Err() == nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 		return fmt.Errorf("reading the reply from %s: %w", address.hostPort, err)

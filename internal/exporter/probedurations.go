@@ -8,26 +8,26 @@ import (
 
 // http_exporter_probe_duration_seconds is a histogram per collector, always
 // published, of how long the collector's probes and static target scrapes
-// took, each measured as http_exporter_scrape_duration_seconds measures it:
-// from the probe's arrival, or the scrape's start, to its answer being
-// ready. The gauge only holds the last of them, so a slow probe between two
-// scrapes of the self-metrics is lost; the histogram keeps every one.
+// took. Each is measured as http_exporter_scrape_duration_seconds measures
+// it: from the probe's arrival, or the scrape's start, until its answer is
+// ready. The gauge holds only the last value, so a slow probe between two
+// scrapes of the self-metrics is lost. The histogram keeps every one.
 //
-// It is labelled collector and kind: probe for /probe, static for the
-// static target scrapes, since the two answer different callers on
-// different schedules, and a quantile across both would describe neither.
-// Every collector has its probe series from the start; a collector has its
-// static series while a static target of the file in force names it, so an
-// exporter without static targets has none. It is never labelled by
-// target: a probe names its target, which would make a series of every
-// address anyone asked for.
+// It is labelled by collector and kind: probe for /probe, static for the
+// static target scrapes. The two answer different callers on different
+// schedules, and a quantile across both would describe neither. Every
+// collector has its probe series from the start. A collector has its static
+// series while a static target of the file in force names it, so an
+// exporter without static targets has none. It is never labelled by target:
+// a probe names its target, which would create a series for every address
+// anyone asked for.
 //
-// Unlike the verbose trip histogram (verbosemetrics.go), which observes
-// trips to the target alone, it observes every probe, those answered from
-// the cache or by sharing another probe's trip included: it says how long
-// the exporter took to answer, which is what a scrape_timeout is set
-// against, where the trip histogram describes the target. Both have the
-// same buckets, exponential buckets and exemplars (durationHistogram).
+// The verbose trip histogram (verbosemetrics.go) observes only trips to the
+// target. This one observes every probe, including those answered from the
+// cache or by sharing another probe's trip. It says how long the exporter
+// took to answer, which is what a scrape_timeout is set against; the trip
+// histogram describes the target. Both have the same buckets, exponential
+// buckets and exemplars (durationHistogram).
 const (
 	probeDurationName = "http_exporter_probe_duration_seconds"
 	probeDurationHelp = "Duration of this collector's probes (kind probe) and static target scrapes (kind static), to when the answer was ready, in seconds; cache hits and shared probes included."
@@ -77,10 +77,10 @@ func durationsOf(stats *serverStats, pick func(*serverStats) *durationHistogram)
 	return pick(stats).histogram()
 }
 
-// probeDurationMetrics builds the family for the collectors named, in
-// order, whose statistics are stats: each collector's probe series, and its
-// static series when a static target in force names it. Both count since
-// the collector's statistics do (selfcreated.go).
+// probeDurationMetrics builds the family for the named collectors, in
+// order, whose statistics are stats. It has each collector's probe series,
+// and its static series when a static target in force names it. Both count
+// from when the collector's statistics do (selfcreated.go).
 func (s *Server) probeDurationMetrics(names []string, stats map[string]*serverStats) []model.Metric {
 	static := map[string]bool{}
 	for _, target := range s.manager.StaticTargets() {

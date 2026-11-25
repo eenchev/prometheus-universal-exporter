@@ -1,11 +1,11 @@
 # LDAP directories
 
-The `ldap` request type searches an LDAP directory — OpenLDAP, Active
-Directory, 389 Directory Server or any other server of LDAPv3 — and hands
-what its searches find to `jq`, `yq` or `python` as one JSON document: the
+The `ldap` request type searches an LDAP directory (OpenLDAP, Active
+Directory, 389 Directory Server or any other LDAPv3 server). It hands what
+its searches find to `jq`, `yq` or `python` as one JSON document: the
 entries of each search, with the attributes asked for, or only how many
 there are. Use it where a directory's own numbers, or the size of what it
-holds, are what you want as metrics, and a dedicated exporter for it is one
+holds, are what you want as metrics, and a dedicated exporter would be one
 more thing to run:
 
 - an OpenLDAP server's connections, operations and bytes sent, from the
@@ -97,32 +97,35 @@ configuration loads. Use `jq`, `yq` or `python`.
 ## Binding
 
 Each scrape binds before its searches, with a simple bind: as `bind_dn`
-with the password of `password_file`, or, without them, anonymously, with
-an empty DN and an empty password, which also tells a server that the
-client speaks LDAPv3. `bind_dn` and `password_file` go together, each
-refused without the other, and a password file that is empty, or blanks
-alone, fails the scrape before anything is sent: a simple bind with a DN
-and an empty password is an *unauthenticated* bind (RFC 4513 § 5.1.2),
-which many servers take without checking anything and answer `success`, so
-the searches after it would run as nobody, finding less than they should,
-with nothing to say why. A password the server refuses fails the scrape
-with `invalidCredentials` and the server's words, never the password.
+with the password of `password_file`, or anonymously without them, with an
+empty DN and an empty password, which also tells a server that the client
+speaks LDAPv3.
+
+- `bind_dn` and `password_file` go together; each is refused without the
+  other.
+- A password file that is empty, or holds only blanks, fails the scrape
+  before anything is sent. A simple bind with a DN and an empty password is
+  an *unauthenticated* bind (RFC 4513 § 5.1.2), which many servers accept
+  without checking anything and answer `success`. The searches after it
+  would then run as nobody and find less than they should, with nothing to
+  say why.
+- A password that the server refuses fails the scrape with
+  `invalidCredentials` and the server's words, never the password.
 
 A client certificate in `tls` is presented in the TLS handshake, which a
 server may require, but the bind is still the simple one unless
-`sasl_external` asks for the certificate's own; send a simple bind over TLS
-([TLS](#tls)), since its password is otherwise sent as it is.
+`sasl_external` asks for a bind with the certificate. Send a simple bind
+over TLS ([TLS](#tls)), because otherwise its password is sent as it is.
 
 ### A client certificate
 
-With `sasl_external: true` the scrape binds with SASL `EXTERNAL` (RFC 4513
-§ 5.2.3): the identity is the one TLS established, the client certificate
-`tls.cert_file` and `tls.key_file` present, so there is no password file to
-keep, rotate or leak, and the account is whatever the server maps the
-certificate's subject to — OpenLDAP's `authz-regexp`, 389 Directory
-Server's certificate mapping, Active Directory's certificate mapping.
-Nothing but the mechanism's name is sent: no DN, no password, no
-authorization identity.
+With `sasl_external: true`, the scrape binds with SASL `EXTERNAL` (RFC 4513
+§ 5.2.3). The identity is the one that TLS established, from the client
+certificate that `tls.cert_file` and `tls.key_file` present, so there is no
+password file to keep, rotate or leak. The account is whatever the server
+maps the certificate's subject to: OpenLDAP's `authz-regexp`, or the
+certificate mapping of 389 Directory Server or Active Directory. Only the
+mechanism's name is sent: no DN, no password, no authorization identity.
 
 ```yaml
 request:
@@ -138,14 +141,16 @@ request:
       base: ou=people,dc=example,dc=org
 ```
 
-`sasl_external` needs the client certificate, and is refused beside
-`bind_dn` or `password_file`; so is a static target's own `bind_dn` or
-`password_file`, and a static target's own `tls` block, which replaces the
-collector's whole, names its own certificate. The certificate makes the connection TLS: an
-`ldaps://` target or `start_tls`, as for any `tls` block. A server that saw
-no certificate, or maps it to no account, answers the bind
-`inappropriateAuthentication` or `invalidCredentials`, which fails the
-scrape as `BIND SASL EXTERNAL: …`.
+`sasl_external` needs the client certificate.
+
+- It is refused beside `bind_dn` or `password_file`, and so is a static
+  target's own `bind_dn` or `password_file`. A static target's own `tls`
+  block replaces the collector's whole block and names its own certificate.
+- The certificate makes the connection TLS: an `ldaps://` target or
+  `start_tls`, as for any `tls` block.
+- A server that saw no certificate, or maps it to no account, answers the
+  bind `inappropriateAuthentication` or `invalidCredentials`, which fails
+  the scrape as `BIND SASL EXTERNAL: …`.
 
 ## The target
 
@@ -160,19 +165,25 @@ is refused without them, as for `http`.
 
 ## TLS
 
-A scrape speaks TLS from the start with an `ldaps://` target, or with a
-bare `host:port` when the collector has a `tls` block; it begins TLS on a
-plaintext connection, port 389, with the StartTLS operation when the
-collector sets `start_tls`, before it binds, with `tls` or without. Either
-way the server's certificate is verified against the system's roots and
-`tls.ca_file`, for the name `tls.server_name` or else the target's host.
-The block is [the one `http` takes](REQUESTS.md#tls): `cert_file` and
+A scrape speaks TLS:
+
+- from the start, with an `ldaps://` target, or with a bare `host:port` when
+  the collector has a `tls` block;
+- or by beginning TLS on a plaintext connection (port 389) with the
+  StartTLS operation, when the collector sets `start_tls`. This happens
+  before the bind, with or without `tls`.
+
+Either way, the server's certificate is verified against the system's roots
+and `tls.ca_file`, for the name `tls.server_name` or else the target's host.
+The block is [the one that `http` takes](REQUESTS.md#tls): `cert_file` and
 `key_file` present a client certificate, and `insecure_skip_verify` skips
-the verification. A `tls` block, even an empty one, counts: `tls: {}` on a
-bare `host:port` speaks TLS from the start, port 636 when the target names
-none, verified against the system's roots, and the label is `ldaps://`, so
-the bind's password never goes out in plaintext on 389 because the block
-holds no keys.
+the verification.
+
+A `tls` block counts even when empty. `tls: {}` on a bare `host:port` speaks
+TLS from the start, on port 636 when the target names none, verified against
+the system's roots, and the label is `ldaps://`. The bind's password
+therefore never goes out in plaintext on 389 just because the block holds
+no keys.
 
 ```yaml
 request:
@@ -193,10 +204,10 @@ opposite things, and so is `ldaps://` with `start_tls`, TLS being begun
 twice. A server that refuses StartTLS fails the scrape, with the server's
 words, before the password is sent.
 
-`starttls`, the key [`tcp`](TCP.md#starttls) and
-[`tlscert`](TLSCERT.md) name a protocol's STARTTLS in, is not an `ldap`
-key: written in an `ldap` collector, as `starttls: true` or as
-`starttls: smtp`, it is refused with the key to write instead, `sets
+`starttls`, the key in which [`tcp`](TCP.md#starttls) and
+[`tlscert`](TLSCERT.md) name a protocol's STARTTLS, is not an `ldap` key.
+Written in an `ldap` collector, as `starttls: true` or as `starttls: smtp`,
+it is refused, and the error names the key to write instead: `sets
 request.starttls, which does not apply to request.type "ldap"; an ldap
 collector asks for StartTLS on its plaintext connection with its own key,
 start_tls: true, the handshake taking the tls block's settings`.
@@ -216,13 +227,13 @@ before the next is sent:
 | `count_only` | `false` | Count the entries, holding none of them: the result has no `entries`. Not with `attributes` or `max_entries`. |
 | `max_entries` | `1000` | The most entries a search that is not `count_only` may match; one more fails the scrape, asking for a narrower filter or `count_only`. |
 
-A search is read a page of 500 entries at a time with the Simple Paged
-Results control ([RFC 2696](https://www.rfc-editor.org/rfc/rfc2696)), sent
-as not critical: a server that has it, as OpenLDAP, Active Directory and 389
+A search is read 500 entries at a time with the Simple Paged Results control
+([RFC 2696](https://www.rfc-editor.org/rfc/rfc2696)), sent as not critical.
+A server that has the control, as OpenLDAP, Active Directory and 389
 Directory Server do, answers page after page, so a search finds more than
-the server's size limit for one answer, Active Directory's 1000 among them;
-a server without it answers every entry in one go. Continuation references
-a search answers are counted, never followed.
+the server's size limit for one answer (Active Directory's 1000, for
+example). A server without it answers every entry at once. Continuation
+references that a search answers are counted, never followed.
 
 The answer is a JSON document:
 
@@ -244,46 +255,50 @@ The answer is a JSON document:
 - `count` is the number of entries the search matched, across every page.
 - `references` is the number of continuation references it answered.
 - `entries`, unless the search is `count_only`, holds each entry in the
-  order the server sent them: its `dn`, and its `attributes`, each a list
-  of its values as text, an attribute with one value a list of one.
-  Attributes are named as the server writes them, which need not be how
-  `attributes` asks for them: most servers write the schema's name,
-  `objectClass` for an `objectclass` asked for, and a `jq` path matches
-  case, so read the name a [debug probe](CONFIGURATION.md#debug-probes)
-  shows in the document.
-  An attribute an entry does not have is not in its `attributes`, and
-  `{}` is an entry with none of those asked for, or a search asking for
-  none.
+  order that the server sent them: its `dn`, and its `attributes`, each a
+  list of its values as text (an attribute with one value is a list of one).
+  - Attributes are named as the server writes them, which need not be how
+    `attributes` asks for them: most servers write the schema's name, such
+    as `objectClass` for `objectclass`. A `jq` path is case-sensitive, so
+    read the name that a [debug probe](CONFIGURATION.md#debug-probes) shows
+    in the document.
+  - An attribute that an entry does not have is not in its `attributes`.
+    `{}` is an entry with none of the attributes asked for, or a search that
+    asks for none.
 
 A value that is not UTF-8 text fails the scrape, naming the attribute and
-the entry: the document is JSON, whose strings are text, and a value put
-in it would have each such byte replaced with U+FFFD. Leave binary
-attributes, such as Active Directory's `objectGUID` and `objectSid` or a
-person's `jpegPhoto`, out of `attributes` — and out of what `*` asks for, by
-naming the attributes instead.
+the entry. The document is JSON, whose strings are text, and a value put in
+it would have each such byte replaced with U+FFFD. Leave binary attributes,
+such as Active Directory's `objectGUID` and `objectSid` or a person's
+`jpegPhoto`, out of `attributes`, and out of what `*` asks for, by naming
+the attributes instead.
 
 ### Placeholders
 
 A search's `base` and `filter` may hold `{{param_name}}` placeholders,
 filled from the probe's `param_<name>` parameters, as a path's are
 ([Path parameters](REQUESTS.md#path-parameters)). A placeholder may stand
-in a value alone: in the filter, an assertion's value, filled escaped as
-RFC 4515 escapes one, so a probe's `*)(uid=*` is matched as those eight
-characters, `\2a\29\28uid=\2a`, and widens nothing; in the base, an
-attribute's value, filled escaped as RFC 4514 escapes one, so a probe's
-`people,dc=other` stays one RDN's value, `people\,dc\=other`. A placeholder
-in an attribute's name, in the filter's structure, as a whole DN, or in any
-other key — `name`, `scope`, `attributes`, `bind_dn` — is refused when the
-configuration loads.
+only for a value:
 
-A probe's empty value is no value, and the placeholder's default stands in
-for it; only an empty default, `{{param_x:}}`, fills a placeholder with
-nothing. A substring match that is left with no substring by that,
+- In the filter, it stands for an assertion's value and is escaped as RFC
+  4515 escapes one. A probe's `*)(uid=*` is therefore matched as those eight
+  characters, `\2a\29\28uid=\2a`, and widens nothing.
+- In the base, it stands for an attribute's value and is escaped as RFC 4514
+  escapes one. A probe's `people,dc=other` stays one RDN's value,
+  `people\,dc\=other`.
+
+A placeholder in an attribute's name, in the filter's structure, as a whole
+DN, or in any other key (`name`, `scope`, `attributes`, `bind_dn`) is
+refused when the configuration loads.
+
+A probe's empty value counts as no value, and the placeholder's default
+stands in for it. Only an empty default, `{{param_x:}}`, fills a placeholder
+with nothing. A substring match left with no substring by that, such as
 `(cn=*{{param_x:}}*)` filled as `(cn=**)`, asks for a value holding the
-empty string, which every value does, so it is sent as the presence filter
-`(cn=*)`, the same filter `(cn={{param_x:}}*)` fills in to. A substring
-match of no substring is never sent as one: RFC 4511 does not allow it, and
-a server refuses it.
+empty string, which every value does. It is therefore sent as the presence
+filter `(cn=*)`, the same filter that `(cn={{param_x:}}*)` fills in to. A
+substring match of no substring is never sent as one: RFC 4511 does not
+allow it, and a server refuses it.
 
 ```yaml
 searches:
@@ -295,10 +310,10 @@ searches:
 
 ## Examples
 
-The accounts of Active Directory that are disabled — those whose
-`userAccountControl` has the bit `ACCOUNTDISABLE`, 2 — and those locked out,
-counted, with the bitwise AND matching rule of Active Directory, by an
-account that may read the users:
+Counting Active Directory's disabled accounts (those whose
+`userAccountControl` has the `ACCOUNTDISABLE` bit, 2) and locked-out
+accounts, with Active Directory's bitwise AND matching rule, by an account
+that may read the users:
 
 ```yaml
   - name: ad_accounts
@@ -359,13 +374,14 @@ the probe:
 /probe?collector=group_members&target=ldap.example.org&param_group=admins
 ```
 
-Active Directory answers a `member` of more than 1500 values in ranges,
-`member;range=0-1499`: the exporter asks for the rest, a range at a time,
+Active Directory answers a `member` of more than 1500 values in ranges, such
+as `member;range=0-1499`. The exporter asks for the rest, a range at a time,
 with a search of the group alone for `member;range=1500-*` and so on until
 the last, and the document holds every value under `member`, in order. Each
-search of a range is a request of a debug probe's report. A group's members
-can also be counted with a `count_only` search of the users whose
-`memberOf` is the group,
+search of a range is a request in a debug probe's report.
+
+A group's members can also be counted with a `count_only` search of the
+users whose `memberOf` is the group,
 `(memberOf=CN=Admins,OU=Groups,DC=corp,DC=example,DC=com)`, which asks for
 no value at all.
 
@@ -398,67 +414,75 @@ targets:
         ca_file: /etc/exporter/ldap/partner-ca.pem
 ```
 
-So one collector serves directories that each take an account of their own.
-A target's `password_file` replaces the collector's, and is the password of
-the collector's `bind_dn`, or of the target's own `bind_dn`, which replaces
-the collector's and needs the target's own `password_file`; a `bind_dn`
-without it, a `bind_dn` that is no DN, and a `password_file` alone for a
-collector that binds anonymously are refused when the file loads. A target
-that names neither binds with the collector's account. A target's `tls` replaces
-the collector's whole block, a key it leaves out not being taken from the
-collector's; written, even as `tls: {}`, it asks for TLS: from the start,
-or by StartTLS when the collector sets `start_tls`, and an `ldap://` target
-with it and no `start_tls` is refused when the file loads. A target cannot
-turn off the TLS its collector asks for. Its password and TLS files are read
-at each scrape, as the collector's are, and by
-[`--dry-run`](CONFIGURATION.md#dry-run), which warns of them under the
-target's name; the debug report shows its `BIND dn ***`. None of these keys
-holds a placeholder, and no probe parameter sets them: a probe always binds
-as the collector does. A target's account and block are part of its
-[cache key](CONFIGURATION.md#response-caching), so targets that bind
-differently never share an answer, nor a trip to the server.
+One collector therefore serves directories that each take an account of
+their own.
+
+- **Account.** A target's `password_file` replaces the collector's. It is
+  the password of the collector's `bind_dn`, or of the target's own
+  `bind_dn`, which replaces the collector's and needs the target's own
+  `password_file`. A `bind_dn` without it, a `bind_dn` that is not a DN, and
+  a `password_file` alone for a collector that binds anonymously are refused
+  when the file loads. A target that names neither binds with the
+  collector's account.
+- **TLS.** A target's `tls` replaces the collector's whole block: a key that
+  it leaves out is not taken from the collector's. Written, even as
+  `tls: {}`, it asks for TLS, from the start or by StartTLS when the
+  collector sets `start_tls`. An `ldap://` target with it and no
+  `start_tls` is refused when the file loads. A target cannot turn off the
+  TLS that its collector asks for.
+- **Files.** Its password and TLS files are read at each scrape, as the
+  collector's are, and by [`--dry-run`](CONFIGURATION.md#dry-run), which
+  warns about them under the target's name. The debug report shows its
+  `BIND dn ***`.
+- None of these keys holds a placeholder, and no probe parameter sets them:
+  a probe always binds as the collector does.
+- A target's account and block are part of its
+  [cache key](CONFIGURATION.md#response-caching), so targets that bind
+  differently never share an answer or a trip to the server.
 
 ## Limits
 
-Everything the server answers a scrape is read against
+Everything that the server answers a scrape is read against
 `max_response_bytes`, or `limits.max_response_bytes`, 10 MiB when neither is
-set, counted in the bytes of its messages as they come off the connection:
-the bind's and StartTLS's answers, and every page of every search, a
-`count_only` search's among them, whose entries cost their DNs' bytes and a
-few more each, since it asks for no attribute. A message whose declared
-length is past what is left fails the scrape before a byte of it is read,
-and no more is held for one than the server has sent of it, so a broken or
-hostile server's length of a gigabyte costs the bytes that came, never a
-gigabyte. Either counts in `http_exporter_series_limit_exceeded_total` as a
-limit exceeded. An entry of a `count_only` search takes its DN's length and
-some 15 bytes more, so counting a million entries of 50-byte DNs reads some
-65 MiB: raise `max_response_bytes` for such a count, or count fewer, in a
-narrower base.
+set. It is counted in the bytes of the messages as they come off the
+connection: the answers to the bind and StartTLS, and every page of every
+search, including a `count_only` search's.
 
-A `count_only` search holds no entry, so `max_entries` does not apply to
-it; a search that holds its entries may match at most `max_entries` of them,
-1000 by default, and fails the scrape at the next one, before the rest are
-read, asking for a narrower base or filter, a larger `max_entries` or
+- A message whose declared length is past what is left fails the scrape
+  before a byte of it is read. No more is held for a message than the server
+  has sent of it, so a broken or hostile server that declares a length of a
+  gigabyte costs the bytes that came, never a gigabyte.
+- Either case counts in `http_exporter_series_limit_exceeded_total` as an
+  exceeded limit.
+- A `count_only` search asks for no attribute, so each of its entries costs
+  its DN's length and some 15 bytes more. Counting a million entries with
+  50-byte DNs therefore reads some 65 MiB: raise `max_response_bytes` for
+  such a count, or count fewer, in a narrower base.
+
+A `count_only` search holds no entry, so `max_entries` does not apply to it.
+A search that holds its entries may match at most `max_entries` of them,
+1000 by default. It fails the scrape at the next one, before the rest are
+read, asking for a narrower base or filter, a larger `max_entries`, or
 `count_only`.
 
 A message is decoded no deeper than the protocol's own structures go, each
-element's length checked against what encloses it, and LDAP's encoding is
-held to: a length of more than four bytes, an indefinite length, a tag of
-more than one byte and a value that is not a primitive string are refused,
-and so is a message that is not the answer the scrape is waiting for. Any
-of them fails the scrape saying it is not an LDAP message. A filter nests
-`&`, `|` and `!` at most 32 deep.
+element's length is checked against what encloses it, and LDAP's encoding
+is enforced. A length of more than four bytes, an indefinite length, a tag
+of more than one byte, and a value that is not a primitive string are
+refused, and so is a message that is not the answer that the scrape is
+waiting for. Any of them fails the scrape, saying that it is not an LDAP
+message. A filter nests `&`, `|` and `!` at most 32 deep.
 
-The document the entries make is held to the same limit: JSON writes a
-control character as six bytes (`\u0001`) and a quote or a backslash as two,
-so messages within the limit can make a document past it, which fails the
-scrape as a limit exceeded too, saying how large the document was.
+The document that the entries make is held to the same limit. JSON writes a
+control character as six bytes (`\u0001`) and a quote or a backslash as
+two, so messages within the limit can make a document past it. That also
+fails the scrape as an exceeded limit, saying how large the document was.
 
 The connection, the TLS handshake and every operation end at the probe's
-deadline, its `timeout` or the scrape's, 30 seconds without one, and each
-search tells the server the seconds left, as its time limit: a server that
-stops answering fails the scrape when it comes, with the deadline's error
-and the operation it was waiting on.
+deadline: its `timeout`, or the scrape's, 30 seconds without one. Each
+search tells the server the seconds left, as its time limit. A server that
+stops answering fails the scrape at the deadline, with the deadline's error
+and the operation that the scrape was waiting on.
 
 ## Errors and self-metrics
 
@@ -485,10 +509,10 @@ status (`$status` is `null`, Python's `response.status_code` `None`) and the
 header `Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows each operation in its
-request section — `STARTTLS`, `BIND` with its DN and its password as `***`,
-or `BIND anonymous`, and each page of each `SEARCH` with its base, scope,
-filter and attributes, a placeholder's value escaped in it — and how each
-ended:
+request section (`STARTTLS`; `BIND` with its DN and its password as `***`,
+or `BIND anonymous`; and each page of each `SEARCH` with its base, scope,
+filter and attributes, with a placeholder's value escaped in it) and how
+each ended:
 
 ```text
 Requests

@@ -25,8 +25,8 @@ const maxHeartbeatBytes = 64 << 10
 
 // Handler serves the allocator's API. With a token, every endpoint but
 // /healthz and /ready answers 401 to a request whose Authorization header is
-// not "Bearer <token>"; what a person reads in a browser, which cannot send
-// a bearer token, takes the token as Basic auth's password too (browsable).
+// not "Bearer <token>". A browser cannot send a bearer token, so what a
+// person reads in one also takes the token as Basic auth's password (browsable).
 func (a *Allocator) Handler(token string) http.Handler {
 	if token == "" {
 		return a.handler(nil)
@@ -67,17 +67,17 @@ func (a *Allocator) handler(token func() (string, error)) http.Handler {
 	return mux
 }
 
-// sameOriginOnly refuses, with 403 and before the token is looked at, a
-// request that is no GET or HEAD and that a browser marks as made by a page
-// of another site or of another origin of the same site (Sec-Fetch-Site:
+// sameOriginOnly refuses with 403, before the token is looked at, a request
+// that is not a GET or HEAD and that a browser marks as made by a page of
+// another site or of another origin of the same site (Sec-Fetch-Site:
 // cross-site or same-site). An allocator without a token answers whoever
-// reaches it, and a page open in a browser on its network reaches it: a
-// form posted from there is a heartbeat, and a heartbeat names the address
+// reaches it, and a page open in a browser on its network reaches it. A form
+// posted from there is a heartbeat, and a heartbeat names the address that
 // Prometheus is sent to for a member's probes. An exporter, Prometheus and
 // curl send no such header, and pass.
 //
-// A GET is let through, where the exporter refuses it too
-// (exporter/crosssite.go): no GET of the allocator changes anything, a page
+// A GET is let through, though the exporter refuses it too
+// (exporter/crosssite.go). No GET of the allocator changes anything, a page
 // of another site cannot read its answer, and the exporter's status page
 // links to the allocator's view of its member, which is a navigation from
 // another origin.
@@ -96,14 +96,15 @@ func sameOriginOnly(next http.Handler) http.Handler {
 // every request while the token cannot be had. The token is compared in
 // constant time.
 //
-// A browser cannot send a bearer token, so the requests a person makes to
-// read the allocator, GET or HEAD of the status page, the status and
-// /metrics (browsable), also take the token as the password of Basic auth,
-// of any user name, and their 401 asks for it, so the browser prompts. Only
-// those: a browser sends Basic credentials it was given with any request to
-// the allocator, a page of another site's included, and none of them
-// changes anything, nor can another site read their answers. The token is
-// never taken from the URL, which logs and browser history keep.
+// A browser cannot send a bearer token. So the requests a person makes to
+// read the allocator (GET or HEAD of the status page, the status and
+// /metrics; browsable) also take the token as the Basic auth password, with
+// any user name, and their 401 asks for it, so the browser prompts. Only
+// those requests do: a browser sends Basic credentials it was given with any
+// request to the allocator, including one from a page of another site. None
+// of those requests changes anything, and another site cannot read their
+// answers. The token is never taken from the URL, which logs and browser
+// history keep.
 func authorized(token func() (string, error), next http.Handler) http.Handler {
 	if token == nil {
 		return next
@@ -193,13 +194,13 @@ func checkHeartbeat(hb allocapi.Heartbeat) error {
 }
 
 // linkablePath is a heartbeat's static targets path, which the allocator
-// keeps for each member, when it is one the page can link: a clean
-// absolute path of at most maxStaticTargetsPathBytes, not /, without a
-// query, a fragment, an escape, a backslash, a space or a control
-// character; "" otherwise. A path it cannot link is dropped, and the
-// heartbeat taken all the same: the path is for the page's links alone,
-// and the exporter takes a --web.static-targets-path of any length, so a
-// replica is never kept out of the member list over it.
+// keeps for each member, when the page can link it, and "" otherwise. A
+// linkable path is a clean absolute path of at most
+// maxStaticTargetsPathBytes, not /, without a query, a fragment, an escape, a
+// backslash, a space or a control character. A path it cannot link is
+// dropped, and the heartbeat is taken all the same. The path is only for the
+// page's links, and the exporter takes a --web.static-targets-path of any
+// length, so a replica is never kept out of the member list over it.
 func linkablePath(p string) string {
 	if len(p) > maxStaticTargetsPathBytes || !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || strings.ContainsAny(p, "?#%\\") || strings.ContainsFunc(p, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
 		return ""
@@ -212,9 +213,9 @@ func linkablePath(p string) string {
 const maxStaticTargetsPathBytes = 256
 
 // validAddress reports whether address is a host:port with a host and a
-// decimal port from 1 to 65535: the address service discovery hands
-// Prometheus, where a named port, port 0 or one out of range would only fail
-// later, at every probe.
+// decimal port from 1 to 65535. Service discovery hands this address to
+// Prometheus, where a named port, port 0 or a port out of range would only
+// fail later, at every probe.
 func validAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || host == "" || port == "" || strings.TrimLeft(port, "0123456789") != "" {

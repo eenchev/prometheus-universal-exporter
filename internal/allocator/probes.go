@@ -246,10 +246,10 @@ func shardKeyOf(job *ProbeJob, target string) string {
 	return target
 }
 
-// addressOf is the host and port a target reaches: for a URL its host, with
-// :80 or :443 for an http or https one that names no port; anything else,
-// host:port or a host alone, as written. Host names are compared without
-// their case.
+// addressOf is the host and port a target reaches. For a URL it is its host,
+// with :80 or :443 for an http or https URL that names no port. Anything
+// else, host:port or a host alone, is taken as written. Host names are
+// compared without their case.
 func addressOf(target string) string {
 	if !strings.Contains(target, "://") {
 		return strings.ToLower(target)

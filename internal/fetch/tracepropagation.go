@@ -9,34 +9,36 @@ import (
 )
 
 // With otlp.traces.propagate, a trip's requests to its target carry the
-// trip's W3C trace context, so that the target's own spans are children of
-// the exporter's: an HTTP request (a graphite request is one) its
-// traceparent and tracestate headers, and a gRPC call the same as its
-// metadata. The exporter puts what to send in the trip's context
-// (WithTracePropagation); a trip without it sends nothing of the kind.
+// trip's W3C trace context, so the target's own spans become children of
+// the exporter's. An HTTP request (including a graphite request) carries it
+// in its traceparent and tracestate headers, and a gRPC call carries the
+// same in its metadata. The exporter puts what to send in the trip's
+// context (WithTracePropagation). A trip without it sends nothing of the
+// kind.
 //
-// Two ways, as the exporter's trace export is on or off:
+// There are two modes, depending on whether the exporter's trace export is
+// on or off:
 //
-//   - a trace of its own: each request is sent with a span id of its own,
-//     which its CLIENT span is then made with (TracedRequest.SpanID), so
-//     the target's span is the child of that one;
-//   - a caller's trace passed on: with the trace export off, the
-//     traceparent and tracestate the probe's caller sent are sent as they
-//     came, and the target's span is a child of the caller's.
+//   - Its own trace: each request is sent with its own span id, and its
+//     CLIENT span is then made with that id (TracedRequest.SpanID). The
+//     target's span is a child of that span.
+//   - A caller's trace passed on: with the trace export off, the
+//     traceparent and tracestate sent by the probe's caller are forwarded
+//     unchanged, and the target's span is a child of the caller's.
 //
-// A traceparent the request sets already — one of request.headers, or a
-// forwarded one (forward_headers) — is the operator's and is sent as it is,
-// with no tracestate of the exporter's beside it. A login's request
-// (request.login) carries none: it goes to an identity provider, often no
-// part of the target, and the token it fetches is kept for later probes,
-// whose traces it is no part of.
+// A traceparent the request already sets, from request.headers or
+// forward_headers, belongs to the operator. It is sent unchanged, with no
+// exporter tracestate next to it. A login request (request.login) carries
+// none. It goes to an identity provider, which is often not part of the
+// target, and the token it fetches is kept for later probes whose traces
+// it is not part of.
 
 // TracePropagation is what a trip's requests carry under
-// otlp.traces.propagate. TraceID set is a trace of the exporter's own:
-// each request's traceparent names it, the request's own span id and, as
-// Sampled says, the sampled flag, with State, when set, as its tracestate.
-// TraceID zero passes Parent and ParentState, the caller's traceparent and
-// tracestate, on as they came.
+// otlp.traces.propagate. A set TraceID is the exporter's own trace: each
+// request's traceparent names it, the request's own span id, and the
+// sampled flag from Sampled. State, when set, is its tracestate. A zero
+// TraceID forwards Parent and ParentState, the caller's traceparent and
+// tracestate, unchanged.
 type TracePropagation struct {
 	TraceID     [16]byte
 	Sampled     bool
@@ -77,13 +79,13 @@ func (p *TracePropagation) values() (parent, state string, span [8]byte, ok bool
 	return p.traceparent(span), p.State, span, true
 }
 
-// propagateTrace sets the trace context of ctx on header, an HTTP request's
-// about to be sent, unless it sets a traceparent already, and returns the
-// span id it was sent under, zero for none of the exporter's own. redirect
-// says the request follows a redirect, which carries the headers of the
-// request before it: a traceparent of the exporter's is replaced by one
-// with the redirect's own span id, and one of the operator's is left as it
-// is.
+// propagateTrace sets the trace context of ctx on header, the header of an
+// HTTP request about to be sent, unless it already sets a traceparent. It
+// returns the span id the request was sent under, or zero if it carries no
+// span id of the exporter's own. redirect says the request follows a redirect, which
+// carries the headers of the previous request. In that case an exporter
+// traceparent is replaced by one with the redirect's own span id, and an
+// operator traceparent is left unchanged.
 func propagateTrace(ctx context.Context, header http.Header, redirect bool) [8]byte {
 	p := tracePropagationFrom(ctx)
 	if p == nil {

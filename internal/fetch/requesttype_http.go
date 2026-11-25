@@ -15,12 +15,16 @@ import (
 // It is included in every default build; with -tags select_request_types it
 // is included only when request_type_http is among the tags.
 
-// HTTPConfig is an http collector's own request keys: the method, GET
-// when left out; the body sent; the pagination that fetches the
-// further pages of a paginated answer and merges them into one JSON
-// document, the first page with its items array holding every page's items
-// (pagination.go), nil when the answer is one page. request.unix_socket,
-// which tcp takes too, is of the common part (model.RequestConfig).
+// HTTPConfig is an http collector's own request keys:
+//   - the method, GET when left out;
+//   - the body sent;
+//   - the pagination, nil when the answer is one page. It fetches the
+//     further pages of a paginated answer and merges them into one JSON
+//     document: the first page, with its items array holding every page's
+//     items (pagination.go).
+//
+// request.unix_socket, which tcp also takes, belongs to the common part
+// (model.RequestConfig).
 type HTTPConfig struct {
 	Method     string                  `yaml:"method"`
 	Body       string                  `yaml:"body"`
@@ -30,8 +34,8 @@ type HTTPConfig struct {
 	FastCGI *FastCGIConfig `yaml:"fastcgi,omitempty"`
 	// Signature is request.signature, nil for none: each request is signed
 	// with an HMAC of a secret (httpsign.go). AWSSigV4 is
-	// request.aws_sigv4: each is signed with AWS Signature Version 4
-	// (httpsigv4_keys.go).
+	// request.aws_sigv4: each request is signed with AWS Signature
+	// Version 4 (httpsigv4_keys.go).
 	Signature *SignatureConfig `yaml:"signature,omitempty"`
 	AWSSigV4  *SigV4Config     `yaml:"aws_sigv4,omitempty"`
 }
@@ -192,15 +196,18 @@ func httpOwnKeyRules() map[string]map[string]any {
 	}
 }
 
-// httpPaginationRule is the rule of request.pagination: type and items
-// required, each written with something other than "", next with type
-// next_url and cursor and with no other, param with cursor, page and offset
-// and with no other, start with page and offset alone and size with offset
-// alone, as the exporter has them (fetch.validatePagination). The schema
-// took next, param, start and size beside any type, which the exporter
-// refuses as a key of another way of paging. A size of 0 is the key left
-// out to the exporter, which reads it into a whole number, so it is taken
-// beside any type.
+// httpPaginationRule is the rule of request.pagination, matching the
+// exporter (fetch.validatePagination):
+//   - type and items are required, each written with something other
+//     than "";
+//   - next only with type next_url or cursor;
+//   - param only with cursor, page or offset;
+//   - start only with page or offset, and size only with offset.
+//
+// The schema took next, param, start and size beside any type, which the
+// exporter refuses as keys of another way of paging. The exporter reads
+// size into a whole number, so a size of 0 counts as left out, and is
+// accepted beside any type.
 func httpPaginationRule() map[string]any {
 	when := func(types ...string) map[string]any {
 		return map[string]any{"properties": map[string]any{"type": map[string]any{"enum": types}}, "required": []string{"type"}}

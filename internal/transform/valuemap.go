@@ -11,14 +11,15 @@ import (
 )
 
 // A metric rule's value_map and scale turn what its expression gives into the
-// series' value, the same way in every transform: the text a regex captured,
-// a CSS element's text, an XPath node's or computed value, a CSV cell, a jq or
-// yq result. value_map looks the value up as text — a number as JSON writes
-// it, a boolean as true or false, text without surrounding blanks — and "*"
-// maps any value it does not list, numbers included; without a match and
-// without "*", the value is read as a number as before. scale then multiplies
-// the value, mapped or read. A rule with time_format reads the text as a time
-// instead (timeformat.go), and scale multiplies its seconds.
+// series' value, the same way in every transform. The input may be the text
+// a regex captured, a CSS element's text, an XPath node's or computed value,
+// a CSV cell, or a jq or yq result. value_map looks the value up as text: a
+// number as JSON writes it, a boolean as true or false, text without
+// surrounding blanks. "*" maps any value it does not list, numbers included.
+// Without a match and without "*", the value is read as a number as before.
+// scale then multiplies the value, mapped or read. A rule with time_format
+// reads the text as a time instead (timeformat.go), and scale multiplies its
+// seconds.
 
 // valueMapDefault is the value_map key for any value the map does not list.
 const valueMapDefault = "*"
@@ -64,11 +65,11 @@ func readRuleValue(rule model.MetricRule, raw any) (float64, error) {
 	return scaled(rule, n), nil
 }
 
-// ruleTextValue is ruleValue for text, as a regex capture, an element's text
-// and a node's are: the same value and the same error, without handing the
-// text over as a value of any type, which allocates a copy of the string's
-// header for every series. Only a text that is no number, whose error
-// ruleValue words, is handed to it.
+// ruleTextValue is ruleValue for text, such as a regex capture or an
+// element's or node's text. It gives the same value and the same error, but
+// does not pass the text as a value of type any, which would allocate a copy
+// of the string's header for every series. Only text that is not a number,
+// whose error ruleValue words, is passed to it.
 func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
 	n, err := readRuleTextValue(rule, text)
 	return histogramValue(&rule, n, err)
@@ -95,12 +96,12 @@ func readRuleTextValue(rule model.MetricRule, text string) (float64, error) {
 	return readRuleValue(rule, text)
 }
 
-// histogramValue checks the value a histogram rule read: NaN, which a text
+// histogramValue checks the value a histogram rule read. NaN, which a text
 // may spell and a value_map may map to, is in no bucket and would make the
-// sum NaN for good, so it fails the value, under the rule's error_mode, as a
-// value that is no number does. An infinity is counted, as Prometheus'
-// client libraries count one: -Inf in every bucket, +Inf in the bucket +Inf
-// alone. Any other rule's value is what it was read as.
+// sum NaN for good. So it fails the value under the rule's error_mode, like
+// a value that is not a number. An infinity is counted the way Prometheus'
+// client libraries count one: -Inf in every bucket, +Inf only in the bucket
+// +Inf. For any other rule the value is returned as read.
 func histogramValue(rule *model.MetricRule, n float64, err error) (float64, error) {
 	if err == nil && rule.Histogram != nil && math.IsNaN(n) {
 		return 0, errors.New("value is NaN, which a histogram cannot count: it is in no bucket, and would make the sum NaN")
@@ -115,18 +116,19 @@ func scaled(rule model.MetricRule, value float64) float64 {
 	return scale(value, *rule.Scale)
 }
 
-// scale multiplies value by s, dividing instead when s is exactly one over
-// a whole number, so milliseconds scaled by 0.001 become 0.412 seconds
+// scale multiplies value by s. It divides instead when s is exactly one
+// over a whole number, so milliseconds scaled by 0.001 become 0.412 seconds
 // rather than 0.41200000000000003: 0.001 has no exact binary form, 1000
 // has.
 //
-// Exactly: s is the float64 nearest to one over the whole number, which is
-// what the scale written as 0.001, 1e-9 or 0.5 parses to. A scale that only
-// comes close to such a number is itself: 1.5e-9 is within a billionth of
-// its inverse's distance from 1/666666667, as every scale that small is,
-// and 0.3333333333 from 1/3, and dividing by the rounded inverse gave
-// 2.9999999985 for 2e9 scaled by 1.5e-9 and 1e10 for 3e10 scaled by
-// 0.3333333333. Those multiply, as every scale did before one divided.
+// "Exactly" means s is the float64 nearest to one over the whole number,
+// which is what a scale written as 0.001, 1e-9 or 0.5 parses to. A scale
+// that only comes close to such a number is left alone. 1.5e-9 is within a
+// billionth of its inverse's distance from 1/666666667, as every scale that
+// small is, and 0.3333333333 is that close to 1/3. Dividing by the rounded
+// inverse gave 2.9999999985 for 2e9 scaled by 1.5e-9, and 1e10 for 3e10
+// scaled by 0.3333333333. Those multiply, as every scale did before any
+// divided.
 func scale(value, s float64) float64 {
 	if whole := math.Round(1 / s); math.Abs(whole) >= 2 && 1/whole == s {
 		return value / whole
@@ -215,10 +217,10 @@ func checkLabelValueMaps(x *model.Collector, r *model.MetricRule, where string) 
 		}
 		switch {
 		case label.Static() && ruleLabelHoldsPlaceholders(x, label.Value):
-			// There is no value it maps to, to write instead: the value
-			// is the probe's. What maps it is a value_map of the rule's
-			// name (mapLabelValues), which a label that reads its value
-			// with an expression may set.
+			// There is no mapped value to write instead, because the
+			// value comes from the probe. It is mapped by a value_map of
+			// the rule's name (mapLabelValues), which a label that reads
+			// its value with an expression may set.
 			return fmt.Errorf("%s label %q sets value_map beside a value with a {{param_...}} placeholder, and a label with a value takes no value_map: have the probe give the parameter the value wanted, or, where another rule of the same metric name reads a label %q with an expression, set the value_map on that label, which maps the label for the series of every rule of that name", where, label.Name, label.Name)
 		case label.Static():
 			return fmt.Errorf("%s label %q sets value_map with a static value; write the value it maps to instead", where, label.Name)
@@ -270,10 +272,10 @@ func CheckLabelValueMapsAgree(x *model.Collector) error {
 	return nil
 }
 
-// MappedStaticLabelValue is the value the static label of metric rules has on
-// its series once mapLabelValues has run: mapped by the first value_map any
-// rule of that name gives the label, which CheckLabelValueMapsAgree requires
-// to agree with the others, or left as it is.
+// MappedStaticLabelValue is the value a static label of metric rules has on
+// its series once mapLabelValues has run. It is mapped by the first
+// value_map any rule of that name gives the label (CheckLabelValueMapsAgree
+// requires it to agree with the others), or else left unchanged.
 func MappedStaticLabelValue(x *model.Collector, metric string, label model.LabelRule) string {
 	for _, rule := range x.Metrics {
 		if rule.Name != metric {

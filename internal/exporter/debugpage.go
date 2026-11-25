@@ -24,86 +24,91 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// The debug page, /debug with --web.debug at edit or full (debuglevel.go),
-// runs one collector and shows what it gave: the series a probe would
-// answer, the requests, the response, the stages, what was logged and the
-// whole debug report. The collector is either written on the page, the YAML
-// of one collector as it is written under collectors:, or one of the
-// configuration in force, named. The page posts each run to /debug/run,
-// which makes it with the engine a debug probe is made with (runDebug,
-// probedebug.go) and answers its report as JSON.
+// The debug page is /debug with --web.debug at edit or full (debuglevel.go).
+// It runs one collector and shows its results: the series a probe would
+// answer, the requests, the response, the stages, the log lines and the
+// whole debug report. The collector is either written on the page (the YAML
+// of one collector, as written under collectors:) or one of the
+// configuration in force, by name. The page posts each run to /debug/run.
+// That handler builds the run with the same engine as a debug probe
+// (runDebug, probedebug.go) and answers its report as JSON.
 //
-// A collector written on the page is read as the loader reads one
-// (config.ParseCollector), so a mistake reads as a load would report it, and
-// is never put in force. A run reads and fills no cache, shares no trip,
-// counts in no collector's self-metrics and in no failure log, queues
-// nothing for OTLP and logs one line at info, which the OTLP log export
-// does not take (unexportedLogger): what it logged goes to its answer, as a debug probe's goes to its report. It counts in
-// http_exporter_debug_runs_total{kind="page"} alone, but for the Python
-// worker series of a configured collector that runs a script, which count
+// A collector written on the page is read the same way the loader reads one
+// (config.ParseCollector), so a mistake is reported as a load reports it.
+// It is never put in force. A run does not read or fill any cache, shares
+// no trip, counts in no collector's self-metrics and in no failure log, and
+// queues nothing for OTLP. It logs one line at info, which the OTLP log
+// export does not take (unexportedLogger). Its log lines go to its answer,
+// as a debug probe's go to its report. It counts only in
+// http_exporter_debug_runs_total{kind="page"}. The exception is the Python
+// worker series of a configured collector that runs a script: they count
 // what the workers did, as for a debug probe.
 //
-// What a run reads is one of three things:
+// A run reads one of three things:
 //
 //   - a pasted response: a body, its content type, a status and headers,
-//     which the page sends. No request is made at all. This is all edit
-//     allows, so that at edit nothing a target answers is ever shown;
-//   - at full, a target, fetched exactly as /probe?debug=true fetches it:
-//     through a configured collector's request block, its target policy,
-//     its credentials, its accept_status and its max_concurrent_probes, with
-//     the probe parameters it takes. That collector is the one run, when it
-//     is configured, or the one request_from names, which the page fills
-//     with the collector its playground was copied from. A collector
-//     written on the page never makes a request with its own request block;
+//     sent by the page. No request is made. This is the only option at
+//     edit, so that at edit nothing a target answers is ever shown.
+//   - at full, a target, fetched exactly as /probe?debug=true fetches it.
+//     The fetch goes through a configured collector's request block, its
+//     target policy, its credentials, its accept_status and its
+//     max_concurrent_probes, with the probe parameters it takes. That
+//     collector is the one run, if it is configured. Otherwise it is the one
+//     request_from names; the page fills this with the collector the
+//     playground was copied from. A collector written on the page never
+//     makes a request with its own request block.
 //   - at full, one scrape of a static target, as /static-targets?debug=<name>
 //     makes it, read by the target's collector or by the one run.
 //
-// The page is for the operators of the exporter, behind web.basic_auth when
-// that is on, and what it is given is code of a kind: an expression runs on
-// the server, against what it was pasted or what the target sent. So a
-// collector written on the page is refused what would reach further than
-// the response:
+// The page is for the exporter's operators, behind web.basic_auth when that
+// is on. What it receives is a kind of code: an expression runs on the
+// server, against the pasted input or what the target sent. So a collector
+// written on the page may not do anything that reaches beyond the response:
 //
-//   - its request block is inert: no path of a run makes a request with it,
-//     a pasted response being decoded as it is and a target fetched through
-//     a configured collector alone. So it may be of any request type the
-//     build has, a sql or a tlscert collector as an http one, its type
-//     saying only how the answer is read: its decoder, a sql collector's
-//     rows, the JSON document a tlscert collector's handshake is made into;
-//   - Python, a python transform or a pre_script, is never run: a script is
-//     a program run on the server, with the server's files and network;
-//   - a collector that names a file — any key of its request ending in _file
-//     or _files, such as bearer_token_file, a tls file or an sshfile
-//     collector's known_hosts_file, and a login, which reads its secrets
-//     from files — is refused before it is checked, so nothing the run
-//     answers can carry what such a file holds; the request is never made,
-//     so those a request needs are not required of it
-//     (model.Collector.RequestNotMade);
-//   - ${NAME} references are left as written: the answer would show the
-//     server's environment.
+//   - Its request block is inert. No path of a run makes a request with it:
+//     a pasted response is decoded as is, and a target is fetched only
+//     through a configured collector. So it may be of any request type the
+//     build has (a sql or a tlscert collector as well as an http one). Its
+//     type only says how the answer is read: its decoder, a sql collector's
+//     rows, or the JSON document made from a tlscert collector's handshake.
+//   - Python (a python transform or a pre_script) is never run. A script is
+//     a program run on the server, with the server's files and network.
+//   - A collector that names a file is refused before it is checked. This
+//     covers any key of its request ending in _file or _files (such as
+//     bearer_token_file, a tls file or an sshfile collector's
+//     known_hosts_file) and a login, which reads its secrets from files. So
+//     nothing the run answers can carry the content of such a file. The
+//     request is never made, so the files a request needs are not required
+//     of it (model.Collector.RequestNotMade).
+//   - ${NAME} references are left as written, since expanding them would
+//     show the server's environment.
 //
-// --web.debug.dangerous lifts the first three (debuglevel.go): the
-// playground then runs Python, may name the server's files, and fetching a
-// target with no request_from makes its own request block's request, as a
-// configured collector's probe does. ${NAME} references stay as written.
+// --web.debug.dangerous lifts the first three (debuglevel.go). The
+// playground then runs Python and may name the server's files. Fetching a
+// target with no request_from then makes the request of its own request
+// block, as a configured collector's probe does. ${NAME} references stay as
+// written.
 //
 // A configured collector is the operator's own, put in force by the
-// configuration, and is run as it is, its Python included: a pasted body is
-// input chosen by whoever uses the page, as a target's answer is chosen by
-// the target, which the collector's scripts read on every probe.
+// configuration, and is run as is, including its Python. A pasted body is
+// input chosen by the page's user, just as a target's answer is chosen by
+// the target, and the collector's scripts read that on every probe.
 //
-// And a run is bounded as a probe is: the request by debugMaxRequestBytes, a
-// pasted body by debugMaxBodyBytes and by the collector's response limit,
-// the run by the probe's deadline (scrapetimeout.go), and the runs in
-// progress by debugMaxConcurrent, a fetch also by the trip limits of the
-// collector it goes through.
+// A run is bounded like a probe:
+//
+//   - the request by debugMaxRequestBytes;
+//   - a pasted body by debugMaxBodyBytes and by the collector's response limit;
+//   - the run by the probe's deadline (scrapetimeout.go);
+//   - the runs in progress by debugMaxConcurrent;
+//   - a fetch also by the trip limits of the collector it goes through.
 //
 // A browser sends the exporter's Basic Auth credential with any request to
-// it, a page of another site's included, so a run must carry the
-// X-Debug-Run header and a JSON body: neither can a page of another site
-// send without asking the exporter first (a CORS preflight), which the
-// exporter never allows. A browser that says where a request comes from
-// (Sec-Fetch-Site) must say it comes from the exporter's own pages.
+// it, including one from a page of another site. So a run must carry the
+// X-Debug-Run header and a JSON body. A page of another site cannot send
+// either without first asking the exporter (a CORS preflight), and the
+// exporter never allows that. If a browser states where a request comes
+// from (Sec-Fetch-Site), it must say the request comes from the exporter's
+// own pages.
 
 // debugPagePath and debugRunPath are the page and what its runs post to,
 // and debugOTLPTestPath what its OTLP endpoint test posts to
@@ -118,10 +123,10 @@ const (
 const debugRunHeader = "X-Debug-Run"
 
 // What a run may send: the whole request, the pasted body and the
-// collector's YAML. The body's bound is above what a collector is usually
-// written against and well under the default response limit; JSON escapes
-// make the request longer than what it carries, so its own bound is twice
-// that.
+// collector's YAML. The body's bound is above the size a collector is
+// usually written against, and well under the default response limit. JSON
+// escapes make the request longer than its content, so the request's bound
+// is twice the body's.
 const (
 	debugMaxRequestBytes   = 2 << 20
 	debugMaxBodyBytes      = 1 << 20
@@ -131,9 +136,9 @@ const (
 
 // debugMaxConcurrent is how many of the page's runs may be in progress at
 // once. Each holds its body, its decoded form and its series, as a trip
-// does; the page sends one at a time, cancelling the last when another
-// starts. A debug probe or scrape is bounded by its collector's trip slots
-// instead, as a probe is.
+// does. The page sends one run at a time and cancels the last one when
+// another starts. A debug probe or scrape is bounded by its collector's
+// trip slots instead, as a probe is.
 const debugMaxConcurrent = 4
 
 // budgetFromDebugPage is where a run's budget comes from when the probe's
@@ -143,10 +148,10 @@ const budgetFromDebugPage = "the debug page's own bound, as --probe.default-time
 // debugHeaderName is what a pasted header's name may be: an HTTP token.
 var debugHeaderName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
-// debugRunRequest is what /debug/run takes: the collector, written
-// (Collector) or configured (Configured), and what it reads — Body, a
-// pasted response; Target with RequestFrom, a fetch; or StaticTarget, a
-// static target's scrape.
+// debugRunRequest is what /debug/run takes: the collector, either written
+// (Collector) or configured (Configured), and what it reads. That is Body
+// (a pasted response), Target with RequestFrom (a fetch), or StaticTarget
+// (a static target's scrape).
 type debugRunRequest struct {
 	Collector    *string     `json:"collector"`
 	Configured   string      `json:"configured"`
@@ -160,12 +165,12 @@ type debugRunRequest struct {
 	Params       debugValues `json:"params"`
 }
 
-// debugValues are a run's headers or probe parameters, each name with a
-// string, or a list of strings for a name given more than once: a response
-// may repeat a header, as HTTP lets it, and a probe a header_<name>
-// parameter, each value of which is forwarded. A JSON object cannot hold a
-// name twice, and a value joined with commas is not what a response with
-// the header twice gives a decoder, which reads the first.
+// debugValues are a run's headers or probe parameters. Each name maps to a
+// string, or to a list of strings if the name is given more than once. A
+// response may repeat a header, as HTTP allows, and a probe may repeat a
+// header_<name> parameter, each value of which is forwarded. A JSON object
+// cannot hold a name twice. Joining the values with commas would not match
+// a response with the header twice, whose first value a decoder reads.
 type debugValues map[string][]string
 
 func (v *debugValues) UnmarshalJSON(data []byte) error {
@@ -231,12 +236,15 @@ func (req debugRunRequest) sources() (debugSource, int) {
 }
 
 // debugAnswer is what /debug/run answers: the run's report as JSON. Error
-// alone is a run refused before it ran; otherwise Series is what a probe
-// would have served, as Prometheus text, Samples the same series one by one
-// for the page's table (debugSamples), Verdict what it would have
-// answered, Requests and Response what was sent and what came back, Stages
-// and Notes the stages and what was logged, Lint the metric lint's advice,
-// and Report the whole report as /probe?debug=true writes it.
+// alone means the run was refused before it ran. Otherwise:
+//
+//   - Series is what a probe would have served, as Prometheus text;
+//   - Samples is the same series one by one, for the page's table (debugSamples);
+//   - Verdict is what the probe would have answered;
+//   - Requests and Response are what was sent and what came back;
+//   - Stages and Notes are the stages and the log lines;
+//   - Lint is the metric lint's advice;
+//   - Report is the whole report as /probe?debug=true writes it.
 type debugAnswer struct {
 	OK       bool                    `json:"ok"`
 	Verdict  string                  `json:"verdict,omitempty"`
@@ -354,14 +362,18 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 }
 
 // debugSample is one line of a probe's answer as the page's table shows it:
-// Name, the sample's name, a histogram's or a summary's with its suffix;
-// Metric, the name of the metric it is of, which the metric lint's findings
-// name (transform.LintFinding.Metric), so the page puts a finding beside the
-// series it is about; Type, the metric's type, as its TYPE line says it;
-// Labels, a bucket's le and a quantile's quantile among them; and Value as
-// the text format writes it, NaN, +Inf and a count's whole number included.
+//
+//   - Name: the sample's name, with its suffix for a histogram or summary;
+//   - Metric: the name of its metric, which the metric lint's findings name
+//     (transform.LintFinding.Metric), so the page puts a finding beside the
+//     series it is about;
+//   - Type: the metric's type, as its TYPE line says;
+//   - Labels: including a bucket's le and a quantile's quantile;
+//   - Value: as the text format writes it, including NaN, +Inf and a count's
+//     whole number.
+//
 // A series does not carry the rule that made it, so the page can tie a
-// finding to a series by the metric's name alone.
+// finding to a series only by the metric's name.
 type debugSample struct {
 	Name   string            `json:"name"`
 	Metric string            `json:"metric"`
@@ -370,11 +382,11 @@ type debugSample struct {
 	Value  string            `json:"value"`
 }
 
-// debugSamples are the samples of set in the order appendMetricSet writes
-// them: metric by metric, a histogram's buckets ascending, its +Inf bucket,
-// _sum and _count, a summary's quantiles ascending, _sum and _count. They
-// are made from the set itself, as the text is, never by reading the text
-// again.
+// debugSamples returns the samples of set in the order appendMetricSet
+// writes them: metric by metric; a histogram's buckets ascending, then its
+// +Inf bucket, _sum and _count; a summary's quantiles ascending, then _sum
+// and _count. They are built from the set itself, as the text is, never by
+// parsing the text again.
 func debugSamples(set *model.MetricSet) []debugSample {
 	var e expositionWriter
 	var out []debugSample
@@ -434,10 +446,10 @@ func writeDebugAnswer(w http.ResponseWriter, code int, answer debugAnswer) {
 }
 
 // debugSameOrigin refuses a run that a page of another site could have
-// sent: one without the X-Debug-Run header or a JSON body, which no such
-// page sends without a CORS preflight the exporter never allows, and one a
-// browser says came from another site. The Origin is not compared with the
-// Host, which a reverse proxy in front of the exporter may rewrite.
+// sent. That is a run without the X-Debug-Run header or a JSON body (no such
+// page can send those without a CORS preflight, which the exporter never
+// allows), or one a browser says came from another site. The Origin is not
+// compared with the Host, because a reverse proxy may rewrite the Host.
 func debugSameOrigin(r *http.Request) error {
 	if r.Header.Get(debugRunHeader) == "" {
 		return fmt.Errorf("a debug run must carry the %s header, which the debug page sends; another site's page cannot send it", debugRunHeader)
@@ -449,10 +461,10 @@ func debugSameOrigin(r *http.Request) error {
 }
 
 // refusedOnDebugPage refuses, before it is checked, a collector written on
-// the debug page that the page does not run: Python, and one that names a
-// file of the server's. Its request may be of any type the build has, since
-// its request block is never made: it says only how the answer is read
-// (fetch.RequestType's decoder, rows or JSON document).
+// the debug page that the page does not run: one with Python, or one that
+// names a server file. Its request may be of any type the build has, since
+// its request block is never made. The type only says how the answer is
+// read (fetch.RequestType's decoder, rows or JSON document).
 func refusedOnDebugPage(x *model.Collector) error {
 	if runsPython(x) {
 		return fmt.Errorf("collector %q runs Python (transform.type python or transform.pre_script); a collector written on the debug page never runs Python, since a script is a program run on the server. Put it in the configuration and run it here by name instead", x.Name)
@@ -475,12 +487,12 @@ func refusedOnDebugPage(x *model.Collector) error {
 	return nil
 }
 
-// serverFileKeys are the keys of a request block that name a file of the
-// server's, in the order the block has them: every key ending in _file or
-// _files, of any type, at the top of the block or in a mapping it holds,
-// as tls.ca_file, but max_files, a count, and login, which reads its
-// secrets from files and sends them. A key inside one already named is not
-// named again.
+// serverFileKeys returns the keys of a request block that name a server
+// file, in the block's order. These are every key ending in _file or
+// _files, of any type, at the top of the block or in a mapping it holds
+// (such as tls.ca_file), except max_files (a count), plus login, which
+// reads its secrets from files and sends them. A key inside one already
+// returned is not returned again.
 func serverFileKeys(r model.RequestConfig) []string {
 	var files []string
 	for _, key := range r.Order {
@@ -495,10 +507,10 @@ func serverFileKeys(r model.RequestConfig) []string {
 	return files
 }
 
-// readsWhatFetches reports whether reader, a collector run, may read what
-// fetcher, another collector, fetches: when both are of one request type,
-// whose answer the reader reads as its type reads one, its rows a sql
-// collector's and the JSON document a tlscert collector's.
+// readsWhatFetches reports whether reader (the collector run) may read what
+// fetcher (another collector) fetches. That holds when both have the same
+// request type, so the reader reads the answer as its type reads one: a sql
+// collector's rows, or a tlscert collector's JSON document.
 func readsWhatFetches(reader, fetcher *model.Collector) error {
 	if reader.Request.Type == fetcher.Request.Type {
 		return nil
@@ -511,16 +523,20 @@ type debugPageCollector struct {
 	Name, RequestType string
 }
 
-// debugForm is what the page asks for a run of a collector, as its request
-// type says it, so a form never asks a collector of another type for what
-// an http collector takes: for a pasted response, the body, with a
-// Content-Type where the decoder is left to choose by it, and a status and
-// headers for an answer that is an HTTP response (fetch.AnswersHTTP); for a
-// target, what the type takes as one (fetch.TargetPromptOf), or nothing for
-// a type that takes none, and the collector's probe parameters
-// (debugParamsOf). The page holds the form of each configured collector
-// and of the playground, and GET /debug/collector answers it again with the
-// collector, so it follows a reload.
+// debugForm is what the page asks for a run of a collector, based on its
+// request type, so a form never asks a collector of another type for what
+// an http collector takes:
+//
+//   - for a pasted response: the body; a Content-Type where the decoder
+//     chooses by it; and a status and headers when the answer is an HTTP
+//     response (fetch.AnswersHTTP);
+//   - for a target: what the type takes as a target (fetch.TargetPromptOf),
+//     or nothing if it takes none, and the collector's probe parameters
+//     (debugParamsOf).
+//
+// The page holds the form of each configured collector and of the
+// playground. GET /debug/collector answers it again with the collector, so
+// the form follows a reload.
 type debugForm struct {
 	RequestType string `json:"request_type"`
 	// Answer is the body's placeholder (fetch.AnswerHintOf).
@@ -530,10 +546,10 @@ type debugForm struct {
 	TargetLabel string `json:"target_label,omitempty"`
 	TargetHint  string `json:"target_hint,omitempty"`
 	NoTarget    bool   `json:"no_target,omitempty"`
-	// Params are the collector's own probe parameters, a row of each, and
-	// OtherParams the names of the others it takes, offered as names to
-	// choose (debugParamsOf); both are empty for a collector that takes
-	// none.
+	// Params are the collector's own probe parameters, one row each.
+	// OtherParams are the names of the other parameters it takes, offered as
+	// names to choose (debugParamsOf). Both are empty for a collector that
+	// takes none.
 	Params      []debugParam `json:"params,omitempty"`
 	OtherParams []string     `json:"other_params,omitempty"`
 }
@@ -565,10 +581,11 @@ func debugFormOf(c *model.Collector) debugForm {
 	return f
 }
 
-// playgroundForm is the form of the playground the page opens with, the
-// example, as its request type says it; a build without that type has an
-// example that runs nothing, whose form asks for a response as an HTTP
-// response is asked for. The example is read once.
+// playgroundForm is the form of the playground the page opens with (the
+// example), based on its request type. In a build without that type, the
+// example runs nothing and its form asks for a response the way it asks for
+// an HTTP response. The example
+// is read once.
 var playgroundForm = sync.OnceValue(func() debugForm {
 	if cfg, err := config.ParseCollector([]byte(debugExample), nil); err == nil {
 		return debugFormOf(&cfg.Collectors[0])
@@ -587,12 +604,12 @@ func typeForms() map[string]debugForm {
 	return forms
 }
 
-// debugParamsOf is what the page offers of the probe parameters of c: a
-// row of each {{param_<name>}} placeholder of its request and its labels
-// (fetch.RequestParams), with its default, and as names to choose, the other
-// parameters its type takes from a probe, header_<name> those of the
-// headers it forwards; none when it takes none. timeout is left out: the
-// page's own timeout bounds the run.
+// debugParamsOf returns what the page offers of the probe parameters of c:
+// a row for each {{param_<name>}} placeholder of its request and its labels
+// (fetch.RequestParams), with its default; and, as names to choose, the
+// other parameters its type takes from a probe, such as header_<name> for
+// the headers it forwards. It returns none when c takes none. timeout is
+// left out, because the page's own timeout bounds the run.
 func debugParamsOf(c *model.Collector) ([]debugParam, []string) {
 	var own []debugParam
 	for _, p := range fetch.RequestParams(c) {
@@ -629,10 +646,9 @@ func (s *Server) debugPageHandler(w http.ResponseWriter, r *http.Request) {
 	followed := s.reconcile()
 	cfg := followed.config
 	chosen := r.URL.Query().Get("collector")
-	// A link that names a static target opens the page with the collector
-	// it is scraped through chosen, whatever collector the link names
-	// besides: the page offers the static targets of the collector chosen
-	// alone.
+	// A link that names a static target opens the page with that target's
+	// collector chosen, whatever collector the link also names. The page
+	// offers only the static targets of the chosen collector.
 	if page.Full {
 		if named := r.URL.Query().Get("static_target"); named != "" {
 			if target, c := staticDebugTarget(followed, named); target != nil && c != nil {
@@ -790,10 +806,10 @@ func readDebugRunRequest(w http.ResponseWriter, r *http.Request) (debugRunReques
 	return req, 0, nil
 }
 
-// prepareDebugRun resolves the run's collector and what it reads, checking
-// its parameters as /probe checks a probe's: the run collector's for a
-// pasted body, and those of the collector whose request fetches the target
-// for a fetch. It returns, beside the run, the warnings a load would give
+// prepareDebugRun resolves the run's collector and what it reads. It checks
+// the parameters as /probe checks a probe's: the run collector's for a
+// pasted body, and for a fetch those of the collector whose request fetches
+// the target. Besides the run, it returns the warnings a load would give
 // for a collector written on the page.
 func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugProbe, []string, int, error) {
 	followed := s.reconcile()
@@ -959,11 +975,11 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 }
 
 // pastedRows reads a pasted body as the rows of a statement: a JSON list of
-// objects, each a row's columns by name, as a driver's rows are handed on
-// (fetch.HTTPResponse.Rows). A whole number is an int and another a
-// float64, as a driver's are; true and false are 1 and 0; null leaves the
-// column out of its row, as NULL does. The columns are every name a row
-// has, sorted.
+// objects, each holding a row's columns by name, as a driver's rows are
+// handed on (fetch.HTTPResponse.Rows). A whole number becomes an int and
+// any other number a float64, as with a driver. true and false become 1 and
+// 0. null leaves the column out of its row, as NULL does. The columns are
+// every name any row has, sorted.
 func pastedRows(body string) ([]any, []string, error) {
 	dec := json.NewDecoder(strings.NewReader(body))
 	dec.UseNumber()

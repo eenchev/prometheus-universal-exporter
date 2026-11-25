@@ -1,24 +1,23 @@
 # RADIUS
 
-The `radius` request type asks a RADIUS server (RFC 2865) to authenticate
-an account, as a VPN gateway or a wireless controller does, and hands the
-server's reply to the transforms as a JSON document: whether the account
-was accepted, how long the reply took, and how many times the request had
-to be sent. Use it to watch, from where the exporter runs:
+The `radius` request type asks a RADIUS server (RFC 2865) to authenticate an
+account, as a VPN gateway or a wireless controller does, and hands the
+server's reply to the transforms as a JSON document: whether the account was
+accepted, how long the reply took, and how many times the request had to be
+sent. Use it to watch, from where the exporter runs:
 
 - that a RADIUS server answers, and how fast;
 - that a login works end to end, through the server and the directory
   behind it, with an account kept for the purpose;
 - that a server is alive without any account, with `mode: status-server`.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with radius](#building-with-radius)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with radius](#building-with-radius)).
 
 ## Building with radius
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=radius              # bin/prometheus-universal-exporter
@@ -26,9 +25,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=radius -t exporter:radius .
 go build -tags "$(sh tools/request-type-tags.sh '' '' radius)" .
 ```
 
-The tag is `request_type_radius`. A configuration with a `radius` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_radius`. A build without the type refuses a
+configuration with a `radius` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -80,9 +80,10 @@ sends from to the server's clients, with the secret of `secret_file`. A
 server ignores a request from a client it does not know, which reads here as
 no reply.
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The mode
 
@@ -132,26 +133,26 @@ and the request goes to its first address, over UDP.
   `code` its number; `accepted` is true of an Access-Accept alone, and with
   `mode: status-server` of an `accounting-response` too, which is how an
   accounting port answers one.
-- **A reply is an answer, whatever it says.** An Access-Reject is a server
-  that is up and refused the account: the scrape succeeds and `accepted` is
-  false, so a rule decides what a refusal means, and an account that should
-  be refused can be watched too.
+- **A reply is an answer, whatever it says.** An Access-Reject comes from a
+  server that is up and refused the account: the scrape succeeds and
+  `accepted` is false. A rule decides what a refusal means, so an account
+  that should be refused can be watched too.
 - `attempts` is how many times the request was sent, and
   `response_seconds` how long after the first the reply came.
-- `reply_messages` is the text the server sent to be shown to the user,
-  `session_timeout_seconds` the session it grants, `null` when it names
-  none, and `attribute_types` the types of the reply's attributes, in
+- `reply_messages` is the text that the server sent to be shown to the user,
+  `session_timeout_seconds` the session that it grants (`null` when it names
+  none), and `attribute_types` the types of the reply's attributes, in
   order.
 - `message_authenticator` says the reply carried a Message-Authenticator.
 
 ## The request and its reply
 
-Every request carries a Message-Authenticator (RFC 3579), its first
+Every request carries a Message-Authenticator (RFC 3579) as its first
 attribute, which servers patched against forged replies (CVE-2024-3596)
-require. A request no reply comes to within `resend_interval` is sent again,
-the same packet, `resends` times; the last waits until the scrape's
-deadline, the probe's `timeout` or the scrape's own, 30 seconds when
-neither is set.
+require. A request that gets no reply within `resend_interval` is sent
+again, the same packet, `resends` times. The last one waits until the
+scrape's deadline: the probe's `timeout`, or the scrape's own, 30 seconds
+when neither is set.
 
 A datagram is the reply only when it answers the request's identifier and
 its Response Authenticator is what the shared secret makes, and its
@@ -189,14 +190,15 @@ A scrape is bounded by its deadline. A reply is one datagram, of at most
 ## Errors and self-metrics
 
 A failed request is reported in the `radius` stage and follows
-`error_handling.on_fetch_error`, naming the server: no reply before the
-deadline, a refusal the network sent back
+`error_handling.on_fetch_error`, naming the server. Causes include no reply
+before the deadline, a refusal that the network sent back
 (`reading the reply from 192.0.2.10:1812: ... connection refused`), a
-credential file that cannot be read or is empty, or a reply without the
-Message-Authenticator the collector requires. A host the target lists refuse
-counts in `http_exporter_targets_refused_total`, answered `403`. Transforms
-see no status (`$status` is `null`, Python's `response.status_code` `None`)
-and the header `Content-Type: application/json`.
+credential file that cannot be read or is empty, and a reply without the
+Message-Authenticator that the collector requires. A host that the target
+lists refuse counts in `http_exporter_targets_refused_total` and is answered
+`403`. Transforms see no status (`$status` is `null`, and Python's
+`response.status_code` is `None`) and the header
+`Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows the request with how it
 ended:

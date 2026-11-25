@@ -5,13 +5,13 @@ package fetch
 import "fmt"
 
 // The load-time rule of a request.path placeholder's default, for the types
-// that bind path parameters: http and graphite, in a URL's path, and
-// localfile, sshfile and s3file, in a file's. grpc has no request.path, so a build
-// with only it leaves this out.
+// that bind path parameters: http and graphite in a URL's path, and
+// localfile, sshfile and s3file in a file's. grpc has no request.path, so a
+// build with only it leaves this out.
 
 // checkPathParamDefaults refuses, when the configuration loads, a
-// request.path placeholder whose default no probe could be sent with: every
-// probe that left the parameter out would fail, with an error that blames
+// request.path placeholder whose default no probe could be sent with. Every
+// probe that left the parameter out would fail with an error that blames
 // the probe. check is the function the request type holds a value to when a
 // probe binds it, so a default is refused at load by exactly the rule that
 // would refuse it at every probe.

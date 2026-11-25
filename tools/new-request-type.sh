@@ -448,14 +448,13 @@ for, in a paragraph or two, as the other request types' pages open.
 EOF
 	if [ -n "$optin" ]; then
 		fill <<'EOF'
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with @name@](#building-with-@name@)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with @name@](#building-with-@name@)).
 
 ## Building with @name@
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=@name@              # bin/prometheus-universal-exporter
@@ -463,9 +462,11 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=@name@ -t exporter:@name@ .
 go build -tags "$(sh tools/request-type-tags.sh '' '' @name@)" .
 ```
 
-The tag is `request_type_@name@`. A configuration with @a@ `@name@` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_@name@`. A build without the type refuses a
+configuration with @a@ `@name@` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it.
+TODO(@name@): say whether the type uses only the standard library and adds
+no dependency, as the other opt-in pages do.
 
 EOF
 	fi
@@ -790,7 +791,7 @@ fi
 # The repository tests' tables of how the README and the chart name each
 # type, whose words a person chooses.
 if [ -n "$optin" ]; then description='""'; else description="\"TODO(${name})\""; fi
-for table in "test/repository/readmesources_test.go readmeSourceNames {\"TODO(${name})\", \"TODO(${name})\"}" \
+for table in "test/repository/readmesources_test.go readmeSourceNames \"TODO(${name})\"" \
 	"test/repository/requesttypefacts_test.go chartSourceNames {\"TODO(${name})\", ${description}}"; do
 	set -- $table
 	file=$1
@@ -849,7 +850,7 @@ TestNoScaffoldPlaceholderIsLeftInTheTree fails on until it is gone:
   3. Its page, docs/${NAME}.md, the TODOs of the lists the documentation
      marks <!-- request-types -->, each moved to its place in its list, and
      the README's index line, moved beside the types it is like.
-  4. The README's tagline and sources paragraph, the chart README's opening
+  4. The README's table of sources, the chart README's opening
      and, for a type of the default build, Chart.yaml's description, naming
      the type in the words readmeSourceNames and chartSourceNames give.
   5. The prose that lists every type, which the script cannot write: each

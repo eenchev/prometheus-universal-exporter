@@ -278,12 +278,12 @@ func duplicateCollectorError(name, first, second string) error {
 	return fmt.Errorf("duplicate collector %q: defined in %s and in %s", name, first, second)
 }
 
-// collectorFilesStamp describes the collector files a configuration reads —
-// which files a pattern matches now, and each one's modification time, size
-// and mode — so the watch can tell when one was edited, added or removed, or
-// its permissions changed, which may have made it readable again. An entry
-// that cannot be resolved is part of the stamp too, so its file appearing is
-// also a change.
+// collectorFilesStamp describes the collector files a configuration reads:
+// which files a pattern matches now, and each file's modification time,
+// size and mode. The watch uses it to tell when a file was edited, added or
+// removed, or had its permissions changed, which may have made it readable
+// again. An entry that cannot be resolved is part of the stamp too, so the
+// appearance of its file is also a change.
 func collectorFilesStamp(configPath string, entries []string) string {
 	if len(entries) == 0 {
 		return ""

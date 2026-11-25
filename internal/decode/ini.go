@@ -6,32 +6,31 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The ini decoder reads an INI file, the sections and keys of a Windows
-// .ini, a php.ini or a Python configparser file, as a small parser of its
-// own: no INI module is in the build, and the dialects agree on little more
-// than what follows. Its document is a mapping of each section's name to the
-// mapping of its keys to their values, as text, and of each key written
-// before the first section to its value, so that a jq rule reads .server.port
-// and .timeout.
+// The ini decoder reads an INI file (the sections and keys of a Windows
+// .ini, a php.ini or a Python configparser file) with a small parser of its
+// own. No INI module is in the build, and the dialects agree on little more
+// than what follows. Its document maps each section's name to the mapping of
+// its keys to their values, as text, and each key written before the first
+// section to its value, so that a jq rule reads .server.port and .timeout.
 //
-//   - A line is what lies between two line feeds, and is read without the
-//     spaces, tabs and carriage returns around it. An empty line, and one
-//     that starts with ; or #, is passed over: a comment is a whole line, so
-//     a value may hold ; and #, as a URL or a colour does.
+//   - A line is what lies between two line feeds, read without the spaces,
+//     tabs and carriage returns around it. An empty line, and one that
+//     starts with ; or #, is skipped. A comment is a whole line, so a value
+//     may hold ; and #, as a URL or a colour does.
 //   - [name] starts a section, and may be followed by a comment. The name is
-//     read without the blanks around it, must not be empty, and is a name and
-//     no path: [a.b] is the section "a.b", which jq reads as .["a.b"]. A
-//     section written twice is one section, its keys gathered from both.
-//   - Any other line is a key and its value, split at the first = or :,
-//     each read without the blanks around it. The key must not be empty; the
-//     value may be, and is taken as written, quotes included: dialects
+//     read without the blanks around it and must not be empty. It is a name,
+//     not a path: [a.b] is the section "a.b", which jq reads as .["a.b"]. A
+//     section written twice is one section, with its keys gathered from both.
+//   - Any other line is a key and its value, split at the first = or :, each
+//     read without the blanks around it. The key must not be empty. The value
+//     may be empty, and is taken as written, quotes included, since dialects
 //     differ on what quotes mean. A value does not go on to the next line.
 //   - Of a key written twice in one section, the later is kept: an INI file
 //     is often a default file with lines appended to override it. Keys and
 //     names are compared as written, in their case.
 //   - A key written before the first section and a section of the same name
-//     would be one member of the mapping; the body is refused, naming both
-//     lines, rather than one hiding the other.
+//     would be one member of the mapping. The body is refused, naming both
+//     lines, instead of one hiding the other.
 //   - An error names the line, as model.Position, and quotes no more than
 //     the start of a name (model.Quoted).
 

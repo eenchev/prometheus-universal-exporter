@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// pythonLogMark begins a line a script wrote with log(...), which the
-// worker hands back after what the script printed: the mark, the level, a
-// NUL, the message, a NUL (pythonworker.go). What a script printed holds
-// the mark only if the script writes it there, which then logs what it
-// meant to print.
+// pythonLogMark starts a line a script wrote with log(...). The worker
+// returns these lines after what the script printed, each as the mark, the
+// level, a NUL, the message and a NUL (pythonworker.go). Printed output
+// holds the mark only if the script writes it there, and then it logs what
+// it meant to print.
 const pythonLogMark = "\x00pue-log:"
 
 // pythonLogLine is one call of a script's log(...).

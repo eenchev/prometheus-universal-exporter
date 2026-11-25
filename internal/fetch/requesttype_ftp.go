@@ -18,9 +18,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The ftp request type reads one file from an FTP server, as sshfile reads
-// one over SFTP and localfile one from the exporter's own disk, for the
-// systems that still drop their files there.
+// The ftp request type reads one file from an FTP server, for systems that
+// still drop their files there. It is the FTP counterpart of sshfile (over
+// SFTP) and localfile (from the exporter's own disk).
 //
 //	request:
 //	  type: ftp
@@ -33,19 +33,20 @@ import (
 //
 // A scrape logs in, asks for binary transfer, the file's size and its
 // modification time, opens a passive data connection, retrieves the file
-// with RETR and quits: one control connection and one data connection,
-// both the scrape's own. The file is handed to the decoder its extension
-// names, as a local file is.
+// with RETR and quits. It uses one control connection and one data
+// connection, both its own. The file goes to the decoder named by its
+// extension, as for a local file.
 //
-// The type only reads: no command that stores, renames or deletes is in
-// the code. The data connection is always passive, made by the exporter,
+// The type only reads: the code has no command that stores, renames or
+// deletes. The data connection is always passive, made by the exporter,
 // and always to the server the control connection reached, whatever
 // address the server's answer names.
 //
-// The target is host, host:port or ftp://host:port (port 21), in plaintext;
-// ftpes://host:port for explicit TLS, begun with AUTH TLS, which a target
-// without a scheme has too when the collector has a tls block; and
-// ftps://host:port (port 990) for TLS from the first byte.
+// The target is one of:
+//   - host, host:port or ftp://host:port (port 21), in plaintext;
+//   - ftpes://host:port for explicit TLS, started with AUTH TLS (a target
+//     without a scheme also uses this when the collector has a tls block);
+//   - ftps://host:port (port 990) for TLS from the first byte.
 //
 // The type imports nothing outside the standard library.
 
@@ -435,9 +436,9 @@ func (ftpRequester) Fetch(ctx context.Context, target string, c *model.Collector
 	return resp, nil
 }
 
-// passive asks the server for a data connection and makes it: EPSV, which
-// names a port alone, and PASV for a server without it, whose answer's
-// address is not used. Either way the connection is made to the address
+// passive asks the server for a data connection and opens it. It uses EPSV,
+// which names only a port, or PASV for a server without EPSV, ignoring the
+// address in PASV's answer. Either way the connection goes to the address
 // the control connection reached, so a server cannot point the exporter at
 // another host.
 func (s *ftpSession) passive(control netAddress) (*netConn, error) {

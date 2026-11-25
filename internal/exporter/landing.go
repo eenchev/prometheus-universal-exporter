@@ -10,12 +10,13 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
-// The exporter's HTML pages: the landing page at /, as Prometheus exporters
-// usually have one, saying what is running and linking the endpoints, and the
-// collectors page (collectorspage.go), where a target can be probed through
-// each collector by hand. Both read the configuration in force, so a reload
-// shows on the next visit, and both are protected like /probe when the
-// exporter's Basic Auth is on, since they list the collectors.
+// The exporter's HTML pages are the landing page at / and the collectors
+// page (collectorspage.go). The landing page, as Prometheus exporters
+// usually have, says what is running and links the endpoints. On the
+// collectors page a target can be probed by hand through each collector.
+// Both read the configuration in force, so a reload shows on the next visit.
+// Both list the collectors, so they are protected like /probe when the
+// exporter's Basic Auth is on.
 
 // landingDocs is where the pages point for documentation.
 const landingDocs = "https://github.com/eenchev/prometheus-universal-exporter"

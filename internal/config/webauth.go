@@ -19,12 +19,12 @@ import (
 // is no place for a password; a file mounted from a Secret is.
 //
 // The files are read when the configuration loads, so a missing or empty one
-// is refused like any other invalid configuration, and again whenever one
-// changes on disk, found by its size and modification time on each request.
-// Kubernetes updates a mounted Secret in place, so a rotated password takes
-// effect without a restart or a reload. A file that cannot be read any more
-// fails the request with 500 rather than falling back to the old credential,
-// and is logged.
+// is refused like any other invalid configuration. They are read again
+// whenever one changes on disk. A change is found by checking the file's
+// size and modification time on each request. Kubernetes updates a mounted
+// Secret in place, so a rotated password takes effect without a restart or a
+// reload. If a file can no longer be read, the request fails with 500 and
+// the error is logged. There is no fallback to the old credential.
 
 // validateWebAuth checks the credential settings and, unless
 // namedFilesUnread (validate), that the files can be read.
@@ -78,12 +78,12 @@ func WebAuthCredentials(a *model.ExporterBasicAuth) (string, string, error) {
 }
 
 // WebAuthDigest is the SHA-256 digest of the exporter's own username and of
-// its password. A request's credential is compared with these, digested in
-// turn, rather than with the credential itself: subtle.ConstantTimeCompare
-// takes no time for slices of different lengths, so comparing a presented
-// password with the configured one told by its speed whether their lengths
-// differed, and so the configured password's length. Digests are all the
-// same length, whatever was presented.
+// its password. A request's credential is digested and compared with these,
+// not compared with the credential itself. subtle.ConstantTimeCompare
+// returns at once for slices of different lengths. So the speed of
+// comparing a presented password with the configured one showed whether
+// their lengths differed, and so revealed the configured password's length.
+// Digests all have the same length, whatever was presented.
 type WebAuthDigest struct {
 	Username, Password [sha256.Size]byte
 }

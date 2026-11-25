@@ -35,10 +35,10 @@ const (
 // Timestamp, when set, is in milliseconds since the Unix epoch.
 //
 // Created is when a counter, a histogram or a summary began to count, in
-// milliseconds since the Unix epoch, and 0 when that is not known. Only the
-// exporter's own series have it (exporter/selfcreated.go): what is read from
-// a target does not say when it started, so every series of a probe has 0,
-// which nothing is written for.
+// milliseconds since the Unix epoch. It is 0 when that is not known. Only the
+// exporter's own series have it (exporter/selfcreated.go). A target does not
+// say when its series started, so every series of a probe has 0, and nothing
+// is written for 0.
 type Metric struct {
 	Name      string            `json:"name"`
 	Help      string            `json:"help,omitempty"`
@@ -52,40 +52,39 @@ type Metric struct {
 }
 
 // Histogram is the value of a histogram series. NoSum and NoCount say that
-// the source it was read from gave no _sum or no _count sample, so that none
-// is written for it: a histogram made here, whose zero value has both, always
-// has them.
+// the source gave no _sum or no _count sample, so none is written for it. A
+// histogram made here always has both, because its zero value has both.
 //
 // A histogram's +Inf bucket counts every observation, as its _count does, so
-// the two are one number written twice, and a histogram holds each as its
-// source wrote it: the +Inf bucket among Buckets, the _count in Count. A
+// the two are the same number written twice. A histogram keeps each as its
+// source wrote it: the +Inf bucket in Buckets and the _count in Count. A
 // source may write only one of them, and the other is then read from it
-// (InfBucket, Settle). It may also write two that differ, as a target does
-// that counts an observation in its buckets and in its count without a lock
-// and is read between the two; both are then kept and written as they were
-// read, since nothing says which of them is right. And it may write neither,
-// which leaves a histogram without a +Inf bucket.
+// (InfBucket, Settle). It may write two that differ. This happens when a
+// target counts an observation in its buckets and in its count without a
+// lock and is read between the two. Both are then kept and written as read,
+// since nothing says which is right. It may also write neither, and the
+// histogram then has no +Inf bucket.
 type Histogram struct {
 	Buckets []Bucket
 	Sum     float64
 	Count   uint64
 	NoSum   bool
 	NoCount bool
-	// Exponential, when set, is the same observations in exponential
-	// buckets (exponential.go), which only the exporter's own durations
-	// have: it is written where a format can carry it, beside the classic
-	// buckets, and left out where not.
+	// Exponential, when set, holds the same observations in exponential
+	// buckets (exponential.go). Only the exporter's own durations have it.
+	// It is written beside the classic buckets where a format can carry it,
+	// and left out where not.
 	Exponential *ExponentialHistogram
 	// InfExemplar is the exemplar of the +Inf bucket, which Buckets has no
 	// place for when the bucket is written from the count; nil for none.
 	InfExemplar *Exemplar
 }
 
-// Exemplar is an observation of a histogram's bucket that stands for the
-// bucket: its value, when it was made, and the trace of the probe or the
-// scrape that made it. Only the exporter's own durations have them, of
-// traces that were exported, and only a format that can carry exemplars
-// writes them: OpenMetrics, protobuf and OTLP.
+// Exemplar is an observation that stands for a histogram's bucket. It holds
+// the value, when it was made, and the trace of the probe or scrape that made
+// it. Only the exporter's own durations have exemplars, and only for traces
+// that were exported. Only a format that can carry exemplars writes them:
+// OpenMetrics, protobuf and OTLP.
 type Exemplar struct {
 	// TraceID and SpanID are as OTLP/JSON writes them, 32 and 16 hex digits.
 	TraceID, SpanID string
@@ -93,11 +92,11 @@ type Exemplar struct {
 	Time            time.Time
 }
 
-// InfBucket is the count of the histogram's +Inf bucket, and whether it has
-// one: the bucket of that bound among Buckets, or, for a histogram without
-// one, its _count, which a +Inf bucket is then written from. A histogram with
-// neither has none. The +Inf bucket is nearly always the last, which is
-// looked at first.
+// InfBucket returns the count of the histogram's +Inf bucket and whether it
+// has one. This is the bucket with that bound in Buckets. A histogram without
+// such a bucket uses its _count, and the +Inf bucket is then written from it.
+// A histogram with neither has none. The +Inf bucket is nearly always the
+// last, so it is checked first.
 func (h *Histogram) InfBucket() (count uint64, ok bool) {
 	for i := len(h.Buckets) - 1; i >= 0; i-- {
 		if math.IsInf(h.Buckets[i].UpperBound, 1) {
@@ -108,12 +107,12 @@ func (h *Histogram) InfBucket() (count uint64, ok bool) {
 }
 
 // Settle checks a histogram read from a source and settles its count. Two
-// buckets with one upper bound, such as le="1" and le="1.0", are an error, as
-// two samples of one series are. Without a _count (NoCount) the count is the
-// +Inf bucket's, which counts every observation. A +Inf bucket and a _count
-// that differ are no error, and neither is a histogram without either
-// (Histogram): one such series must not fail a whole scrape. The error does
-// not name the series, which its caller knows.
+// buckets with the same upper bound, such as le="1" and le="1.0", are an
+// error, as two samples of one series are. Without a _count (NoCount), the
+// count is taken from the +Inf bucket, which counts every observation. A +Inf
+// bucket and a _count that differ are not an error, and neither is a
+// histogram with neither (Histogram), because one such series must not fail
+// a whole scrape. The error does not name the series; the caller knows it.
 func (h *Histogram) Settle() error {
 	if bound, duplicate := duplicateFloat(len(h.Buckets), func(i int) float64 { return h.Buckets[i].UpperBound }); duplicate {
 		return fmt.Errorf("has two buckets with the upper bound %s", formatBound(bound))
@@ -154,10 +153,10 @@ func (s *Summary) Settle() error {
 	return nil
 }
 
-// duplicateFloat reports a value that is twice among the n that at gives.
-// Two NaN count as the same value, since both are written as NaN. Values in
-// ascending order, as buckets and quantiles nearly always are written, hold
-// none, which one pass over them shows; only others are copied and sorted.
+// duplicateFloat reports a value that appears twice among the n values at
+// gives. Two NaN count as the same value, since both are written as NaN.
+// Ascending values, the usual order of buckets and quantiles, hold none, and
+// one pass shows it. Only values in another order are copied and sorted.
 func duplicateFloat(n int, at func(int) float64) (float64, bool) {
 	ascending := true
 	for i := 1; i < n && ascending; i++ {
@@ -192,9 +191,9 @@ type Quantile struct {
 type MetricSet struct{ Metrics []Metric }
 
 // ValidMetricName reports whether name is a classic Prometheus metric name,
-// matching [a-zA-Z_:][a-zA-Z0-9_:]*. It is checked for every series of every
-// scrape, so it is a loop over the bytes rather than a regular expression,
-// which cost a quarter of a large scrape's time.
+// matching [a-zA-Z_:][a-zA-Z0-9_:]*. It runs for every series of every
+// scrape, so it loops over the bytes instead of using a regular expression,
+// which took a quarter of a large scrape's time.
 func ValidMetricName(name string) bool { return classicName(name, true) }
 
 // ValidLabelName reports whether name is a classic Prometheus label name,
@@ -218,7 +217,7 @@ func classicName(name string, colon bool) bool {
 	return true
 }
 
-// ReservedLabelName reports whether name is one Prometheus keeps for itself:
+// ReservedLabelName reports whether name is reserved by Prometheus. This is
 // __name__, which holds the metric's name and which its parser refuses in
 // exposition, and every other name starting with __, which Prometheus drops
 // from a scraped series after relabelling.
@@ -257,23 +256,23 @@ func CheckLabelName(name string) error {
 	return nil
 }
 
-// seriesSet is the series of a set Validate has seen so far, which tells a
-// series seen twice. To Prometheus a series is its name and its labels, in
-// whatever order, and a label with an empty value is no label at all, so
+// seriesSet holds the series of a set that Validate has seen so far, to
+// detect a series seen twice. To Prometheus a series is its name and its
+// labels, in any order. A label with an empty value counts as no label, so
 // m{a=""} and m are one series.
 //
-// Validate looks at every series of every scrape, so seeing one is shaped to
-// cost little and to allocate nothing. A series is kept by a hash rather than
-// by a key written out: its name and the name and value of each label are
-// hashed where they lie, and the labels' hashes are added up, which comes to
-// the same sum in any order, so nothing is sorted and nothing copied. The
-// first series with a hash stands for it in byHash. A series whose hash is
-// taken is compared, label by label, with the one holding it, and only that
-// comparison says they are the same series: two different series with one
-// hash cost a comparison, and the second then goes into others, where the few
-// series that share a hash with a different, earlier one are kept in a list
-// and compared in turn. A hash therefore never makes a duplicate of two
-// different series, nor hides a real one.
+// Validate looks at every series of every scrape, so this is built to cost
+// little and allocate nothing. A series is stored by a hash, not by a key
+// written out. Its name and each label's name and value are hashed in place,
+// and the label hashes are summed. The sum is the same in any order, so
+// nothing is sorted or copied. The first series with a hash holds it in
+// byHash. A later series with that hash is compared, label by label, with
+// the one holding it, and only this comparison decides that they are the
+// same series. Two different series with one hash cost a comparison, and the
+// second then goes into others. That list holds the few series that share a
+// hash with a different, earlier one, and they are compared in turn. So a
+// hash never makes two different series a duplicate, and never hides a real
+// one.
 //
 // The hashes are seeded anew for every set, so a target cannot choose names
 // that share a hash and make the check slow.
@@ -329,10 +328,10 @@ func (s *seriesSet) add(i int) (duplicate, empty bool) {
 	return s.addHashed(i, labels)
 }
 
-// addHashed is add for a caller that went through the labels of metrics[i]
-// itself, as Validate does to check them, and added up the labelHash of each
-// one with a value: going through a map a second time costs more than the
-// hashing does.
+// addHashed is add for a caller that has already gone through the labels of
+// metrics[i], as Validate does to check them, and summed the labelHash of
+// each label with a value. Going through a map a second time costs more than
+// the hashing does.
 func (s *seriesSet) addHashed(i int, labels uint64) (duplicate, empty bool) {
 	binary.LittleEndian.PutUint64(s.digest[:8], maphash.String(s.seed, s.metrics[i].Name))
 	binary.LittleEndian.PutUint64(s.digest[8:], labels)
@@ -392,9 +391,9 @@ func sameSeries(a, b *Metric) (same, empty bool) {
 
 // MetricCountError is the error of a scrape with more series than
 // limits.max_metrics allows. The transforms and the prometheus decoder stop
-// making series at the first one past the limit, so count is then limit+1:
-// the scrape has at least that many, and how many more is not worth the
-// memory of finding out.
+// making series at the first one past the limit, so count is then limit+1.
+// The scrape has at least that many. Finding out how many more is not worth
+// the memory.
 func MetricCountError(count, limit int) error {
 	return MarkError(Errorf("metric count %d exceeds limit %d", Size(count), limit), ErrLimitExceeded)
 }
@@ -406,11 +405,11 @@ func (s *MetricSet) Validate(l Limits) error {
 	return s.ValidateNames(l, false)
 }
 
-// ValidateNames is Validate for a collector whose
-// metric_name_validation_scheme is utf8 when utf8Names is true: a metric or
-// label name is then any UTF-8 that is not blanks alone (UTF8Name), as
-// Prometheus 3 takes, and is escaped, if at all, when the answer is written,
-// as the scraper asks (exporter/nameescaping.go).
+// ValidateNames is Validate for a collector. When utf8Names is true, its
+// metric_name_validation_scheme is utf8: a metric or label name is then any
+// UTF-8 that is not only blanks (UTF8Name), as Prometheus 3 accepts. Such a
+// name is escaped, if at all, when the answer is written, as the scraper
+// asks (exporter/nameescaping.go).
 func (s *MetricSet) ValidateNames(l Limits, utf8Names bool) error {
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
 		return MetricCountError(len(s.Metrics), l.MaxMetrics)
@@ -472,9 +471,9 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet, utf8Names bool) error {
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
 			return Errorf("metric %q has %d labels, more than limits.max_labels_per_metric %d; drop labels it does not need or raise limits.max_labels_per_metric", shownName(m.Name), Size(len(m.Labels)), l.MaxLabelsPerMetric)
 		}
-		// le and quantile, which a histogram's buckets and a summary's
-		// quantiles carry, are label names as well: a limit under the
-		// longer, 8 bytes, is asked of them, and any other costs one
+		// le and quantile, the labels of a histogram's buckets and a
+		// summary's quantiles, are label names too. A limit under the longer
+		// one, 8 bytes, is checked against them. Any other limit costs one
 		// comparison.
 		if l.MaxLabelNameLength > 0 && l.MaxLabelNameLength < len("quantile") {
 			if own := seriesOwnLabel(m); len(own) > l.MaxLabelNameLength {
@@ -518,10 +517,10 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet, utf8Names bool) error {
 }
 
 // checkDerivedNames refuses a family named like a series of a histogram or a
-// summary: a histogram foo is written as foo_bucket, foo_sum and foo_count,
-// and a summary foo as foo, foo_sum and foo_count, so a gauge foo_count next
-// to either would be written as a second family of that name, of another
-// type, which Prometheus refuses.
+// summary. A histogram foo is written as foo_bucket, foo_sum and foo_count,
+// and a summary foo as foo, foo_sum and foo_count. A gauge foo_count next to
+// either would be written as a second family of that name with another type,
+// which Prometheus refuses.
 func checkDerivedNames(types map[string]MetricType) error {
 	names := make([]string, 0, len(types))
 	for name := range types {
@@ -546,9 +545,9 @@ func checkDerivedNames(types map[string]MetricType) error {
 }
 
 // Number reads a decoded value as a number: any numeric type, a string
-// holding one, or a boolean as 1 or 0. Its error names the value as a person
-// reads it (ShowValue), never in Go's syntax, which printed an object in full,
-// as map[a:[1 2]], into the logs and the scrape's error.
+// holding one, or a boolean as 1 or 0. Its error shows the value in readable
+// form (ShowValue), never in Go syntax. Go syntax printed a whole object,
+// such as map[a:[1 2]], into the logs and the scrape's error.
 func Number(v any) (float64, error) {
 	switch x := v.(type) {
 	case float64:
@@ -594,19 +593,19 @@ func parseNumber(text string) (float64, error) {
 	}
 }
 
-// ParseFloat reads the text of a value a response holds as a number, as
-// strconv.ParseFloat does, with its errors, but for the two forms that are
-// Go's way of writing a number and nobody else's: digits separated by
-// underscores, 1_000, and hexadecimal floating-point, 0x1p-2. Read as
-// numbers, a cell holding an identifier such as 1_000 was exported as 1000;
-// the Prometheus decoder refuses both forms as well (decode/promparse.go).
-// They are no numbers, with strconv.ErrSyntax, whether strconv would read
-// them or find them out of range.
+// ParseFloat reads the text of a value in a response as a number, as
+// strconv.ParseFloat does and with its errors. The exception is two forms
+// that only Go uses to write a number: digits separated by underscores,
+// 1_000, and hexadecimal floating-point, 0x1p-2. Read as numbers, a cell
+// holding an identifier such as 1_000 was exported as 1000. The Prometheus
+// decoder refuses both forms as well (decode/promparse.go). They are not
+// numbers and fail with strconv.ErrSyntax, whether strconv would read them
+// or find them out of range.
 //
-// A text strconv reads, or finds out of range, holds an underscore only as a
-// digit separator and an x only as the mark of a hexadecimal number, so
-// looking for the two letters is enough, and is all a number costs beyond
-// strconv's own reading.
+// In a text that strconv reads or finds out of range, an underscore can only
+// be a digit separator and an x only the mark of a hexadecimal number. So
+// looking for these two letters is enough, and it is the only cost beyond
+// strconv's own parsing.
 func ParseFloat(text string) (float64, error) {
 	f, err := strconv.ParseFloat(text, 64)
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
@@ -630,19 +629,18 @@ const maxQuotedValue = 64
 // limits.max_metric_name_length, so a name within that is quoted whole.
 const maxShownName = 200
 
-// shownName is a metric's or a label's name as the error of a set that
-// cannot be exposed quotes it with %q (Validate): the name itself when it is
-// no longer than maxShownName, which %q quotes whole as it always did, and
-// otherwise its first maxShownName bytes, at a character boundary, quoted,
-// with its length after the quotes, as Quoted shows a value. A name is the
-// target's or a script's to make as long as the response, and the error says
-// after it what is wrong with it and which limit to raise: `invalid metric
+// shownName returns a metric or label name as the error of a set that cannot
+// be exposed quotes it with %q (Validate). A name no longer than maxShownName
+// is the name itself, which %q quotes whole as before. A longer name is its
+// first maxShownName bytes, cut at a character boundary and quoted, followed
+// by its length, as Quoted shows a value. The target or a script can make a
+// name as long as the response, and the error says after it what is wrong
+// with it and which limit to raise: `invalid metric
 // name "..."... (10485561 bytes): longer than limits.max_metric_name_length
 // 200`.
 //
-// A name within the bound costs the error what it did: it is the string the
-// error was made of before, in the error fmt.Errorf made of it before
-// (nameErrorf).
+// A name within the bound costs the error the same as before: it is the
+// same string, in the same error fmt.Errorf made of it before (nameErrorf).
 func shownName(name string) any {
 	if len(name) <= maxShownName {
 		return name
@@ -651,19 +649,19 @@ func shownName(name string) any {
 	return shownStart(strconv.Quote(name[:head]), head, len(name))
 }
 
-// ShownName is a metric's or a label's name as a log line shows it in an
-// attribute: by the rule the error of a set that cannot be exposed quotes a
-// name by (shownName), so that one rule holds for a name wherever it is
-// shown, and without the quotes, which are the error's and which the value
-// of an attribute never had. It is the name itself, the very string, when
-// it is no longer than maxShownName, and otherwise its first maxShownName
-// bytes, at a character boundary, and its length (CutMark).
+// ShownName returns a metric or label name as a log line shows it in an
+// attribute. It follows the rule by which the error of a set that cannot be
+// exposed quotes a name (shownName), so one rule holds wherever a name is
+// shown. It has no quotes: they belong to the error, and an attribute value
+// never had them. A name no longer than maxShownName is returned as is, the
+// same string. A longer one is cut to its first maxShownName bytes, at a
+// character boundary, followed by its length (CutMark).
 //
-// A line may name a metric before the set is validated, as the warning of
-// repaired UTF-8 names the first metric repaired: the name is then as long
+// A line may name a metric before the set is validated, as the warning about
+// repaired UTF-8 names the first metric repaired. The name is then as long
 // as the target or a script made it, and not yet held to
-// limits.max_metric_name_length, which is a limit the operator may raise
-// besides. The cut name is made anew, and holds nothing of the name.
+// limits.max_metric_name_length, which the operator may raise anyway. The
+// cut name is newly made and holds nothing of the name.
 func ShownName(name string) string {
 	if len(name) <= maxShownName {
 		return name
@@ -671,12 +669,12 @@ func ShownName(name string) string {
 	return name[:HeadOf(name, maxShownName)] + CutMark(len(name), false)
 }
 
-// nameErrorf is fmt.Errorf for the error of a set that cannot be exposed
-// whose text quotes a name (shownName), and is the error fmt.Errorf makes
-// unless a name was cut: then it is the one Errorf makes, which reads the
-// same and is recognised with the mark in place of the name's length, so a
-// target whose over-long name grows from one scrape to the next fails the
-// same way to the log on each.
+// nameErrorf is fmt.Errorf for the error of a set that cannot be exposed,
+// when its text quotes a name (shownName). It returns the error fmt.Errorf
+// makes, unless a name was cut. Then it returns the error Errorf makes,
+// which reads the same but is recognised with the mark in place of the
+// name's length. So a target whose over-long name grows from one scrape to
+// the next fails the same way in the log on each.
 func nameErrorf(format string, args ...any) error {
 	for _, arg := range args {
 		if _, cut := arg.(QuotedValue); cut {
@@ -689,10 +687,10 @@ func nameErrorf(format string, args ...any) error {
 	return fmt.Errorf(format, args...)
 }
 
-// QuoteValue quotes text for an error message, cut to its first 64 bytes, at
-// a character boundary, when it is longer, with its full length after it. A
-// response that is not what a rule expected can be a whole page, which an
-// error, logged and returned to the scraper, should not carry.
+// QuoteValue quotes text for an error message. Longer text is cut to its
+// first 64 bytes, at a character boundary, and followed by its full length.
+// A response that does not match a rule can be a whole page, which an error
+// that is logged and returned to the scraper should not carry.
 func QuoteValue(text string) string {
 	if len(text) <= maxQuotedValue {
 		return strconv.Quote(text)
@@ -736,12 +734,12 @@ func counted(what string, n int, noun string) string {
 	return fmt.Sprintf("%s %d %s", what, n, noun)
 }
 
-// MaxWholeNumberDigits is the longest whole number read as a number, sign
-// included: a longer one is kept as its text, every digit of it. Reading
-// digits into a *big.Int takes time that grows with the square of their
-// number — a million of them, which a response within the default size limit
-// can hold, took two seconds that no deadline could interrupt — and no
-// identifier or count is thousands of digits long.
+// MaxWholeNumberDigits is the longest whole number, sign included, that is
+// read as a number. A longer one is kept as its text, with every digit.
+// Reading digits into a *big.Int takes time that grows with the square of
+// their count. A million digits, which fit within the default size limit,
+// took two seconds that no deadline could interrupt. No identifier or count
+// is thousands of digits long.
 const MaxWholeNumberDigits = 4096
 
 // WholeNumberText reports whether s is a whole number as JSON writes one:
@@ -762,17 +760,17 @@ func WholeNumberText(s string) bool {
 }
 
 // Normalize rewrites decoded JSON or YAML in place into the shapes the
-// transforms expect, all of which gojq, the jq and yq engine, handles: maps
-// keyed by string; a whole number as an int, or a *big.Int beyond int64, so
-// an ID of any length keeps every digit; any other json.Number as a float64,
-// or as its text when it is not one, or is a whole number of more digits
-// than MaxWholeNumberDigits; and a time.Time, which YAML makes of what reads
-// as a timestamp and gojq cannot handle, as RFC 3339 text.
+// transforms expect. gojq, the jq and yq engine, handles all of them: maps
+// keyed by string; a whole number as an int, or as a *big.Int beyond int64,
+// so an ID of any length keeps every digit; any other json.Number as a
+// float64, or as its text when it is not one or is a whole number of more
+// digits than MaxWholeNumberDigits; and a time.Time, which YAML makes of
+// what looks like a timestamp and gojq cannot handle, as RFC 3339 text.
 //
-// The json decoder makes these shapes itself as it reads a body, without a
-// second pass here (internal/decode/jsonvalue.go), and a test compares what
-// it makes with what Normalize makes of encoding/json's values: a change to
-// the rules for numbers here is a change to make there too.
+// The json decoder makes these shapes itself while it reads a body, without
+// a second pass here (internal/decode/jsonvalue.go). A test compares its
+// output with what Normalize makes of encoding/json's values. A change to
+// the number rules here must be made there too.
 func Normalize(v any) any {
 	switch x := v.(type) {
 	case map[any]any:
@@ -925,10 +923,10 @@ func SanitizeUTF8(set *MetricSet) (uint64, string) {
 	return changed, first
 }
 
-// labelFailure is why a label of a series cannot be exposed, nil when it can:
-// its name, one over limits.max_label_name_length, or a value over
-// limits.max_label_value_length. A name is held to its length after it is
-// found to be a name, as a metric's is.
+// labelFailure returns why a label of a series cannot be exposed, or nil
+// when it can: an invalid name, a name over limits.max_label_name_length, or
+// a value over limits.max_label_value_length. A name's length is checked
+// after it is found to be a valid name, as for a metric name.
 func labelFailure(m *Metric, k, v string, l *Limits, utf8Names bool) error {
 	if !takesName(k, false, utf8Names) {
 		if k != "" && utf8.ValidString(k) {
@@ -942,11 +940,10 @@ func labelFailure(m *Metric, k, v string, l *Limits, utf8Names bool) error {
 	if ReservedLabelName(k) {
 		return nameErrorf("metric %q has %s", shownName(m.Name), reservedLabelError(k))
 	}
-	// A histogram's buckets are told apart by le and a summary's
-	// quantiles by quantile. A series with that label of its own
-	// would be written with it on _sum and _count, which a parser
-	// reads as a bucket or a quantile without a bound, and twice on
-	// every bucket.
+	// A histogram's buckets are distinguished by le and a summary's
+	// quantiles by quantile. A series with its own label of that name
+	// would be written with it on _sum and _count, which a parser reads
+	// as a bucket or quantile without a bound, and twice on every bucket.
 	if own := seriesOwnLabel(m); k == own {
 		return nameErrorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", shownName(m.Name), m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
 	}
@@ -956,21 +953,21 @@ func labelFailure(m *Metric, k, v string, l *Limits, utf8Names bool) error {
 	return nil
 }
 
-// labelNameLengthError is the failure of a series with a label named k,
-// longer than limits.max_label_name_length, limit. The name is the target's
-// or a script's to make as long as the response, so it is shown as a
-// metric's name over its limit is: whole within 200 bytes, and past them by
-// its start and its length (shownName).
+// labelNameLengthError is the failure of a series with a label named k that
+// is longer than limits.max_label_name_length (limit). The target or a
+// script can make the name as long as the response, so it is shown like a
+// metric name over its limit: whole within 200 bytes, and beyond that by its
+// start and its length (shownName).
 func labelNameLengthError(m *Metric, k string, limit int) error {
 	return nameErrorf("metric %q label name %q is longer than limits.max_label_name_length %d; rename the label with transform.rename_labels, or raise limits.max_label_name_length", shownName(m.Name), shownName(k), limit)
 }
 
-// firstLabelFailure is the failure of the first label of a series that has
-// one, by the labels' names in order. The labels are a map, gone through in
-// no order: of two labels that fail, the one a scrape came to first would be
-// named, another on the next scrape, and the log would take each for a new
-// failure (SameFailureText). So once a label fails the labels are gone
-// through again in order, which a series that passes never comes to.
+// firstLabelFailure returns the failure of the first failing label of a
+// series, ordered by label name. The labels are a map, iterated in no fixed
+// order. If two labels fail, one scrape could name one and the next scrape
+// the other, and the log would take each for a new failure
+// (SameFailureText). So once a label fails, the labels are checked again in
+// order. A series that passes never reaches this step.
 func firstLabelFailure(m *Metric, l *Limits, utf8Names bool) error {
 	names := make([]string, 0, len(m.Labels))
 	for k := range m.Labels {

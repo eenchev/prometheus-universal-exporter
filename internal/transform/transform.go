@@ -29,13 +29,14 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Transform turns a decoded response into the collector's metrics, named as
-// they are exported: every transform's output passes through here, so the
-// collector's metrics_prefix is applied in exactly one place, before the limits
-// are checked, the set is cached, or it is written to /probe or OTLP.
+// Transform turns a decoded response into the collector's metrics, with the
+// names they are exported under. Every transform's output passes through
+// here, so the collector's metrics_prefix is applied in exactly one place:
+// before the limits are checked, the set is cached, or it is written to
+// /probe or OTLP.
 //
-// A collector whose label values hold {{param_...}} placeholders is read
-// with them filled in from the probe's parameters (labelparams.go).
+// If the collector's label values hold {{param_...}} placeholders, they are
+// filled in from the probe's parameters (labelparams.go).
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
 	c, err := withFilledLabels(ctx, c)
 	if err != nil {
@@ -49,11 +50,11 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	defer failures.finish(c, report)
 	ctx, cuts := withLabelCuts(ctx, c)
 	set, borrowed, err := transformMetrics(ctx, d, r, c, pythonPath)
-	// A rule that failed once the context was done did not fail for anything
-	// the response holds, and handleMetricError let none carry on, so what
-	// reads as that rule's failure is the transform's, with the context's
-	// error: the caller answers as it does a trip that ran out of time, and
-	// keeps nothing of it.
+	// A rule that failed after the context was done did not fail because of
+	// the response. handleMetricError lets no rule carry on in that case, so
+	// the failure belongs to the transform, with the context's error. The
+	// caller answers as it does for a trip that ran out of time, and keeps
+	// none of its output.
 	var failure *MetricFailure
 	if errors.As(err, &failure) && ctx.Err() != nil {
 		return nil, interruptedAt(ctx, failure.Metric)
@@ -61,15 +62,15 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	if err != nil || set == nil {
 		return set, err
 	}
-	// Invalid UTF-8 is repaired before anything measures or maps the text:
-	// a truncated label repaired afterwards would grow past the limit it was
-	// cut to, as each invalid byte becomes a three-byte U+FFFD.
+	// Invalid UTF-8 is repaired before anything measures or maps the text.
+	// A truncated label repaired afterwards would grow past the limit it was
+	// cut to, because each invalid byte becomes a three-byte U+FFFD.
 	//
 	// A pass-through's series are the decoded ones themselves
-	// (passesThrough), which are not this transform's to write to: they
-	// are only read to see whether any needs the repair, and copied first if
-	// one does, which is rare, so that the scrape that needs none pays for
-	// one pass over them and no copy.
+	// (passesThrough), and this transform must not write to them. They are
+	// only read to check whether any needs the repair, and copied first if
+	// one does. That is rare, so a scrape that needs no repair pays for one
+	// pass over them and no copy.
 	if borrowed && needsUTF8Repair(set) {
 		set.Metrics, borrowed = slices.Clone(set.Metrics), false
 	}
@@ -79,18 +80,18 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 			report.addUTF8(changed, first)
 		}
 	}
-	// Label value maps and truncation first, while the labels still have
-	// the names the rules gave them: rename_labels would otherwise move a
-	// label out from under its value_map or truncate: true. Truncation
-	// after the maps, for every kind of rule, so a value cut is not mapped
-	// long again (labelCuts).
+	// Label value maps and truncation run first, while the labels still have
+	// the names the rules gave them. Otherwise rename_labels could move a
+	// label away from its value_map or truncate: true. Truncation runs after
+	// the maps, for every kind of rule, so a cut value is not mapped back to
+	// a long one (labelCuts).
 	mapLabelValues(set, c)
 	truncateLabels(set, c)
 	cuts.apply(set, c.Limits.MaxLabelValueLength)
-	// Derived series are computed from the series as the rules made and
-	// mapped them, so their operands and by labels are written as the rules
-	// write their names, and they get the collector-wide labels, the prefix
-	// and the escaping below as every series does (derived.go).
+	// Derived series are computed from the series after the rules made and
+	// mapped them, so their operands and by labels use the names the rules
+	// write. Like every series, they get the collector-wide labels, the
+	// prefix and the escaping below (derived.go).
 	if err := deriveSeries(ctx, set, c); err != nil {
 		return nil, err
 	}
@@ -104,11 +105,11 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	return set, nil
 }
 
-// transformMetrics makes the collector's series of the decoded response.
-// borrowed says the set's series are the decoded ones themselves, in the
-// decoder's own slice, as a prometheus pass-through hands them on
-// (applyPrometheusTransform): the caller may read them and must not write to
-// them.
+// transformMetrics makes the collector's series from the decoded response.
+// borrowed reports that the set's series are the decoded ones themselves,
+// in the decoder's own slice, as a prometheus pass-through hands them on
+// (applyPrometheusTransform). The caller may read them but must not write
+// to them.
 func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (set *model.MetricSet, borrowed bool, err error) {
 	if strings.TrimSpace(c.Transform.PreScript) != "" {
 		processed, err := applyPreScript(ctx, d, r, c, pythonPath)
@@ -184,17 +185,17 @@ func needsUTF8Repair(set *model.MetricSet) bool {
 }
 
 // applyCollectorLabels applies the collector-wide label settings to every
-// metric, whatever the transform: transform.labels adds static labels,
-// remove_labels drops labels, and rename_labels renames them, in that order.
-// A transform.labels value of "" is the label left out, as a key written ""
-// is the key left out: it sets nothing, so a label of that name a rule gave
-// stays as it is, where a value that is not empty replaces it.
+// metric, whatever the transform. In order: transform.labels adds static
+// labels, remove_labels drops labels, and rename_labels renames them.
+// A transform.labels value of "" leaves the label out, just as a key written
+// "" does. It sets nothing, so a label of that name from a rule stays as it
+// is. A non-empty value replaces it.
 //
-// The renames are made at once, from the labels as they were before any of
-// them, so they never chain: with a to b and b to c, b gets a's value and c
-// gets b's, whatever order the map is walked in. Two renames to one label are
-// refused at load (CheckTransformSettings). Each metric gets a label map of
-// its own, so a transform's output never shares one with its input.
+// All renames are made at once, from the labels as they were before any
+// rename, so they never chain: with a to b and b to c, b gets a's value and
+// c gets b's, whatever order the map is walked in. Two renames to one label
+// are refused at load (CheckTransformSettings). Each metric gets its own
+// label map, so a transform's output never shares one with its input.
 func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 	if len(t.Labels) == 0 && len(t.RemoveLabels) == 0 && len(t.RenameLabels) == 0 {
 		return
@@ -226,37 +227,37 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 }
 
 // handleMetricError applies a rule's error mode and reports whether the scrape
-// should carry on without the metric. ignore carries on silently, log carries
-// on and says why, and fail says why and stops: the caller then returns the
-// failure wrapped by ruleFailure, and the scrape fails as a whole rather than
+// should carry on without the metric. ignore carries on silently. log carries
+// on and says why. fail says why and stops: the caller then returns the
+// failure wrapped by ruleFailure, and the whole scrape fails instead of
 // serving the metrics that did work.
 //
-// The collector is named alongside the rule because a metric name is not unique
-// across collectors, and without it a logged failure does not say which
-// collector to go and look at. The line reads the same for log and fail, so a
-// failing rule reads the same in the log whichever mode it has and whether it
-// failed on a probe or on a static target.
+// The log line names the collector as well as the rule, because a metric
+// name is not unique across collectors. Without it, a logged failure does not
+// say which collector to look at. The line is the same for log and fail, and
+// for a failure on a probe or on a static target.
 //
-// Under log, a rule can fail once per series — every row of a table, every item
-// — so within a Transform its failures are gathered (withRuleFailures) and the
-// rule is logged once when the scrape's transform ends, with the first error and
-// how many series failed. Without that gathering, as when called directly, the
-// line is written at once. The failures of ignore are gathered too, unlogged,
-// so the caller's RuleReport counts every series a rule could not produce.
+// Under log, a rule can fail once per series (every row of a table, every
+// item). So within a Transform its failures are gathered (withRuleFailures),
+// and the rule is logged once when the scrape's transform ends, with the
+// first error and the number of failed series. Without that gathering, as
+// when called directly, the line is written at once. Failures under ignore
+// are gathered too, without logging, so the caller's RuleReport counts every
+// series a rule could not produce.
 //
-// This logs through slog's default logger rather than one passed down: it is
-// called from inside the transforms, several frames below anything holding a
-// logger. The exporter installs its JSON logger as the process default at
-// startup so these lines match every other line it writes. A debug probe's
-// context carries its report's logger instead (WithRuleLogger). When the caller
-// logs the failures itself (LeaveRuleLoggingToCaller), as the exporter does,
-// nothing here does.
+// This logs through slog's default logger rather than a passed-in one,
+// because it is called from inside the transforms, several frames below
+// anything that holds a logger. The exporter installs its JSON logger as the
+// process default at startup, so these lines match every other line it
+// writes. A debug probe's context carries its report's logger instead
+// (WithRuleLogger). When the caller logs the failures itself
+// (LeaveRuleLoggingToCaller), as the exporter does, nothing is logged here.
 //
-// Once the context is done — the probe's deadline passed, or its caller went
-// away — no rule carries on, whatever its mode, and nothing is logged or
-// counted against it: the deadline is not the rule's failure, and a scrape
-// that went on would answer with whatever its rules made before it, as if
-// that were all the target had. The Transform then fails as a whole with the
+// Once the context is done (the probe's deadline passed, or its caller went
+// away), no rule carries on, whatever its mode, and nothing is logged or
+// counted against it. The deadline is not the rule's failure. A scrape that
+// went on would answer with whatever its rules made so far, as if that were
+// all the target had. The Transform then fails as a whole with the
 // context's error (interruptedAt).
 func handleMetricError(ctx context.Context, c *model.Collector, rule model.MetricRule, err error) bool {
 	if ctx.Err() != nil {
@@ -282,10 +283,10 @@ func handleMetricError(ctx context.Context, c *model.Collector, rule model.Metri
 	return false
 }
 
-// interruptedAt is the failure of a transform whose context is done, naming
-// the rule it was at, if it has a name, so a rule too slow for the probe's
-// budget can be found. It is the transform's failure and not the rule's
-// (MetricFailure): no error_mode applies to it.
+// interruptedAt is the failure of a transform whose context is done. It
+// names the rule the transform was at, if the rule has a name, so a rule too
+// slow for the probe's budget can be found. It is the transform's failure,
+// not the rule's (MetricFailure), so no error_mode applies to it.
 func interruptedAt(ctx context.Context, metric string) error {
 	if metric == "" {
 		return fmt.Errorf("the transform was stopped before it finished: %w", ctx.Err())
@@ -351,16 +352,16 @@ func (f *ruleFailures) add(rule model.MetricRule, err error, logged bool) {
 	f.addCounted(rule, err, 1, missing, logged)
 }
 
-// addCounted counts count failures of rule at once, missing of them missing
-// values and first the first, as a rule that held them back reports them
-// (heldFailures).
+// addCounted records count failures of rule at once: missing of them are
+// missing values, and first is the first failure, as a rule that held them
+// back reports them (heldFailures).
 //
-// Two rules alike in name, expression and items are one rule here, whatever
-// their error modes: it is logged when either has log, as the report has it
-// (RuleReport.add). So when a rule under log joins what a twin under ignore
-// gathered, the entry becomes that of the rule under log, with this failure
-// as the first to show; the mode of whichever twin failed first does not
-// decide for both.
+// Two rules with the same name, expression and items are one rule here,
+// whatever their error modes. It is logged when either has log, as in the
+// report (RuleReport.add). So when a rule under log joins failures that a
+// twin under ignore gathered, the entry becomes that of the rule under log,
+// with this failure shown as the first. The mode of whichever twin failed
+// first does not decide for both.
 func (f *ruleFailures) addCounted(rule model.MetricRule, first error, count, missing uint64, logged bool) {
 	for _, known := range f.rules {
 		if known.rule.Name == rule.Name && known.rule.Expression == rule.Expression && known.rule.Items == rule.Items {
@@ -384,10 +385,10 @@ func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 			logRuleFailure(f.ctx, c, failed.rule, failed.first, failed.count)
 		}
 		if report != nil {
-			// The first failure is kept by whoever reads the report, logged
-			// and remembered: it is no longer than a failure's text may be
-			// (model.BoundedFailure), once for the rule, however many of
-			// its series failed.
+			// The first failure is kept, logged and remembered by whoever reads
+			// the report. It is no longer than a failure's text may be
+			// (model.BoundedFailure), and appears once for the rule, however
+			// many of its series failed.
 			report.add(failed.rule.Name, failed.rule.Expression, failed.rule.Items, failed.count, failed.missing, model.BoundedFailure(failed.first), failed.logged)
 		}
 	}
@@ -396,10 +397,10 @@ func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 type callerLogsRulesKey struct{}
 
 // LeaveRuleLoggingToCaller returns a context whose Transforms log none of
-// their rules' failures: the caller logs those that carried on from its
+// their rules' failures. The caller logs the ones that carried on, from its
 // RuleReport, where it knows the target and can tell a repeat from a new
-// failure, and a rule under fail fails the Transform with an error that
-// names it, which the caller logs as the scrape's failure.
+// failure. A rule under fail fails the Transform with an error that names
+// it, and the caller logs that as the scrape's failure.
 func LeaveRuleLoggingToCaller(ctx context.Context) context.Context {
 	return context.WithValue(ctx, callerLogsRulesKey{}, true)
 }
@@ -421,10 +422,10 @@ func ruleLogger(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// RuleReport counts, for its caller, the series metric rules could not
-// produce and carried on without, under error_mode log or ignore, across the
-// Transforms made with its context (WithRuleReport). A rule that fails the
-// scrape is not in it: that failure is the Transform's error.
+// RuleReport counts, for its caller, the series that metric rules could not
+// produce and carried on without, under error_mode log or ignore. It covers
+// the Transforms made with its context (WithRuleReport). A rule that fails
+// the scrape is not in it: that failure is the Transform's error.
 type RuleReport struct {
 	mu       sync.Mutex
 	failures []RuleFailure
@@ -482,13 +483,13 @@ func (r *RuleReport) UTF8Repairs() (uint64, string) {
 }
 
 // RuleFailure is how many series of one rule failed, and how many of those
-// because the response did not contain the value.
+// failed because the response did not contain the value.
 //
-// A collector may have several rules of one metric name, one for each column
-// or path its series come from, and each fails for reasons of its own: so a
-// rule is told apart as the transform tells it apart while it gathers the
-// failures (ruleFailures), by its name, its expression and its items, and
-// each has an entry of its own. Two rules alike in all three are one rule.
+// A collector may have several rules with one metric name, one for each
+// column or path its series come from, and each fails for its own reasons.
+// So rules are told apart the same way the transform tells them apart while
+// it gathers the failures (ruleFailures): by name, expression and items.
+// Each has its own entry. Two rules alike in all three are one rule.
 type RuleFailure struct {
 	// Metric is the rule's name, empty for a prometheus rule without one.
 	Metric string
@@ -537,10 +538,10 @@ func (r *RuleReport) Failures() []RuleFailure {
 }
 
 // MetricFailure is a metric rule that could not produce its value and whose
-// error mode does not allow the scrape to carry on without it. It is its own
-// type so the probe handler can tell it apart from a failure of the transform
-// as a whole: the rule asked for the scrape to fail, and that request is not
-// something a collector-wide on_transform_error policy gets to overrule.
+// error mode does not allow the scrape to carry on without it. It is a
+// separate type so the probe handler can tell it apart from a failure of the
+// transform as a whole. The rule asked for the scrape to fail, and a
+// collector-wide on_transform_error policy may not overrule that request.
 type MetricFailure struct {
 	Collector string
 	Metric    string
@@ -585,10 +586,10 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 		return &decode.Decoded{Kind: "prometheus", Data: set, Raw: d.Raw}, nil
 	}
 	if d.Kind == "html" || d.Kind == "xml" {
-		// Markup is parsed again from the text the script left. A mapping
-		// or a list is no markup: rendered as Go writes it, it would parse
-		// into a document every rule then matches nothing in, and the
-		// mistake would read as a selector's.
+		// Markup is parsed again from the text the script left. A mapping or a
+		// list is not markup. Rendered as Go writes it, it would parse into a
+		// document in which every rule matches nothing, and the mistake would
+		// look like a selector's.
 		if _, ok := data.(string); !ok {
 			return nil, model.MarkError(fmt.Errorf("python pre-script of a %s transform must leave data as a string of %s, not %s; to hand the rules structured data, use a jq or yq transform, which reads a mapping or a list from a pre-script", c.Transform.Type, strings.ToUpper(d.Kind), pythonTypeName(data)), model.ErrScriptFailed)
 		}
@@ -662,32 +663,32 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 	return noSeriesIsNil(out), nil
 }
 
-// transformJQValues evaluates a rule without items: its expression is read
+// transformJQValues evaluates a rule without items. Its expression is read
 // against the whole document, and every value it gives is a series. Each
-// label expression is read against the whole document too, and its values
+// label expression is also read against the whole document, and its values
 // are paired with the series by position (jqLabel).
 //
-// The values are taken one at a time, as the program produces them, and a
-// series' labels are made when the series is, so a scrape past
-// limits.max_metrics stops at the first series too many, as one with items
-// does, rather than after collecting every value and a set of labels for
-// each.
+// Values are taken one at a time, as the program produces them, and a
+// series' labels are made together with the series. So a scrape past
+// limits.max_metrics stops at the first series too many, as a rule with
+// items does, instead of first collecting every value and its labels.
 //
-// What can go wrong is of two kinds, and which is reported is what it was
-// when every value and every label was read before the first series was
-// made. The rule fails as a whole when its expression fails anywhere among
-// its values, or a label cannot be read or paired (wholeProblem): no series
-// of it is exported, those made so far being dropped, and it is one
-// failure, the expression's or the label's. A single value fails — it is
-// missing, it is no number, its series lacks a required label — and the
-// rule carries on without that series under log and ignore. Taking the
-// values one at a time, a value that fails is met before it is known
-// whether the rule fails as a whole further on, so the failures of single
-// values are held until it is: when the rule fails as a whole they are not
-// counted beside it, and under fail the first of them is the scrape's
-// failure only when nothing fails the rule as a whole. Finding that out
-// reads the rest of what the expressions give, counting it, without keeping
-// any of it.
+// Failures are of two kinds. The one reported is the same as if every value
+// and every label had been read before the first series was made.
+//   - The rule fails as a whole when its expression fails at any of its
+//     values, or a label cannot be read or paired (wholeProblem). No series
+//     of it is exported (those made so far are dropped), and there is one
+//     failure: the expression's or the label's.
+//   - A single value fails: it is missing, it is not a number, or its series
+//     lacks a required label. Under log and ignore the rule carries on
+//     without that series.
+//
+// Because values are taken one at a time, a failing value is met before it
+// is known whether the rule fails as a whole later on. So single-value
+// failures are held until that is known. When the rule fails as a whole
+// they are not counted beside it. Under fail, the first of them is the
+// scrape's failure only when nothing fails the rule as a whole. Finding that
+// out reads and counts the rest of what the expressions give, keeping none.
 func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule model.MetricRule, c *model.Collector) error {
 	// fail applies the rule's error mode to err, which the scrape's failure
 	// words as failure: nil means carry on without the rule.
@@ -830,8 +831,8 @@ func transformJQValues(ctx context.Context, out *model.MetricSet, data any, rule
 }
 
 // heldFailures are the failures of single values of a rule without items
-// that carried on without them: the first, how many, and how many of them
-// were missing values, which is what a rule's failures are counted and
+// that the rule carried on without. It keeps the first, the count, and how
+// many were missing values, which is what a rule's failures are counted and
 // logged by.
 type heldFailures struct {
 	first          error
@@ -863,13 +864,14 @@ func (h *heldFailures) report(ctx context.Context, c *model.Collector, rule mode
 	}
 }
 
-// wholeProblem is what fails a rule without items as a whole, if anything
-// does, and which part of the rule it is the failure of: what was reported
-// when the expression and then each label were read to their end before
-// any series was made. That is, in this order, the expression failing at
-// any of its values, then the first label, as the rule lists them, that
-// fails at any of its values, gives another number of them than there are
-// series, or gives a value among them that is no label's.
+// wholeProblem is what fails a rule without items as a whole, if anything,
+// and part is which part of the rule failed. The result is what would be
+// reported if the expression and then each label were read to their end
+// before any series was made. In order, that is:
+//   - the expression failing at any of its values;
+//   - the first label, in the rule's order, that fails at any of its values,
+//     gives a different number of values than there are series, or gives a
+//     value that is not usable as a label.
 //
 // count is how many of the rule's values were taken so far. The rest of
 // them, and of each label's, are read here and counted, none kept.
@@ -887,12 +889,12 @@ func wholeProblem(values *jqValues, labels []jqLabel, count int) (part string, p
 }
 
 // jqLabel is a label of a jq rule without items. Its expression is read
-// against the whole document: no value leaves the label off every series,
-// one value applies to all of them, and several are paired with the series
-// by position, each taken as its series is reached. Any other count than one
-// per series means some values landed on the wrong series, so the metric
-// fails rather than be exported mislabelled; items evaluates labels per
-// element, which cannot drift.
+// against the whole document. No value leaves the label off every series.
+// One value applies to all of them. Several values are paired with the
+// series by position, each taken when its series is reached. Any other
+// count than one per series means some values landed on the wrong series,
+// so the metric fails instead of being exported mislabelled. items
+// evaluates labels per element, which cannot drift.
 type jqLabel struct {
 	name string
 	// text is the label's value on every series, when all has it: a static
@@ -905,10 +907,10 @@ type jqLabel struct {
 	values *jqValues
 	head   [2]any
 	taken  int
-	// failed is why the label cannot be read: its expression failed, or
-	// its one value is no label's. noText is the first of its paired
-	// values that is no label's, which fails the rule only if the label
-	// reads to its end and pairs (problem).
+	// failed is why the label cannot be read: its expression failed, or its
+	// one value is not usable as a label. noText is the first of its paired
+	// values that is not usable as a label. It fails the rule only if the
+	// label reads to its end and pairs (problem).
 	failed, noText error
 }
 
@@ -919,11 +921,11 @@ type jqPaired struct {
 	has  bool
 }
 
-// newJQLabels starts the labels of a rule, reading of each expression only
-// the two values that tell which kind it is. started is false when a label
-// could not be: it is the last of those returned, with why (failed), and
-// the labels after it are not read, since the rule fails of it or of one
-// before it (wholeProblem).
+// newJQLabels starts the labels of a rule. Of each expression it reads only
+// the two values that tell which kind of label it is. started is false when
+// a label could not be started. That label is the last one returned, with
+// the reason (failed). The labels after it are not read, since the rule
+// fails because of it or of one before it (wholeProblem).
 func newJQLabels(ctx context.Context, data any, rules []model.LabelRule) (labels []jqLabel, started bool) {
 	labels = make([]jqLabel, 0, len(rules))
 	for _, rule := range rules {
@@ -984,9 +986,9 @@ func (l *jqLabel) take() (value any, ok bool) {
 }
 
 // pair takes the label's value for the series at index, when its values are
-// paired by position. ok is false when the rule fails of the label: its
-// values have run out, its expression failed, or the value is no label's. A
-// label of one value, or none, has nothing to take.
+// paired by position. ok is false when the label fails the rule: its values
+// have run out, its expression failed, or the value is not usable as a
+// label. A label with one value, or none, has nothing to take.
 func (l *jqLabel) pair(index int) (paired jqPaired, ok bool) {
 	if l.values == nil {
 		return jqPaired{}, true
@@ -1003,11 +1005,11 @@ func (l *jqLabel) pair(index int) (paired jqPaired, ok bool) {
 	return jqPaired{text: text, has: true}, true
 }
 
-// problem is why the rule fails of this label, given how many series the
-// rule's values make, or nil: it reads the label's values to their end. An
-// expression that failed comes first, wherever it did, then a count that
-// does not pair, then the first value paired with a series that is no
-// label's. Without series there is nothing to pair or to label.
+// problem returns why this label fails the rule, given how many series the
+// rule's values make, or nil. It reads the label's values to their end. A
+// failed expression comes first, wherever it failed, then a count that does
+// not pair, then the first value paired with a series that is not usable
+// as a label. Without series there is nothing to pair or to label.
 func (l *jqLabel) problem(series int) error {
 	if l.failed != nil || l.values == nil {
 		return l.failed
@@ -1180,15 +1182,15 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 	return nil
 }
 
-// labelsFrom gives labels a label for each key of the object the rule's
-// labels_from expression reads of item: the key is the label's name and its
-// value, written as a label expression's is (labelText), the label's. A key
-// whose value is null or empty text leaves no label, and neither does an
-// expression that gives null or nothing. Anything else that is no object,
-// and a value that is an object or an array, is the item's failure. The
-// rule's own labels are read after these, so one of a key's name replaces
-// it. Without items the item is the whole document, and the labels are
-// those of every series of the rule.
+// labelsFrom adds to labels one label for each key of the object that the
+// rule's labels_from expression reads from item. The key is the label's
+// name, and its value, written as a label expression's is (labelText), is
+// the label's value. A key whose value is null or empty text adds no label,
+// and neither does an expression that gives null or nothing. Anything else
+// that is not an object, and a value that is an object or an array, is the
+// item's failure. The rule's own labels are read after these, so a rule
+// label with a key's name replaces it. Without items, the item is the whole
+// document, and the labels apply to every series of the rule.
 func labelsFrom(ctx context.Context, labels map[string]string, item, root any, expression string) error {
 	from, err := evaluateJQOne(ctx, item, root, expression)
 	if err != nil {
@@ -1244,12 +1246,12 @@ func jqKind(v any) string {
 }
 
 // evaluateJQ runs a compiled program with input as its input and root bound
-// to $root, collecting every value it produces. A field path, such as .id,
-// is looked up without running the program when it can be, with the value
-// gojq would give (expr.JQProgram.Lookup): it is what most expressions
-// evaluated per item are. The rules themselves evaluate with evaluateJQOne
-// and runJQ, which keep no list of the values; this is the evaluation both
-// are held to by their tests.
+// to $root, and collects every value it produces. A field path such as .id
+// is looked up without running the program when possible, giving the value
+// gojq would give (expr.JQProgram.Lookup). Most expressions evaluated per
+// item are field paths. The rules themselves evaluate with evaluateJQOne and
+// runJQ, which keep no list of values. Their tests hold both to the results
+// of this function.
 func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any, error) {
 	program, err := expr.CompileJQProgram(expression)
 	if err != nil {
@@ -1337,19 +1339,19 @@ func (v *jqValues) rest() int {
 }
 
 // responseVariablesKey holds the values of the jq variables after $root for
-// a response (expr.JQVariables), a *responseVariables: $status and
-// $headers, the response's status as a number and its headers as an object
-// of lower-case names, each with its values joined by ", ", as HTTP allows,
-// null when the response has none; and $timings, $tls, $url, $redirects,
-// $http_version and $remote_ip, null but for the request of an http or
-// graphite collector (fetch.HTTPTrip).
+// a response (expr.JQVariables), as a *responseVariables:
+//   - $status: the response's status as a number;
+//   - $headers: its headers as an object of lower-case names, each with its
+//     values joined by ", ", as HTTP allows; null when the response has none;
+//   - $timings, $tls, $url, $redirects, $http_version and $remote_ip: null
+//     except for the request of an http or graphite collector (fetch.HTTPTrip).
 type responseVariablesKey struct{}
 
-// responseVariables are the jq variables of a response. Those of its
-// request, the trip's, are made the first time a program that reads one
-// runs (expr.JQProgram.ReadsTrip), and kept for the rest: most collectors'
-// rules read none, and making $timings and $tls for every response cost
-// them maps they never read.
+// responseVariables are the jq variables of a response. The ones of its
+// request (the trip's) are made the first time a program that reads one
+// runs (expr.JQProgram.ReadsTrip), and kept after that. Most collectors'
+// rules read none of them, and making $timings and $tls for every response
+// cost them maps they never read.
 type responseVariables struct {
 	status, headers any
 	trip            *fetch.HTTPTrip
@@ -1377,10 +1379,10 @@ type scrapeClockKey struct{}
 type scrapeClock struct{ now, since time.Time }
 
 // WithScrapeClock returns a context whose Transform reads now as the time
-// its scrape began and since as the time the last successful scrape of the
-// same collector, target and parameters began, zero for none: $scrape_time
-// and $last_success in a jq or yq expression, scrape_time and last_success
-// in a Python script, each in seconds since the epoch.
+// its scrape began, and since as the time the last successful scrape of the
+// same collector, target and parameters began (zero for none). These are
+// $scrape_time and $last_success in a jq or yq expression, and scrape_time
+// and last_success in a Python script, each in seconds since the epoch.
 func WithScrapeClock(ctx context.Context, now, since time.Time) context.Context {
 	return context.WithValue(ctx, scrapeClockKey{}, scrapeClock{now: now, since: since})
 }
@@ -1468,10 +1470,10 @@ func runWithVariables(ctx context.Context, program *expr.JQProgram, input, root 
 }
 
 // evaluateJQOne runs a program that must produce at most one value; no value
-// is reported as nil. It is evaluateJQ without the list of values: an
+// is reported as nil. It is evaluateJQ without the list of values. An
 // expression evaluated once per item and label is nearly always a field
-// path, whose one value needs none, and of any other only the first value
-// and how many there were is kept.
+// path, whose single value needs no list. For any other expression, only the
+// first value and the number of values are kept.
 func evaluateJQOne(ctx context.Context, input, root any, expression string) (any, error) {
 	program, err := expr.CompileJQProgram(expression)
 	if err != nil {
@@ -1503,11 +1505,11 @@ func evaluateJQOne(ctx context.Context, input, root any, expression string) (any
 }
 
 // missingRequiredLabel finishes a series' labels. An expression label with an
-// empty value is left off, as one the expression gave no value for is: the two
-// are the same series to Prometheus, and OTLP should not tell them apart
-// either. It then reports the first label of rule marked required that the
-// series has no value for. The error is a missing value, so it is counted as
-// one and the rule's error_mode decides what happens to the series.
+// empty value is left off, the same as one the expression gave no value for.
+// The two are the same series to Prometheus, and OTLP should not tell them
+// apart either. It then reports the first label of rule marked required that
+// the series has no value for. The error is a missing value, so it is counted
+// as one, and the rule's error_mode decides what happens to the series.
 func missingRequiredLabel(rule model.MetricRule, labels map[string]string) error {
 	for _, label := range rule.Labels {
 		if !label.Static() && labels[label.Name] == "" {
@@ -1589,13 +1591,13 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 
 // regexMatches returns the matches of re in text one at a time, as
 // FindAllStringSubmatchIndex finds them, without finding them all at once
-// when the series budget is smaller: it asks for one more match than the
+// when the series budget is smaller. It asks for one more match than the
 // budget has room for, which is where the scrape fails if every match is a
-// series, and only when some were not — a blank capture, a value its rule
-// carried on without — for more, twice as many each time. regexp cannot
+// series. Only when some were not (a blank capture, a value its rule carried
+// on without) does it ask for more, twice as many each time. regexp cannot
 // resume a search where one stopped, since ^ and \b depend on the text
-// before it, so each call searches from the start, and doubling keeps that
-// to twice the work of one search. With the matches comes how many the first
+// before it, so each call searches from the start. Doubling keeps that to
+// twice the work of one search. It also returns how many matches the first
 // search found, which is all of them unless the budget cut it short.
 func regexMatches(ctx context.Context, re *regexp.Regexp, text string) (func() ([]int, bool), int) {
 	room := seriesRoom(ctx)
@@ -1619,10 +1621,10 @@ func regexMatches(ctx context.Context, re *regexp.Regexp, text string) (func() (
 	}, len(matches)
 }
 
-// regexValueName names the capture group that is a regex rule's value:
-// (?P<value>\d+). A value that stands after what a label reads is written
-// that way, the station at the start of a report's line before the
-// temperature near its end, where the first group would be the label's.
+// regexValueName names the capture group that holds a regex rule's value:
+// (?P<value>\d+). Use it when the value comes after the text a label reads,
+// such as a station at the start of a report's line and the temperature
+// near its end. There the first group would be the label's.
 const regexValueName = "value"
 
 // regexValueGroup is the number of the capture group that is the value of a
@@ -1653,10 +1655,10 @@ func labelCaptures(labels []model.LabelRule, names []string) []int {
 // regexValueGroup and captures its labelCaptures. An error is the scrape's
 // failure; a match the rule's error mode carries on without adds nothing.
 func regexSeries(ctx context.Context, out *model.MetricSet, text string, match []int, value int, captures []int, rule model.MetricRule, c *model.Collector) error {
-	// The capture group named value is the value, or else the first; the
-	// configuration refuses a regex without one. A group that took no part
-	// in the match, as an optional one can, or that captured only blanks, is
-	// a missing value like a match that never happened.
+	// The capture group named value is the value; without one, the first
+	// group is. The configuration refuses a regex without a group. A group
+	// that took no part in the match (as an optional one can) or that
+	// captured only blanks is a missing value, like a match that never happened.
 	start, end := match[2*value], match[2*value+1]
 	if start < 0 || isBlank(text[start:end]) {
 		if requiredRule(rule, c) {
@@ -1734,10 +1736,10 @@ type xpathNodes[N comparable] struct {
 	// navigate starts an evaluation at node, for an expression whose result
 	// is a number, a string or a boolean rather than nodes.
 	navigate func(node N) xpath.NodeNavigator
-	// parent, first and next are the links of the tree, and leaf is the
-	// text of a node that has text of its own rather than its children's:
-	// a text node's, and a comment's, which is none. They are what text
-	// reads, for selectedTexts to read the text of nested nodes once.
+	// parent, first and next are the tree's links. leaf is the text of a node
+	// that has its own text rather than its children's: a text node's text,
+	// and a comment's, which is none. text reads them, so that selectedTexts
+	// reads the text of nested nodes once.
 	parent, first, next func(node N) (N, bool)
 	leaf                func(node N) (string, bool)
 	// apart reports whether node's text is no part of the text of a node
@@ -1745,10 +1747,10 @@ type xpathNodes[N comparable] struct {
 	// (htmlText); nil where every node's is, which is XML.
 	apart func(node N) bool
 	// What a label read by walking the tree needs (fastXPathLabel), each as
-	// the engine's navigator of the document has it: whether node is an
-	// element, the one kind of node a walk starts from; the value of
-	// node's first attribute of a name without a prefix; its first child
-	// element of such a name; and its first child that text() selects.
+	// the engine's navigator of the document sees it: whether node is an
+	// element (the only kind of node a walk starts from); the value of node's
+	// first attribute with a given unprefixed name; its first child element
+	// with such a name; and its first child that text() selects.
 	element   func(node N) bool
 	attribute func(node N, name string) (string, bool)
 	child     func(node N, name string) (N, bool)
@@ -1766,13 +1768,13 @@ func linked[N comparable](node N) (N, bool) {
 }
 
 // xmlNavigator is where the XPath engine starts from for node. For an
-// attribute a rule selected, as `//@id` does, that is the attribute on its
-// element: xmlquery hands a selected attribute over as a node of its own,
-// from which its navigator cannot start — it panics, saying it does not know
-// the node's type — so the navigator starts on the element and is moved to
-// the attribute of that name and value. From there `.` is the attribute's
-// value, `name()` its name and `..` its element, as XPath has them, and
-// `text()` selects nothing: the label text() is given the value without the
+// attribute a rule selected, as `//@id` does, it starts at the attribute on
+// its element. xmlquery hands over a selected attribute as a separate node,
+// and its navigator cannot start from that node: it panics, saying it does
+// not know the node's type. So the navigator starts on the element and moves
+// to the attribute with that name and value. From there `.` is the
+// attribute's value, `name()` its name and `..` its element, as in XPath, and
+// `text()` selects nothing. The label text() is given the value without the
 // engine (xpathLabels).
 func xmlNavigator(node *xmlquery.Node) xpath.NodeNavigator {
 	if node.Type != xmlquery.AttributeNode || node.Parent == nil {
@@ -1875,12 +1877,12 @@ var xmlNodes = xpathNodes[*xmlquery.Node]{
 	},
 }
 
-// htmlAttribute is the value of node's attribute of a name as the document
-// writes it. The parser keeps an attribute's name whole, as its key, colon
-// and all, but for those HTML itself gives a namespace inside svg and math
-// — xlink:href, xml:lang, xmlns:xlink — which it splits into the two: they
-// are found by the name as written all the same. An attribute by its key
-// comes first, as it always was read.
+// htmlAttribute is the value of node's attribute with the given name, as
+// the document writes it. The parser keeps an attribute's whole name, colon
+// included, as its key. The exception is attributes that HTML itself gives
+// a namespace inside svg and math (xlink:href, xml:lang, xmlns:xlink), which
+// it splits in two. Those are still found by the name as written. An
+// attribute found by its key comes first, as it always did.
 func htmlAttribute(node *html.Node, name string) (string, bool) {
 	if node.Type != html.ElementNode {
 		return "", false
@@ -1901,14 +1903,14 @@ func htmlAttribute(node *html.Node, name string) (string, bool) {
 }
 
 // htmlSelected is the node an expression selected, where the engine stands
-// at it. An attribute, as `//td/@data-value` selects them, is a node made
-// for it as htmlquery makes one — an element by its type, named as the
-// attribute, which holds the value as its text — and has the element it is
-// an attribute of for its parent, which htmlquery's has not. Without the
-// parent nothing but its own value and name could be read from a selected
-// attribute: a label `../@data-server`, `../../@id` or `name(..)` was left
-// off every series of the rule, which were then duplicates of one, where
-// the same rule over XML told them apart.
+// at it. An attribute (as `//td/@data-value` selects) becomes a node made
+// the way htmlquery makes one: an element by type, named after the
+// attribute, holding the value as its text. Unlike htmlquery's node, it has
+// the attribute's element as its parent. Without the parent, nothing but its
+// own value and name could be read from a selected attribute. A label
+// `../@data-server`, `../../@id` or `name(..)` was then left off every
+// series of the rule, which became duplicates of one, while the same rule
+// over XML told them apart.
 func htmlSelected(at *htmlquery.NodeNavigator) *html.Node {
 	if at.NodeType() != xpath.AttributeNode {
 		return at.Current()
@@ -1917,21 +1919,21 @@ func htmlSelected(at *htmlquery.NodeNavigator) *html.Node {
 	return &html.Node{Parent: at.Current(), Type: html.ElementNode, Data: at.LocalName(), FirstChild: value, LastChild: value}
 }
 
-// selectedHTMLAttribute reports whether node is one htmlSelected made of an
-// attribute, and no element of the document: it has its element for a
-// parent and is no child of it, which no node of a parsed document is. A
-// node htmlquery made of an attribute, as the first node a label's
-// expression selects from an element is, has no parent and is read as the
-// element it looks like, for its text.
+// selectedHTMLAttribute reports whether node is one that htmlSelected made of
+// an attribute, and not an element of the document. Such a node has its
+// element as parent but is not a child of it, which no node of a parsed
+// document is. A node that htmlquery made of an attribute (as the first node
+// a label's expression selects from an element is) has no parent, and is
+// read as the element it looks like, for its text.
 func selectedHTMLAttribute(node *html.Node) bool {
 	return node.Type == html.ElementNode && node.Parent != nil && node.PrevSibling == nil && node.Parent.FirstChild != node
 }
 
 // htmlNavigator is where the XPath engine starts from for node, as
-// xmlNavigator is for XML: for an attribute a rule selected, the attribute
-// on its element, found by its name and value, from where `.` is the
-// attribute's value, `name()` its name and `..` its element, as XPath has
-// them. Any other node is started from as htmlquery starts.
+// xmlNavigator is for XML. For an attribute a rule selected, it starts at
+// the attribute on its element, found by name and value. From there `.` is
+// the attribute's value, `name()` its name and `..` its element, as in
+// XPath. Any other node is started from as htmlquery starts.
 func htmlNavigator(node *html.Node) xpath.NodeNavigator {
 	if !selectedHTMLAttribute(node) {
 		return htmlquery.CreateXPathNavigator(node)
@@ -1958,17 +1960,17 @@ func htmlTextApart(node *html.Node) bool {
 }
 
 // htmlText is the text of an HTML node as the css and xpath transforms read
-// it: that of every text node beneath it, comments left out, and without
-// what stands inside a script or a style element beneath it, which is code
-// and no content. goquery's Text and htmlquery's InnerText, which read it
-// before, took those in: a cell that held a number and an inline script was
-// "6var n = 6;", and no number. The node itself may be a script or a style,
-// or a text node inside one: a rule that selects one reads its text, the
-// JSON a page was rendered from or a figure in an inline script. A page
-// without a script or a style in what is read costs no more than it did:
-// one walk of what is beneath the node, and for an element that holds one
-// text node and nothing else, as the cell of a value or of a label nearly
-// always is, that text as it stands, without building the same string anew.
+// it: the text of every text node beneath it, without comments, and without
+// anything inside a script or style element beneath it, which is code and
+// not content. goquery's Text and htmlquery's InnerText, used before,
+// included those: a cell holding a number and an inline script read as
+// "6var n = 6;", which is not a number. The node itself may be a script or
+// a style, or a text node inside one. A rule that selects one reads its
+// text, such as the JSON a page was rendered from or a figure in an inline
+// script. A page without a script or style in the read part costs no more
+// than before: one walk of what is beneath the node. For an element that
+// holds one text node and nothing else, as a value or label cell nearly
+// always does, that text is used as is, without building the string anew.
 func htmlText(node *html.Node) string {
 	if only := node.FirstChild; only != nil && only.NextSibling == nil && only.Type == html.TextNode {
 		return only.Data
@@ -2050,11 +2052,11 @@ var htmlNodes = xpathNodes[*html.Node]{
 		return "", false
 	},
 	apart: htmlTextApart,
-	// A selected attribute is an element to the walks of fastXPathLabel, as
-	// it was while it had no parent: its text is its value, it has nothing
-	// beneath it but that, and its parent is its element, so each walk
-	// reads from it what the engine reads from the attribute, without the
-	// engine (TestXPathLabelFastPathsAgreeWithTheEngine).
+	// A selected attribute counts as an element to the walks of
+	// fastXPathLabel, as it did when it had no parent. Its text is its value,
+	// it has nothing beneath it but that, and its parent is its element. So
+	// each walk reads from it what the engine reads from the attribute,
+	// without the engine (TestXPathLabelFastPathsAgreeWithTheEngine).
 	element: func(node *html.Node) bool { return node.Type == html.ElementNode },
 	// htmlquery's navigator finds attributes on an element alone, by key,
 	// and knows no prefix or namespace of an attribute or an element.
@@ -2084,21 +2086,21 @@ var htmlNodes = xpathNodes[*html.Node]{
 }
 
 // selectedTexts gives the text of each node a rule selected. A node's text is
-// that of everything beneath it, so where the selected nodes nest, as with
-// //section over sections within sections, reading each on its own reads the
-// innermost once for every node around it: the square of the depth, for
-// nodes nested one in the next. So once a node is found to lie within the
-// one selected before it, as in document order the first nested node does,
-// the text of the outer one is read in a single walk that notes where each
-// selected node beneath it starts and ends, and theirs are parts of it.
+// that of everything beneath it. Where the selected nodes nest, as with
+// //section over sections within sections, reading each node on its own
+// reads the innermost once for every node around it: the square of the
+// depth, for nodes nested one in the next. So once a node is found inside the
+// node selected before it (in document order, the first nested node is), the
+// outer node's text is read in a single walk. That walk notes where each
+// selected node beneath it starts and ends, and their texts are parts of it.
 // Nodes that do not nest are read as before, each on its own.
 type selectedTexts[N comparable] struct {
 	nodes    xpathNodes[N]
 	selected []N
 	// last is the node selected before the one asked for, while no nesting
-	// has been found, and lastHolds says it has a node beneath it that
-	// could hold another: without one, as the element of a value has none,
-	// the next node is not asked where it lies.
+	// has been found. lastHolds reports that last has a node beneath it that
+	// could hold another. Without one (an element holding a value has none),
+	// the next node is not checked for where it lies.
 	last      N
 	hasLast   bool
 	lastHolds bool
@@ -2154,10 +2156,10 @@ func (s *selectedTexts[N]) within(node, ancestor N) bool {
 	return false
 }
 
-// walk reads the text of top, itself selected, and of every selected node
-// beneath it, in one pass over what is beneath it. A node whose text is no
-// part of the text around it (xpathNodes.apart) is passed over with all that
-// is selected within it, which text then reads each on its own.
+// walk reads the text of top, which is itself selected, and of every
+// selected node beneath it, in one pass. A node whose text is not part of
+// the text around it (xpathNodes.apart) is skipped with everything selected
+// within it, and text then reads each of those on its own.
 func (s *selectedTexts[N]) walk(top N) {
 	type span struct{ at, start, end int }
 	var text strings.Builder
@@ -2191,22 +2193,22 @@ func transformXPath(ctx context.Context, root *xmlquery.Node, rules []model.Metr
 }
 
 // transformHTMLXPath runs XPath over the document the html decoder already
-// parsed: goquery and htmlquery both build it with html.Parse, so the
+// parsed. goquery and htmlquery both build it with html.Parse, so the
 // document's root node is what htmlquery would have parsed from the body,
-// but for the content of its templates (decode.ParseHTML).
+// except for the content of its templates (decode.ParseHTML).
 func transformHTMLXPath(ctx context.Context, doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	return transformXPathNodes(ctx, doc.Nodes[0], htmlNodes, rules, c, nil)
 }
 
 // transformXPathNodes evaluates each rule's expression against the document
 // and makes a series of every node it selects. An expression that computes a
-// value rather than selecting nodes — count(//job), sum(//size),
-// string(/status/@load), a comparison — makes one series of that value, a
-// boolean as 1 or 0. A label is a constant, an attribute of the node (@name),
-// the text of the first node an expression relative to it selects, or the
-// value an expression relative to it computes, as normalize-space(@name).
-// xpathValue evaluates e at node when it computes a value — a number, a
-// string or a boolean — rather than selecting nodes, which computed says.
+// value instead of selecting nodes (count(//job), sum(//size),
+// string(/status/@load), a comparison) makes one series of that value, with
+// a boolean as 1 or 0. A label is a constant, an attribute of the node
+// (@name), the text of the first node a relative expression selects, or the
+// value a relative expression computes, as normalize-space(@name).
+// xpathValue evaluates e at node when e computes a value (a number, a string
+// or a boolean) instead of selecting nodes; computed reports which.
 func xpathValue[N comparable](nodes xpathNodes[N], node N, e *xpath.Expr) (value any, computed bool) {
 	switch result := e.Evaluate(nodes.navigate(node)).(type) {
 	case float64, string, bool:
@@ -2215,10 +2217,10 @@ func xpathValue[N comparable](nodes xpathNodes[N], node N, e *xpath.Expr) (value
 	return nil, false
 }
 
-// xpathText is a computed value as label text: a number as a jq or yq label
-// writes it (labelNumber), so that count(//item) * 2000000 is 4000000 and not
-// Go's shortest 4e+06, and the same number reads the same whichever language
-// computed it; a boolean as true or false.
+// xpathText is a computed value as label text. A number is written as a jq
+// or yq label writes it (labelNumber): count(//item) * 2000000 is 4000000,
+// not Go's shortest 4e+06, so the same number reads the same whichever
+// language computed it. A boolean is true or false.
 func xpathText(value any) string {
 	switch v := value.(type) {
 	case float64:
@@ -2232,9 +2234,9 @@ func xpathText(value any) string {
 }
 
 // addComputedXPathSeries makes the one series of a rule whose expression
-// computes a value. A number that is not one — number() of text, NaN — and
-// an empty or non-numeric string are the rule's missing value, as is a sum()
-// over text that is no number, which never comes here (xpathSumRule).
+// computes a value. A number that is not one (number() of text, NaN) and an
+// empty or non-numeric string are the rule's missing value. So is a sum()
+// over text that is not a number, which never comes here (xpathSumRule).
 func addComputedXPathSeries[N comparable](ctx context.Context, out *model.MetricSet, nodes xpathNodes[N], root N, rule model.MetricRule, c *model.Collector, plan []xpathLabel, value any) error {
 	var number float64
 	var problem error
@@ -2315,13 +2317,13 @@ func transformXPathNodes[N comparable](ctx context.Context, root N, nodes xpathN
 	return noSeriesIsNil(out), nil
 }
 
-// xpathRule adds the series of one rule, whose compiled expression and
-// labels' plan it is given, to out. An error is the scrape's failure; a
-// series the rule's error mode carries on without is left out. A failure
-// names the metric first, and the node it belongs to by its place among the
-// nodes the rule selected, from 0, as a css rule's names its item. sums are
-// the calls of sum() the exporter reads the nodes of (xpathsum.go), nil for
-// an expression without one.
+// xpathRule adds to out the series of one rule, given its compiled
+// expression and its labels' plan. An error is the scrape's failure. A
+// series that the rule's error mode carries on without is left out. A
+// failure names the metric first, then the node by its position among the
+// nodes the rule selected, from 0, as a css rule names its item. sums are
+// the sum() calls whose nodes the exporter reads (xpathsum.go), nil for an
+// expression without one.
 func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, nodes xpathNodes[N], rule model.MetricRule, c *model.Collector, plan []xpathLabel, expression *xpath.Expr, sums *expr.XPathSums) error {
 	if sums != nil {
 		if done, err := xpathSumRule(ctx, out, nodes, root, rule, c, plan, sums); done {
@@ -2498,13 +2500,13 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 }
 
 // cssHistogram counts in its histogram the values of a histogram rule
-// without items: the whole text of each element its selector matched, which
-// a rule of another type refuses more than one of, since nothing would tell
-// their series apart. A histogram's values need nothing to tell them apart,
-// and its labels are static, as every css rule's without items are. An
-// element without a value is a missing value, and one that is no number a
-// value that fails, each handled by required and error_mode, the rule
-// carrying on with the other elements under log and ignore.
+// without items: the whole text of each element its selector matched. A
+// rule of another type refuses more than one such element, since nothing
+// would tell their series apart. A histogram's values need nothing to tell
+// them apart, and its labels are static, as for every css rule without
+// items. An element without a value is a missing value, and one that is not
+// a number is a failing value. Each is handled by required and error_mode,
+// and under log and ignore the rule carries on with the other elements.
 func cssHistogram(ctx context.Context, out *model.MetricSet, elements []*html.Node, rule model.MetricRule, c *model.Collector) error {
 	if len(elements) == 0 {
 		return emptyHistogram(ctx, out, &rule)
@@ -2685,19 +2687,19 @@ type cssWithin struct {
 	first []*html.Node
 }
 
-// cssWithinItems finds what selector matches within every item in one walk
+// cssWithinItems finds what selector matches within every item, in one walk
 // of the items' subtrees. Matching item by item walked each item's subtree
-// on its own: items nested in one another, divs or list entries hundreds
-// deep, were walked once for every item around them, and the matches each
-// found were copied out, which cost the depth times the body. Whether a node
+// separately. Items nested in one another (divs or list entries hundreds
+// deep) were walked once for every item around them, and each walk's matches
+// were copied out, which cost the depth times the body. Whether a node
 // matches a selector depends on the node and the document around it, never
-// on the item it is looked for in, so each node is matched once here, and
+// on the item it is looked for in. So each node is matched once here, and
 // what lies within an item is the run of matches found while its subtree is
 // walked. items are in document order, as a selection from the document
-// holds them, so the walk meets the items nested in the one it walks in that
-// order. As goquery does, an item's candidates are its element children and
-// everything beneath them: a text node directly under an item is none of
-// that item's, but is one of every item around it.
+// holds them, so the walk meets nested items in that order. As in goquery,
+// an item's candidates are its element children and everything beneath
+// them. A text node directly under an item is not one of that item's, but
+// is one of every item around it.
 func cssWithinItems(items []*html.Node, selector goquery.Matcher) *cssWithin {
 	w := &cssWithinWalk{
 		items:    items,
@@ -2805,9 +2807,9 @@ func (v csvRowView) cell(column string) (csvValue, bool) {
 }
 
 // csvValue is a cell: text, as the csv decoder reads every cell, or a value
-// of any type a pre-script left. Text is kept as text, and read as the
-// other transforms read text (ruleTextValue), so that reading a cell does
-// not copy its string's header to the heap as a value of any type.
+// of any type that a pre-script left. Text is kept as text and read the way
+// the other transforms read text (ruleTextValue). That way, reading a cell
+// does not copy its string's header to the heap as a value of any type.
 type csvValue struct {
 	value  any
 	text   string
@@ -2842,13 +2844,14 @@ func (v csvValue) label() (string, error) {
 }
 
 // csvNotRows is the failure of a csv transform that was given something
-// other than rows, which says what it was given and by whom. The csv decoder
-// gives rows whatever the body holds, and a response another decoder read is
-// refused before it gets here (validateTransformInput), so on a scrape it is
-// a pre-script that left something else in data: the message said `CSV
-// transform requires a header-based CSV response`, which blamed the response.
-// It is the script's failure then, and marked as one, as what a pre-script
-// of a css or xpath transform leaves that is no markup is (applyPreScript).
+// other than rows. It says what it was given and by whom. The csv decoder
+// gives rows whatever the body holds, and a response read by another decoder
+// is refused before it gets here (validateTransformInput). So on a scrape
+// the cause is a pre-script that left something else in data. The message
+// said `CSV transform requires a header-based CSV response`, which blamed
+// the response. It is marked as the script's failure, as is what a
+// pre-script of a css or xpath transform leaves that is not markup
+// (applyPreScript).
 func csvNotRows(c *model.Collector, data any) error {
 	if strings.TrimSpace(c.Transform.PreScript) != "" {
 		return model.MarkError(fmt.Errorf("python pre-script of a csv transform left data as %s; it must leave a list of rows, each row a dict by column name or a list by column number", showScriptValue(data)), model.ErrScriptFailed)
@@ -2856,10 +2859,10 @@ func csvNotRows(c *model.Collector, data any) error {
 	return fmt.Errorf("csv transform reads the rows the csv decoder gives, and the decoded response is %s; set decoder.type to csv", model.ShowValue(data))
 }
 
-// csvNotARow is the failure of a csv transform at a row, counted from 1,
-// that is neither a dict nor a list, as a pre-script may leave one: every
-// column of it was missing, as if the response lacked them. A pre-script's
-// is marked as the script's failure, as csvNotRows' is.
+// csvNotARow is the failure of a csv transform at a row (counted from 1)
+// that is neither a dict nor a list, as a pre-script may leave. Every
+// column of such a row was missing, as if the response lacked them. A
+// pre-script's row is marked as the script's failure, as in csvNotRows.
 func csvNotARow(c *model.Collector, number int, row any) error {
 	if strings.TrimSpace(c.Transform.PreScript) != "" {
 		return model.MarkError(model.Errorf("python pre-script of a csv transform left row %d as %s; a row must be a dict by column name or a list by column number", model.Position(number), showScriptValue(row)), model.ErrScriptFailed)
@@ -2870,17 +2873,18 @@ func csvNotARow(c *model.Collector, number int, row any) error {
 // csvColumnsShown is how many of a response's column names an error lists.
 const csvColumnsShown = 12
 
-// csvColumns answers whether the rows of one response have a column, which
-// tells a column the response does not have from a cell that is empty: the
-// first is a rule that names what is not there, a header in another case or
-// split by another delimiter, and reads the same on every scrape; the second
-// is the data's. A response has a column when any row of it does: with a
-// header row every row has every column the header names, the ones a short
-// row lacks being empty in it; without one, a row has the columns up to its
-// own length; and the rows a pre-script left have the keys it gave each.
+// csvColumns answers whether the rows of one response have a column. This
+// tells a column the response does not have apart from an empty cell. The
+// first is a rule naming something that is not there (a header in another
+// case, or split by another delimiter) and reads the same on every scrape.
+// The second comes from the data. A response has a column when any row has
+// it. With a header row, every row has every column the header names, and a
+// short row has the ones it lacks as empty. Without one, a row has the
+// columns up to its own length. Rows a pre-script left have the keys it
+// gave each.
 //
-// Nothing is looked for until a row lacks a column a rule names, and then
-// the rows are gone through once for that column and the answer kept.
+// Nothing is looked for until a row lacks a column a rule names. Then the
+// rows are gone through once for that column and the answer is kept.
 type csvColumns struct {
 	rows []any
 	// table is the rows the csv decoder gave, which rows then is not.
@@ -2893,10 +2897,10 @@ type csvColumns struct {
 	// absent the error of each that it does not have.
 	has    map[string]bool
 	absent map[string]csvAbsentColumn
-	// shown is what the response's columns are, as an error says it, made
-	// when one first does, of names, the names of the rows read by name, in
-	// order, and numbered, what the rows read by number have; listed says
-	// those two were gathered.
+	// shown is the response's columns as an error states them. It is made
+	// when an error first needs it, from the names (of the rows read by name,
+	// in order) and the numbers (what the rows read by number have). listed
+	// reports that those two were gathered.
 	shown    string
 	names    []string
 	numbered string
@@ -2955,15 +2959,14 @@ func (k *csvColumns) notInResponse(column string) csvAbsentColumn {
 	return absent
 }
 
-// describe says which columns the rows have, to a rule that asked for
-// column: the names of rows read by name, the first csvColumnsShown of them,
-// and how many columns the longest of the rows read by number has. The
-// names are in order, but for those that are column except for the case of
-// their letters or the blanks around them, which come first: the list is
-// cut, and in a wide table the name that says what is wrong — used, to a
-// rule that names Used — would be among those left out. The rows are gone
-// through once, and the text of a column that has no such name is made
-// once.
+// describe says which columns the rows have, for a rule that asked for
+// column: the names of rows read by name (the first csvColumnsShown of
+// them), and how many columns the longest row read by number has. The names
+// are in order, except that names equal to column apart from letter case or
+// surrounding blanks come first. The list is cut, and in a wide table the
+// name that shows what is wrong (used, for a rule that names Used) could be
+// among those left out. The rows are gone through once, and the text of a
+// column without such a name is made once.
 func (k *csvColumns) describe(column string) string {
 	if !k.listed {
 		named, longest := map[string]struct{}{}, 0
@@ -3083,88 +3086,19 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 		count = table.Len()
 	}
 	out := &model.MetricSet{}
-	// A response without a row has no value for any rule, as a regex that
-	// matched no text has none, and a jq items expression that selected
-	// nothing: a required rule is missing its value, and its error mode
-	// decides, rather than the scrape passing with nothing.
 	if count == 0 {
-		for _, rule := range rules {
-			// No rows is an empty list to a histogram rule, which it
-			// counts as nothing.
-			if rule.Histogram != nil {
-				if err := emptyHistogram(ctx, out, &rule); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if !requiredRule(rule, c) {
-				continue
-			}
-			missing := model.MarkError(fmt.Errorf("CSV column %q is missing: the response has no rows", rule.Expression), model.ErrMissingValue)
-			if handleMetricError(ctx, c, rule, missing) {
-				continue
-			}
-			return nil, ruleFailure(c, rule, missing)
+		if err := csvWithoutRows(ctx, out, rules, c); err != nil {
+			return nil, err
 		}
 	}
-	// Room for a series of every row for each rule whose column the response
-	// has, which the first row tells of rows read by header name.
-	//
-	// The rows are read one after another, each by every rule, so what fails
-	// first, what is logged and where the series limit stops are as the rows'
-	// order makes them. The series are kept rule by rule, though, each rule's
-	// together in the order of the rows: the exposition formats want a
-	// metric's series together, and a set that has them apart costs the
-	// writer a second pass on every probe (appendMetricSet in
-	// internal/exporter). So with several rules each rule with a column has a
-	// part of the room, as long as the rows are many, one part after another
-	// in the rules' order: next[r] is where rule r's next series goes and
-	// ends[r] where its part ends. The parts are closed up afterwards over
-	// what the rows left empty. Without room for the parts within the series
-	// limit there are none, and a rule without a part, whose column only a
-	// later row has, as a pre-script may leave them, adds its series after
-	// the parts; both leave the series in the order of the rows, as one rule
-	// has them anyway.
-	var next, ends []int
-	parts := 0
+	var parts csvParts
 	if count > 0 {
-		columns := len(rules)
-		first, named := csvRowView{table: table}, decoded && table.Named()
+		first := csvRowView{table: table}
+		named := decoded && table.Named()
 		if !decoded {
 			first.m, named = rows[0].(map[string]any)
 		}
-		if named {
-			columns = 0
-			for i := range rules {
-				if _, exists := first.cell(rules[i].Expression); exists {
-					columns++
-				}
-			}
-		}
-		// A histogram rule makes a series of each set of labels, not of
-		// each row, and has no part: its series are added after the parts.
-		for i := range rules {
-			if rules[i].Histogram != nil {
-				if _, exists := first.cell(rules[i].Expression); exists || !named {
-					columns--
-				}
-			}
-		}
-		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= count*columns) {
-			parts = count * columns
-			out.Metrics = make([]model.Metric, parts)
-			next, ends = make([]int, len(rules)), make([]int, len(rules))
-			at := 0
-			for i := range rules {
-				next[i] = at
-				if _, exists := first.cell(rules[i].Expression); (exists || !named) && rules[i].Histogram == nil {
-					at += count
-				}
-				ends[i] = at
-			}
-		} else {
-			out.Metrics = growSeries(ctx, out.Metrics, count*columns)
-		}
+		parts = makeCSVParts(ctx, out, rules, first, named, count)
 	}
 	responseColumns := csvColumns{rows: rows, table: table, columns: columns}
 	// unreadable is the rules that have failed for a label whose column the
@@ -3180,113 +3114,224 @@ func transformCSVColumns(ctx context.Context, data any, columns []string, rules 
 				return nil, csvNotARow(c, at+1, rows[at])
 			}
 		}
-		for r, rule := range rules {
+		for r := range rules {
 			if unreadable != nil && unreadable[r] {
 				continue
 			}
-			value, exists := row.cell(rule.Expression)
-			if !exists || value.blank() {
-				if requiredRule(rule, c) {
-					// A column no row has, or a cell that is empty in this
-					// row, the header's line not counted among the rows.
-					var missing error
-					if !exists && !responseColumns.inResponse(rule.Expression) {
-						missing = responseColumns.notInResponse(rule.Expression).missing
-					} else {
-						missing = model.MarkError(model.Errorf("CSV column %q is empty in row %d", rule.Expression, model.Position(at+1)), model.ErrMissingValue)
-					}
-					if handleMetricError(ctx, c, rule, missing) {
-						continue
-					}
-					return nil, ruleFailure(c, rule, missing)
+			series, made, labelUnreadable, err := csvCellSeries(ctx, out, row, at, &rules[r], c, &responseColumns)
+			if labelUnreadable {
+				if unreadable == nil {
+					unreadable = make([]bool, len(rules))
 				}
-				continue
+				unreadable[r] = true
 			}
-			n, err := value.number(rule)
 			if err != nil {
-				if handleMetricError(ctx, c, rule, err) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
-			}
-			labels := make(map[string]string, len(rule.Labels))
-			var labelErr error
-			for _, label := range rule.Labels {
-				if label.Static() {
-					labels[label.Name] = label.Value
-				} else if labelValue, exists := row.cell(label.Expression); exists && !labelValue.none() {
-					// A pre-script may leave numbers and None in a row:
-					// a number is written as the other transforms write
-					// one, and None leaves the label out.
-					text, err := labelValue.label()
-					if err != nil {
-						labelErr = fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
-						break
-					}
-					labels[label.Name] = text
-				} else if !exists && !responseColumns.inResponse(label.Expression) {
-					// A column no row has is the rule's failure, once for
-					// the response, as a label that cannot be read is in
-					// the xpath transform (unreadableXPathLabel), and not a
-					// label left off every series without a word. A cell
-					// that is empty leaves the label off.
-					labelErr = fmt.Errorf("metric %q label %q: %w", rule.Name, label.Name, responseColumns.notInResponse(label.Expression).err)
-					if unreadable == nil {
-						unreadable = make([]bool, len(rules))
-					}
-					unreadable[r] = true
-					break
-				}
-			}
-			if labelErr != nil {
-				if handleMetricError(ctx, c, rule, labelErr) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, labelErr)
-			}
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(ctx, c, rule, missing) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, missing)
-			}
-			if rule.Histogram != nil {
-				if err := observeValue(ctx, out, &rule, n, labels); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if err := takeSeries(ctx); err != nil {
 				return nil, err
 			}
-			series := model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels}
-			if parts > 0 && next[r] < ends[r] {
-				out.Metrics[next[r]] = series
-				next[r]++
-				continue
+			if made && !parts.place(out, r, series) {
+				out.Metrics = append(out.Metrics, series)
 			}
-			out.Metrics = append(out.Metrics, series)
 		}
 	}
-	if parts > 0 {
-		// Each part's series moved down to where the part before it ended,
-		// then the series added after the parts, and what is left over
-		// cleared, so that it keeps no labels alive.
-		filled, start := 0, 0
-		for r := range next {
-			if filled != start {
-				copy(out.Metrics[filled:], out.Metrics[start:next[r]])
-			}
-			filled += next[r] - start
-			start = ends[r]
-		}
-		if filled < parts {
-			filled += copy(out.Metrics[filled:], out.Metrics[parts:])
-			clear(out.Metrics[filled:])
-			out.Metrics = out.Metrics[:filled]
-		}
-	}
+	parts.close(out)
 	return noSeriesIsNil(out), nil
+}
+
+// csvWithoutRows applies rules to a response without rows. It has no value
+// for any rule, like a regex that matched no text or a jq items expression
+// that selected nothing. A required rule is missing its value, and its error
+// mode decides, instead of the scrape passing with nothing.
+func csvWithoutRows(ctx context.Context, out *model.MetricSet, rules []model.MetricRule, c *model.Collector) error {
+	for _, rule := range rules {
+		// No rows is an empty list to a histogram rule, which it counts as
+		// nothing.
+		if rule.Histogram != nil {
+			if err := emptyHistogram(ctx, out, &rule); err != nil {
+				return err
+			}
+			continue
+		}
+		if !requiredRule(rule, c) {
+			continue
+		}
+		missing := model.MarkError(fmt.Errorf("CSV column %q is missing: the response has no rows", rule.Expression), model.ErrMissingValue)
+		if handleMetricError(ctx, c, rule, missing) {
+			continue
+		}
+		return ruleFailure(c, rule, missing)
+	}
+	return nil
+}
+
+// csvParts is the room made for the series of a csv response, rule by rule.
+//
+// The rows are read one after another, each by every rule, so the row order
+// decides what fails first, what is logged and where the series limit stops.
+// The series are kept rule by rule, though, each rule's in row order: the
+// exposition formats want a metric's series together, and a set that has
+// them apart costs the writer a second pass on every probe (appendMetricSet
+// in internal/exporter). So with several rules, each rule with a column gets
+// a part of the room, as long as the rows are many, one part after another
+// in rule order. next[r] is where rule r's next series goes, and ends[r] is
+// where its part ends. Afterwards the parts are closed up over what the rows
+// left empty. If the parts do not fit within the series limit, there are
+// none. A rule without a part, whose column only a later row has (as a
+// pre-script may leave them), adds its series after the parts. Both cases
+// leave the series in row order, as a single rule has them anyway.
+type csvParts struct {
+	next, ends []int
+	// size is the room the parts take, 0 when there are none.
+	size int
+}
+
+// makeCSVParts makes room in out for a series of every row for each rule
+// whose column the response has. For rows read by header name (named), the
+// first row tells which.
+func makeCSVParts(ctx context.Context, out *model.MetricSet, rules []model.MetricRule, first csvRowView, named bool, count int) csvParts {
+	columns := len(rules)
+	if named {
+		columns = 0
+		for i := range rules {
+			if _, exists := first.cell(rules[i].Expression); exists {
+				columns++
+			}
+		}
+	}
+	// A histogram rule makes a series of each set of labels, not of each
+	// row, and has no part: its series are added after the parts.
+	for i := range rules {
+		if rules[i].Histogram != nil {
+			if _, exists := first.cell(rules[i].Expression); exists || !named {
+				columns--
+			}
+		}
+	}
+	room := seriesRoom(ctx)
+	if len(rules) <= 1 || columns <= 0 || (room >= 0 && room < count*columns) {
+		out.Metrics = growSeries(ctx, out.Metrics, count*columns)
+		return csvParts{}
+	}
+	p := csvParts{size: count * columns, next: make([]int, len(rules)), ends: make([]int, len(rules))}
+	out.Metrics = make([]model.Metric, p.size)
+	at := 0
+	for i := range rules {
+		p.next[i] = at
+		if _, exists := first.cell(rules[i].Expression); (exists || !named) && rules[i].Histogram == nil {
+			at += count
+		}
+		p.ends[i] = at
+	}
+	return p
+}
+
+// place puts series in rule r's part, and says whether it had room there.
+func (p *csvParts) place(out *model.MetricSet, r int, series model.Metric) bool {
+	if p.size == 0 || p.next[r] >= p.ends[r] {
+		return false
+	}
+	out.Metrics[p.next[r]] = series
+	p.next[r]++
+	return true
+}
+
+// close closes the parts up: each part's series move down to where the part
+// before it ended, then the series added after the parts, and what is left
+// over is cleared, so that it keeps no labels alive.
+func (p *csvParts) close(out *model.MetricSet) {
+	if p.size == 0 {
+		return
+	}
+	filled, start := 0, 0
+	for r := range p.next {
+		if filled != start {
+			copy(out.Metrics[filled:], out.Metrics[start:p.next[r]])
+		}
+		filled += p.next[r] - start
+		start = p.ends[r]
+	}
+	if filled < p.size {
+		filled += copy(out.Metrics[filled:], out.Metrics[p.size:])
+		clear(out.Metrics[filled:])
+		out.Metrics = out.Metrics[:filled]
+	}
+}
+
+// csvCellSeries is what rule makes of the row at index at: its series, when
+// made says it makes one. It makes none for a cell it may leave empty, or
+// as a histogram rule, whose value it observes. Its error fails the
+// transform.
+// labelUnreadable says the rule failed for a label whose column the response
+// does not have, which fails once and makes no more series.
+func csvCellSeries(ctx context.Context, out *model.MetricSet, row csvRowView, at int, rule *model.MetricRule, c *model.Collector, responseColumns *csvColumns) (series model.Metric, made, labelUnreadable bool, err error) {
+	value, exists := row.cell(rule.Expression)
+	if !exists || value.blank() {
+		if !requiredRule(*rule, c) {
+			return model.Metric{}, false, false, nil
+		}
+		// A column no row has, or a cell that is empty in this row, the
+		// header's line not counted among the rows.
+		var missing error
+		if !exists && !responseColumns.inResponse(rule.Expression) {
+			missing = responseColumns.notInResponse(rule.Expression).missing
+		} else {
+			missing = model.MarkError(model.Errorf("CSV column %q is empty in row %d", rule.Expression, model.Position(at+1)), model.ErrMissingValue)
+		}
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, missing, missing)
+	}
+	n, err := value.number(*rule)
+	if err != nil {
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, err, fmt.Errorf("metric %q: %w", rule.Name, err))
+	}
+	labels, labelUnreadable, labelErr := csvRowLabels(row, rule, responseColumns)
+	if labelErr != nil {
+		return model.Metric{}, false, labelUnreadable, csvRuleError(ctx, c, rule, labelErr, labelErr)
+	}
+	if missing := missingRequiredLabel(*rule, labels); missing != nil {
+		return model.Metric{}, false, false, csvRuleError(ctx, c, rule, missing, missing)
+	}
+	if rule.Histogram != nil {
+		return model.Metric{}, false, false, observeValue(ctx, out, rule, n, labels)
+	}
+	if err := takeSeries(ctx); err != nil {
+		return model.Metric{}, false, false, err
+	}
+	return model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels}, true, false, nil
+}
+
+// csvRuleError is nil when rule's error mode carries on past err, and
+// otherwise the rule's failure with failure.
+func csvRuleError(ctx context.Context, c *model.Collector, rule *model.MetricRule, err, failure error) error {
+	if handleMetricError(ctx, c, *rule, err) {
+		return nil
+	}
+	return ruleFailure(c, *rule, failure)
+}
+
+// csvRowLabels are the labels rule gives its series of row. labelUnreadable
+// says a label's column is not in the response.
+func csvRowLabels(row csvRowView, rule *model.MetricRule, responseColumns *csvColumns) (labels map[string]string, labelUnreadable bool, err error) {
+	labels = make(map[string]string, len(rule.Labels))
+	for _, label := range rule.Labels {
+		if label.Static() {
+			labels[label.Name] = label.Value
+		} else if labelValue, exists := row.cell(label.Expression); exists && !labelValue.none() {
+			// A pre-script may leave numbers and None in a row: a number is
+			// written as the other transforms write one, and None leaves the
+			// label out.
+			text, err := labelValue.label()
+			if err != nil {
+				return nil, false, fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
+			}
+			labels[label.Name] = text
+		} else if !exists && !responseColumns.inResponse(label.Expression) {
+			// A column no row has is the rule's failure, once for the
+			// response, as an unreadable label is in the xpath transform
+			// (unreadableXPathLabel). It is not a label silently left off
+			// every series. An empty cell leaves the label off.
+			return nil, true, fmt.Errorf("metric %q label %q: %w", rule.Name, label.Name, responseColumns.notInResponse(label.Expression).err)
+		}
+	}
+	return labels, false, nil
 }
 
 // prometheusRuleUnmatched words the missing value of a prometheus rule that
@@ -3411,10 +3456,10 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 					} else if value, ok := metric.Labels[label.Expression]; ok {
 						metric.Labels[label.Name] = value
 					}
-					// A rule without a name keeps each series' own, which
-					// truncateLabels cannot look it up by, so its labels are
-					// cut here; but one a value map maps is cut once mapped,
-					// whatever the rule (labelCuts).
+					// A rule without a name keeps each series' own name, which
+					// truncateLabels cannot look it up by, so its labels are cut
+					// here. But a label that a value map maps is cut after it is
+					// mapped, whatever the rule (labelCuts).
 					if label.Truncate && c.Limits.MaxLabelValueLength > 0 && !cuts.later(metric.Name, label.Name) {
 						if value, ok := metric.Labels[label.Name]; ok {
 							setTruncated(metric.Labels, label.Name, value, c.Limits.MaxLabelValueLength)
@@ -3438,10 +3483,10 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 				out.Metrics = append(out.Metrics, metric)
 			}
 		}
-		// A rule no series' name matched has no value, as a regex that
-		// matched no text has none: a required rule is missing its value,
-		// and its error mode decides, rather than the scrape passing
-		// without the metric it was written for.
+		// A rule that matched no series' name has no value, like a regex that
+		// matched no text. A required rule is missing its value, and its error
+		// mode decides, instead of the scrape passing without the metric it
+		// was written for.
 		for i, rule := range rules {
 			if patterns[i] == nil || matched[i] || !requiredRule(rule, c) {
 				continue
@@ -3516,12 +3561,13 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 }
 
 // passesThrough reports whether Transform leaves the series of a
-// prometheus pass-through as they were decoded, so that they need no copy:
-// nothing it applies to a transform's output writes to them. A prefix and an
-// escaped name change a series' name, and transform.labels, remove_labels and
-// rename_labels give it another label map; label value maps and truncation
-// belong to rules, which a pass-through has none of; and a repair of invalid
-// UTF-8, which only reading the series tells, Transform makes in a copy.
+// prometheus pass-through as they were decoded, so they need no copy:
+// nothing Transform applies to a transform's output writes to them. A
+// prefix and an escaped name change a series' name. transform.labels,
+// remove_labels and rename_labels give it another label map. Label value
+// maps and truncation belong to rules, and a pass-through has none. A
+// repair of invalid UTF-8, which only reading the series reveals,
+// Transform makes in a copy.
 func passesThrough(c *model.Collector) bool {
 	t := c.Transform
 	return c.MetricsPrefix == "" &&

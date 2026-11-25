@@ -15,20 +15,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A rule's value_map, and a label's, may be long, and the same for many
-// rules: the states of a device by their numbers, the names of customers by
-// their IDs. value_map_file names a file that holds such a map, a YAML or
-// JSON mapping, read when the configuration loads and joined with the
-// value_map written beside it, whose entries win. From there on the rule is
-// as if the whole map were written in it: the checks of a value_map are
-// those of the map read, the series a rule gives are known by it, and a
-// file that changes is another definition of its collector, since the map
-// is part of it. The watch looks at the files (namedFiles), so an edit
-// reloads the configuration.
+// A rule's value_map, or a label's, may be long and shared by many rules:
+// the states of a device by their numbers, the names of customers by their
+// IDs. value_map_file names a file that holds such a map as a YAML or JSON
+// mapping. The file is read when the configuration loads and joined with
+// the value_map written beside it, whose entries win. From then on the rule
+// behaves as if the whole map were written in it:
+//   - the checks of a value_map apply to the map read;
+//   - the series a rule gives are known by it;
+//   - a changed file is another definition of its collector, since the map
+//     is part of it.
 //
-// A configuration loaded without the files it names, as the target
-// allocator loads one, keeps the key and reads nothing: the replicas, which
-// mount the file, read it when they load the bundle.
+// The watch looks at the files (namedFiles), so an edit reloads the
+// configuration. A configuration loaded without the files it names, as the
+// target allocator loads one, keeps the key and reads nothing. The replicas
+// mount the file and read it when they load the bundle.
 
 const (
 	// maxValueMapFileBytes and maxValueMapFileEntries bound a value map
@@ -55,10 +56,9 @@ func valueMapFiles(x *model.Collector) []string {
 	return files
 }
 
-// readValueMapFiles reads the value_map_file of each rule of x and of each
-// of its labels into the value_map beside it, an entry written there
-// keeping its value. A file read once is read once for all the rules that
-// name it.
+// readValueMapFiles reads the value_map_file of each rule of x, and of each
+// of its labels, into the value_map beside it. An entry written there keeps
+// its value. A file is read once for all the rules that name it.
 func readValueMapFiles(x *model.Collector) error {
 	read := map[string]map[string]string{}
 	file := func(where, path string) (map[string]string, error) {
@@ -159,10 +159,10 @@ func checkValueMapFileKey(path string) error {
 	return nil
 }
 
-// readValueMapFile reads the map of the file at path: a YAML or JSON
-// mapping of text, numbers and booleans to the same, each as it is written.
-// What is wrong with a file is said without what it holds, but for a key:
-// a path may name any file the exporter can read.
+// readValueMapFile reads the map in the file at path: a YAML or JSON mapping
+// of text, numbers and booleans to the same, each as written. Errors about a
+// file do not show its contents, except for a key, because a path may name
+// any file the exporter can read.
 func readValueMapFile(path string) (map[string]string, error) {
 	f, err := os.Open(path) // #nosec G304 -- the configuration names the file, as it names its other files
 	if err != nil {

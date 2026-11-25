@@ -26,10 +26,11 @@ type DiscoveryConfig struct {
 	HTTPSD     *HTTPSDConfig     `yaml:"http_sd"`
 	Kubernetes *KubernetesConfig `yaml:"kubernetes"`
 	DNSSD      *DNSSDConfig      `yaml:"dns_sd"`
-	// Labels sets a label of each discovered target to the value of one
-	// of the source's own labels, keyed by the label set: a meta label
-	// such as __meta_kubernetes_namespace, which would otherwise not reach
-	// a static target, or a group label under another name.
+	// Labels sets a label of each discovered target to the value of one of
+	// the source's own labels, keyed by the label set. The source label can
+	// be a meta label such as __meta_kubernetes_namespace, which would
+	// otherwise not reach a static target, or a group label under another
+	// name.
 	Labels map[string]string `yaml:"labels"`
 	// MaxTargets bounds the targets one answer may hold; an answer with
 	// more is refused as a failure. 0 takes --discovery.max-targets.
@@ -75,10 +76,10 @@ type KubernetesConfig struct {
 	Port string `yaml:"port"`
 	// IncludeNotReady takes the endpoints that are not ready too.
 	IncludeNotReady bool `yaml:"include_not_ready"`
-	// AddressType is the addressType of the EndpointSlices taken: IPv4,
-	// the default, IPv6, or any, which takes FQDN slices too. A dual-stack
-	// Service has a slice of each family, so taking both would give each
-	// pod twice.
+	// AddressType is the addressType of the EndpointSlices taken: IPv4 (the
+	// default), IPv6, or any, which takes FQDN slices too. A dual-stack
+	// Service has a slice of each family, so taking both would give each pod
+	// twice.
 	AddressType     string         `yaml:"address_type"`
 	RefreshInterval model.Duration `yaml:"refresh_interval"`
 	Timeout         model.Duration `yaml:"timeout"`
@@ -129,17 +130,17 @@ const (
 	// shortest --discovery.refresh-interval.
 	MinDiscoveryRefresh = time.Second
 	// MaxDiscoveryRefresh is the longest --discovery.refresh-interval, and
-	// MaxWatchInterval the longest --config.watch-interval: a day is longer
-	// than anyone waits for a change, and bounding them gives the chart a
+	// MaxWatchInterval the longest --config.watch-interval. A day is longer
+	// than anyone waits for a change. Bounding them also gives the chart a
 	// bound to check, so a value no duration holds fails rendering rather
 	// than the allocator's start.
 	MaxDiscoveryRefresh = 24 * time.Hour
 	MaxWatchInterval    = 24 * time.Hour
 	// MaxSettle is the longest --settle. The targets of a replica that
 	// stopped without a word stay with it, unscraped, until the settle time
-	// has passed after its member TTL, so an hour is the most worth waiting
-	// for it to come back; like the two above, the bound gives the chart
-	// one to check.
+	// has passed after its member TTL. So an hour is the most worth waiting
+	// for it to come back. Like the two above, the bound gives the chart one
+	// to check.
 	MaxSettle = time.Hour
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
 	// a page of a Kubernetes listing.
@@ -174,10 +175,10 @@ func (d *DiscoveryConfig) kind() string {
 	return ""
 }
 
-// refresh is how often the source is asked again: its refresh_interval,
-// or for a source that sets none --discovery.refresh-interval
-// (defaultRefresh), or, without that, its kind's own default: 1m for
-// file_sd and http_sd, 30s for kubernetes and dns_sd.
+// refresh is how often the source is asked again: its refresh_interval. For
+// a source that sets none, it is --discovery.refresh-interval
+// (defaultRefresh), or, without that, its kind's own default: 1m for file_sd
+// and http_sd, 30s for kubernetes and dns_sd.
 func (d *DiscoveryConfig) refresh() time.Duration {
 	var set model.Duration
 	var def time.Duration
@@ -229,10 +230,10 @@ func (d *DiscoveryConfig) refreshText() string {
 // target) or Prometheus's, and static_target the static targets endpoint's.
 var reservedTargetLabels = map[string]bool{"job": true, "instance": true, "static_target": true}
 
-// checkDiscovery checks a discovery list, filling each source's name and
-// the refresh_interval of a source that sets none, defaultRefresh, 0 for
-// its kind's own. base is the directory of the file it is in, against
-// which a relative path is taken; each path is rewritten so.
+// checkDiscovery checks a discovery list. It fills in each source's name,
+// and the refresh_interval of a source that sets none with defaultRefresh
+// (0 for its kind's own). base is the directory of the file the list is in.
+// A relative path is taken against it, and each path is rewritten so.
 func checkDiscovery(list []DiscoveryConfig, base string, defaultRefresh time.Duration) error {
 	names := map[string]bool{}
 	for i := range list {
@@ -416,9 +417,9 @@ func (n *DNSSDConfig) check(refresh time.Duration, refreshText string) error {
 }
 
 // dnsSDName reads a name of dns_sd.names: a DNS name, such as
-// _metrics._tcp.example.com, in lower case without a trailing dot, so that
-// a name written twice in two spellings is told, and every replica asks for
-// and labels its targets with the same one.
+// _metrics._tcp.example.com, in lower case without a trailing dot. So a
+// name written twice in two spellings is told, and every replica asks for
+// the same name and labels its targets with it.
 func dnsSDName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" {
@@ -464,10 +465,11 @@ func (k *KubernetesConfig) takes(addressType string) bool {
 }
 
 // timeout is how long one ask of the source may take: its timeout, or
-// when that is unset DefaultDiscoveryTimeout, cut to its refresh_interval
-// when that is shorter, so an ask never outlasts the interval to the next
-// one. Only a timeout written longer than the interval is refused, as a
-// mistake; a short interval alone needs no timeout written beside it.
+// DefaultDiscoveryTimeout when that is unset. It is cut to its
+// refresh_interval when that is shorter, so an ask never outlasts the
+// interval to the next one. Only a timeout written longer than the interval
+// is refused, as a mistake. A short interval alone needs no timeout written
+// beside it.
 func (d *DiscoveryConfig) timeout() time.Duration {
 	var set model.Duration
 	switch {
@@ -515,9 +517,9 @@ var (
 )
 
 // checkLabelSelector refuses a label selector the API server would refuse,
-// so the mistake is told at load rather than at every listing: a comma
-// separated list of key, !key, key=value, key==value, key!=value,
-// key in (values) and key notin (values).
+// so the mistake is told at load rather than at every listing. A selector
+// is a comma separated list of key, !key, key=value, key==value,
+// key!=value, key in (values) and key notin (values).
 func checkLabelSelector(selector string) error {
 	if strings.TrimSpace(selector) == "" {
 		return nil

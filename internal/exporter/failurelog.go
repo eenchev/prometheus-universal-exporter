@@ -13,22 +13,22 @@ import (
 )
 
 // A target that is down fails every probe. The self-metrics count every
-// failure exactly; the log is for learning that something broke, what broke,
-// and when it recovered, without one line per scrape interval, per
-// Prometheus replica, per target.
+// failure exactly. The log is for learning that something broke, what broke,
+// and when it recovered, without one line per scrape interval, per Prometheus
+// replica, per target.
 //
-// A failure is therefore logged in full the first time. While the same thing
-// keeps failing the same way (the same collector, target, file of a
-// directory, stage and error), the repeats are logged at debug level only,
-// and at the failure's own level once every failureRepeatInterval, with the
-// count since the last line and the time since it started. A different stage
-// or error is a new failure, logged in full. The first success after a
-// failure is logged at info level, with how long and how often it failed.
-// With --log.level=debug every repeat is still visible.
+// So a failure is logged in full the first time. While the same thing keeps
+// failing the same way (the same collector, target, file of a directory,
+// stage and error), the repeats are logged at debug level only. Once every
+// failureRepeatInterval a repeat is logged at the failure's own level, with
+// the count since the last line and the time since the failure started. A
+// different stage or error is a new failure, logged in full. The first
+// success after a failure is logged at info level, with how long and how
+// often it failed. With --log.level=debug every repeat is still visible.
 //
-// The same error means the same failure, not the same text: the position in
+// The same error means the same failure, not the same text. The position in
 // the response and measured values are ignored in the comparison
-// (model.SameFailureText), so an empty cell in row 3 and then in row 7, or a
+// (model.SameFailureText). So an empty cell in row 3 and then in row 7, or a
 // label of 612 bytes and then 640, is one ongoing failure. The full text is
 // logged each time.
 
@@ -47,15 +47,15 @@ const (
 type failureState struct {
 	// key is the key the failure is remembered under, for a scrape that
 	// finds a rule's failure without making the rule's key (rememberedRule,
-	// ruleFailedFor), with whose the failure is, as the trip that reported
-	// it said: what a reload goes by when it forgets the failures of a
-	// collector or of a static target (forgetCollectorsLocked,
+	// ruleFailedFor). It also says whose failure it is, as the trip that
+	// reported it said. A reload goes by that when it forgets the failures of
+	// a collector or of a static target (forgetCollectorsLocked,
 	// forgetStaticTargetsLocked).
 	key subjectKey
-	// rule says that the failure is a rule's, and trip is then the key of the
-	// trip or file the rule failed on, as the scrape that reported the
-	// failure gave it (ruleFailedFor): what the failure is counted for
-	// (ruleFailures), for as long as it is remembered.
+	// rule says that the failure is a rule's. trip is then the key of the trip
+	// or file the rule failed on, as the scrape that reported the failure gave
+	// it (ruleFailedFor). The failure is counted for that trip (ruleFailures)
+	// for as long as it is remembered.
 	trip string
 	rule bool
 	// err is the text the failure is recognised by (model.SameFailureText).
@@ -74,17 +74,17 @@ type failureLog struct {
 	// dropLocked).
 	//
 	// The trip or file is the key that the scrape reported with the rule's
-	// failure, kept in the entry (failureState.trip), and the key it asks
-	// with. It is never parsed out of the rule's key: a key's parts are chosen
-	// by the operator and the scraper, and the key of a directory's file
-	// named rule ends as the marker of a rule's key begins (ruleKeyMarker), so
-	// the first marker in the key of a rule of that file is not the one its
-	// key was made with.
+	// failure, kept in the entry (failureState.trip), and the key the scrape
+	// asks with. It is never parsed out of the rule's key. A key's parts are
+	// chosen by the operator and the scraper, and the key of a directory's
+	// file named rule ends the way the marker of a rule's key begins
+	// (ruleKeyMarker). So the first marker in the key of a rule of that file
+	// is not the one its key was made with.
 	ruleFailures map[string]int
 	// ruleKey is where the key of a rule is written to be looked up
-	// (ruleLocked), under the lock, in place of a key made for every
-	// lookup, and what a key is made of when a rule's failure is first
-	// remembered (failedOf). It is as long as the longest key asked for.
+	// (ruleLocked), under the lock, instead of making a key for every lookup.
+	// A key is also made from it when a rule's failure is first remembered
+	// (failedOf). It is as long as the longest key asked for.
 	ruleKey   []byte
 	interval  time.Duration
 	now       func() time.Time
@@ -96,19 +96,19 @@ func newFailureLog() *failureLog {
 }
 
 // A failure is remembered under the key of its subject: the one thing that
-// fails, keeps failing and recovers. A subject's parts are chosen by the
-// operator and the scraper (a probe's target is any bytes its caller sends,
-// and a directory, its files, a rule's expression and its items have any
-// names), so a key is built such that no choice of parts makes two subjects'
-// keys equal, and nothing is ever parsed back out of one. Whose failure it is,
-// which a reload needs when it forgets, is passed beside the key and kept
-// with the entry.
+// fails, keeps failing and recovers. The operator and the scraper choose a
+// subject's parts: a probe's target is any bytes its caller sends, and a
+// directory, its files, a rule's expression and its items have any names. So
+// a key is built such that no choice of parts makes two subjects' keys equal,
+// and nothing is ever parsed back out of one. Whose failure it is, which a
+// reload needs when it forgets, is passed beside the key and kept with the
+// entry.
 //
 // A key's bytes are the digest of its subject (subjectBytes): its kind, a
-// letter, and its parts, each preceded by its length in decimal and a NUL, so
-// a part ends where its length says and not at some byte of it
-// (appendSubjectEncoding). Then follows what of the subject failed, when it
-// is not the subject itself: one of the aspects below, or, for a rule, the
+// letter, and its parts. Each part is preceded by its length in decimal and a
+// NUL, so a part ends where its length says and not at some byte of it
+// (appendSubjectEncoding). After that comes what of the subject failed, when
+// it is not the subject itself: one of the aspects below, or, for a rule, the
 // marker of a rule's key and what identifies the rule (appendRuleFailureKey).
 // The kinds are:
 //
@@ -186,11 +186,11 @@ type subjectKey struct {
 	// reload that removes or changes the collector forgets; empty for what
 	// the static targets endpoint remembers, which is of none.
 	collector string
-	// static says that the subject is a static target's own — its scrape,
-	// the turns the schedule gave up for it, a rule of its scrape — and
-	// target is then the target's name: what a reload that removes or
-	// changes the static target forgets. What the target's trip found at
-	// the address it went to is not, and is a probe's of that address too.
+	// static says that the subject is a static target's own: its scrape, the
+	// turns the schedule gave up for it, or a rule of its scrape. target is
+	// then the target's name, which a reload that removes or changes the
+	// static target forgets. What the target's trip found at the address it
+	// went to is not its own, and is also a probe's of that address.
 	target string
 	static bool
 }
@@ -209,10 +209,10 @@ func (k subjectKey) rule(bytes string) subjectKey {
 	return k
 }
 
-// probeFailureKey is the key of the probe of target by the collector that
-// probe, its key in the cache, tells from the collector's other probes of
-// the target: those that differ in their parameters or forwarded headers,
-// tenants and paths, fail apart in the log. probe is empty when the
+// probeFailureKey is the key of the probe of target by the collector. probe
+// is its key in the cache, which tells it apart from the collector's other
+// probes of the target: those that differ in their parameters or forwarded
+// headers, tenants and paths fail apart in the log. probe is empty when the
 // collector's definition could not be fingerprinted, and its probes of one
 // target are then one.
 func probeFailureKey(collector, target, probe string) subjectKey {
@@ -226,9 +226,9 @@ func staticTargetKey(collector, name string) subjectKey {
 }
 
 // failureKey is the key of what a trip of the collector found at target, the
-// address it went to: file is the directory's file that failed, and empty
-// for the response or the directory itself. A probe and a static target's
-// scrape of one address share it.
+// address it went to. file is the directory's file that failed, or empty for
+// the response or the directory itself. A probe and a static target's scrape
+// of one address share it.
 func failureKey(collector, target, file string) subjectKey {
 	return aspectKey(collector, target, file, "")
 }
@@ -245,18 +245,18 @@ func staticClashKey(target, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(endpointSubject, "", target, metric)}
 }
 
-// otlpNameClashKey is the key of the metric name that an OTLP export had
-// as two kinds under the resource whose key is resource (otlpMetricsOf). It
-// is of no collector: the two that wrote the name may be any, and no reload
-// forgets it.
+// otlpNameClashKey is the key of the metric name that an OTLP export had as
+// two kinds under the resource whose key is resource (otlpMetricsOf). It
+// belongs to no collector, since the two that wrote the name may be any, and
+// no reload forgets it.
 func otlpNameClashKey(resource, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric)}
 }
 
-// otlpNameMergeKey is the key of the metric name that an OTLP export had
-// for two Prometheus names under the resource whose key is resource
-// (otlpMetricsOf), as otlpNameClashKey is, with a third part: the name's
-// clash of kinds is another subject, which may be logged beside it.
+// otlpNameMergeKey is the key of the metric name that an OTLP export had for
+// two Prometheus names under the resource whose key is resource
+// (otlpMetricsOf), like otlpNameClashKey, with a third part. The name's clash
+// of kinds is another subject, which may be logged beside it.
 func otlpNameMergeKey(resource, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric, "names")}
 }
@@ -267,19 +267,20 @@ func otlpNameMergeKey(resource, metric string) subjectKey {
 var webAuthKey = subjectKey{bytes: subjectBytes(webAuthSubject, "")}
 
 // subjectBytes are the bytes of the key of a subject of kind with parts, and
-// of its aspect when there is one: the subject's digest
+// of its aspect when there is one. They are the subject's digest
 // (appendSubjectEncoding) followed by the aspect, built in one allocation,
 // which for a typical subject is the only one.
 //
 // A key is a digest, not the parts themselves, because a probe's target can
 // be up to 8 KiB and a failure is remembered for an hour (failureLogForget).
-// The digest has a fixed length, so what an entry holds of its subject is bounded, and a
-// key's subject ends where its digest does: an aspect or a rule marker after
-// it is never read as part of the subject. The log never parses a key; log
-// lines take the target from the trip that reports the failure.
+// The digest has a fixed length, so what an entry holds of its subject is
+// bounded, and a key's subject ends where its digest does: an aspect or a
+// rule marker after it is never read as part of the subject. The log never
+// parses a key. Log lines take the target from the trip that reports the
+// failure.
 //
 // A typical subject's encoding is written into a fixed buffer without an
-// allocation of its own; a longer one, such as a probe of a long target, is
+// allocation of its own. A longer one, such as a probe of a long target, is
 // hashed as it is written (streamSubjectDigest), so no copy of a long target
 // is made to remember its failure.
 func subjectBytes(kind byte, of failureAspect, parts ...string) string {
@@ -351,11 +352,11 @@ func streamSubjectDigest(kind byte, parts []string) [sha256.Size]byte {
 // subjectDigestBytes is how long the digest that begins every key is.
 const subjectDigestBytes = sha256.Size
 
-// appendSubjectEncoding appends to dst what the digest of a subject of kind
-// with the parts is taken of: the kind, a letter, and then each part after
-// its length in decimal and a NUL (appendKeyPart), so a part ends where its
-// length says and not where a byte of it says, and no two subjects that
-// differ have one encoding.
+// appendSubjectEncoding appends to dst the encoding of a subject of kind with
+// the parts, which the digest is taken of: the kind, a letter, and then each
+// part after its length in decimal and a NUL (appendKeyPart). So a part ends
+// where its length says and not where a byte of it says, and no two subjects
+// that differ have one encoding.
 func appendSubjectEncoding(dst []byte, kind byte, parts ...string) []byte {
 	dst = append(dst, kind)
 	for _, part := range parts {
@@ -419,34 +420,34 @@ func (f *failureLog) failed(logger *slog.Logger, level slog.Level, key subjectKe
 // failedFor is failed for a trip that read its collector as read says. When
 // the collector no longer stands (configRead), because a reload has since
 // removed it or changed its definition, the failure belongs to a collector
-// that is gone. It is remembered nowhere, so it is neither taken for the
-// first failure of the collector now under the name nor ends a run of that
-// collector's failures, and it is logged at debug level only, as superseded.
+// that is gone. It is remembered nowhere. So it is not taken for the first
+// failure of the collector now under the name, and it does not end a run of
+// that collector's failures. It is logged at debug level only, as superseded.
 // The same applies to a static target scrape whose target a reload has since
-// removed or changed (logStands). The line is logged with ctx, the trip's,
-// so that its log record is linked to the trip's trace (otlptraceslink.go).
+// removed or changed (logStands). The line is logged with ctx, the trip's, so
+// that its log record is linked to the trip's trace (otlptraceslink.go).
 func (f *failureLog) failedFor(ctx context.Context, read configRead, logger *slog.Logger, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
 	f.failedOf(ctx, read, logger, level, false, key, "", "", "", msg, stage, err, attrs...)
 }
 
 // ruleFailedFor is failedFor for the failure of a rule of the trip or file
-// whose key is trip, the rule identified by its metric name, expression and
-// items (appendRuleFailureKey). It returns the bytes of the key under which
-// the failure is remembered, or nothing when it is not remembered: a failure
-// that starts while the log is full is not, and neither is one of a trip
-// whose collector no longer stands, which leaves what is remembered of the
-// rule unchanged.
+// whose key is trip. The rule is identified by its metric name, expression
+// and items (appendRuleFailureKey). It returns the bytes of the key under
+// which the failure is remembered, or nothing when it is not remembered. A
+// failure that starts while the log is full is not remembered. Neither is one
+// of a trip whose collector no longer stands, which leaves what is remembered
+// of the rule unchanged.
 //
-// While remembered, the failure is counted for trip, so the scrape that asks
+// While remembered, the failure is counted for trip. So the scrape that asks
 // with that key whether one of its rules may have recovered (remembersRules)
 // learns of it, whatever the two keys hold.
 //
 // The rule's key, as large as its expression, is not built to report the
-// failure: its bytes are written over those of the last key looked up
+// failure. Its bytes are written over those of the last key looked up
 // (ruleLocked), and a key is built from them only when the failure becomes
-// remembered. A rule that fails on every scrape therefore has its key built
-// once, and one whose failure a full log does not remember has none built,
-// for as long as the log stays full.
+// remembered. So a rule that fails on every scrape has its key built once. A
+// rule whose failure a full log does not remember has none built, for as long
+// as the log stays full.
 func (f *failureLog) ruleFailedFor(ctx context.Context, read configRead, logger *slog.Logger, level slog.Level, trip subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
 	return f.failedOf(ctx, read, logger, level, true, trip, metric, expression, items, msg, stage, err, attrs...)
 }
@@ -458,9 +459,9 @@ func (f *failureLog) failedOf(ctx context.Context, read configRead, logger *slog
 	errText := ""
 	if err != nil {
 		// What is remembered is no longer than a failure's text may be,
-		// whoever reports the failure: a trip's error is bounded already
-		// (boundedTripFailure), and its recognised text is then the one
-		// this makes, so the cut costs such an error nothing.
+		// whoever reports the failure. A trip's error is bounded already
+		// (boundedTripFailure), and its recognised text is then the one this
+		// makes, so the cut costs such an error nothing.
 		errText = model.CutTo(model.SameFailureText(err), model.MaxFailureBytes, true)
 		attrs = append(attrs, "error", err)
 	}
@@ -489,9 +490,9 @@ func (f *failureLog) failedOf(ctx context.Context, read configRead, logger *slog
 	}
 	// A failure not reported for failureLogForget is forgotten: the same
 	// failure again, days later, is a new one, not a repeat failing since.
-	// So is a rule's that the sweep, which forgets by this same test, has
-	// just dropped: it was found before the sweep, and is not looked for
-	// again.
+	// The same goes for a rule's failure that the sweep, which forgets by
+	// this same test, has just dropped. It was found before the sweep, and is
+	// not looked for again.
 	if st != nil && now.Sub(st.seen) > failureLogForget {
 		f.dropLocked(key.bytes)
 		st = nil
@@ -555,11 +556,11 @@ func (f *failureLog) recovered(logger *slog.Logger, key subjectKey, msg string, 
 	f.recoveredFor(context.Background(), configRead{}, logger, key, msg, attrs...)
 }
 
-// recoveredFor is recovered for a trip that read its collector as read says:
-// the success of a collector that no longer stands (configRead) is no
+// recoveredFor is recovered for a trip that read its collector as read says.
+// The success of a collector that no longer stands (configRead) is not a
 // recovery of the collector now under the name, whose failure stays
-// remembered, and neither is the success of a static target's scrape whose
-// target no longer stands (logStands).
+// remembered. Neither is the success of a static target's scrape whose target
+// no longer stands (logStands).
 func (f *failureLog) recoveredFor(ctx context.Context, read configRead, logger *slog.Logger, key subjectKey, msg string, attrs ...any) {
 	f.mu.Lock()
 	st := f.entries[key.bytes]
@@ -579,17 +580,16 @@ func (f *failureLog) recoveredFor(ctx context.Context, read configRead, logger *
 }
 
 // remembersRules reports whether a failure is remembered for any rule of the
-// trip or file key, other than those under the keys in failing (the rules
-// that failed on the asking scrape, which looks for recovered rules only when
-// one may have recovered). Almost no scrape has a remembered rule failure, and
-// almost all of those that do have only the failures of rules that failed
-// again, as a rule does on every scrape of a target that lacks its value. The
-// answer comes from the count of failures reported as those of rules of key
-// (ruleFailedFor): key is compared whole, and nothing is parsed out of it or
-// out of a rule's key. A failure in failing is subtracted only when it is one
-// of them. failing holds the keys under which the failures were remembered
-// when reported; a failure that was not remembered has no key and is not
-// counted.
+// trip or file key, other than those under the keys in failing. Those are the
+// rules that failed on the asking scrape, which looks for recovered rules only
+// when one may have recovered. Almost no scrape has a remembered rule failure.
+// Almost all that do have only failures of rules that failed again, as a rule
+// does on every scrape of a target that lacks its value. The answer comes from
+// the count of failures reported as those of rules of key (ruleFailedFor).
+// key is compared whole, and nothing is parsed out of it or out of a rule's
+// key. A failure in failing is subtracted only when it is one of them.
+// failing holds the keys under which the failures were remembered when
+// reported. A failure that was not remembered has no key and is not counted.
 func (f *failureLog) remembersRules(key subjectKey, failing map[string]bool) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -606,12 +606,12 @@ func (f *failureLog) remembersRules(key subjectKey, failing map[string]bool) boo
 }
 
 // rememberedRule is the bytes under which a failure of the rule of the trip
-// or file key is remembered, the rule identified by its metric name,
-// expression and items (appendRuleFailureKey), and whether one is. The rule's
-// key, as large as its expression, is not built to ask: its bytes are written
-// over those of the last one asked for, and the key of a remembered failure is
-// the one built when it was first remembered (failedOf). A rule that does not
-// fail therefore has no key built.
+// or file key is remembered, and whether one is. The rule is identified by its
+// metric name, expression and items (appendRuleFailureKey). The rule's key, as
+// large as its expression, is not built to ask. Its bytes are written over
+// those of the last one asked for, and the key of a remembered failure is the
+// one built when it was first remembered (failedOf). So a rule that does not
+// fail has no key built.
 func (f *failureLog) rememberedRule(key subjectKey, metric, expression, items string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -660,10 +660,10 @@ func (f *failureLog) forgetCollectorsLocked(names map[string]bool) {
 
 // forgetStaticTargetsLocked drops, under the log's lock, what is remembered
 // as the named static targets' own failures, for targets that a reload
-// removed or changed, under any collector, since the reload may have given a
-// target another one. An entry is a static target's own when the scrape or
-// schedule that reported it said so (staticTargetKey), whatever its key
-// holds. These stay:
+// removed or changed. It does so under any collector, since the reload may
+// have given a target another collector. An entry is a static target's own
+// when the scrape or schedule that reported it said so (staticTargetKey),
+// whatever its key holds. These stay:
 //   - what a probe remembers of a target that looks like a static target's
 //     name, which belongs to the probe;
 //   - what a scrape's trip remembers under the address it went to (bytes that

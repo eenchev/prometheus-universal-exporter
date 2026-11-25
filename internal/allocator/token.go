@@ -11,12 +11,13 @@ import (
 )
 
 // TokenFile is --web.token-file: the bearer token every request but
-// /healthz and /ready must carry. It is read again when the file changes —
-// its modification time or size, as the exporter's credential files are
-// (config's credentialFileCache) — so a rotated Secret takes effect without
-// a restart. A file that cannot be read, or holds no token, after a change
-// refuses every request until it is fixed, rather than letting every request
-// through; that is logged once for as long as the reason stays the same.
+// /healthz and /ready must carry. It is read again when the file changes
+// (its modification time or size), as the exporter's credential files are
+// (config's credentialFileCache), so a rotated Secret takes effect without a
+// restart. After a change, a file that cannot be read or holds no token
+// refuses every request until it is fixed, rather than letting every
+// request through. That is logged once for as long as the reason stays the
+// same.
 type TokenFile struct {
 	path   string
 	logger *slog.Logger

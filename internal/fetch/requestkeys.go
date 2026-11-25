@@ -11,20 +11,20 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The keys only one request type takes are read into that type's own
-// struct (RequestType.Config), declared in the type's file, so a build
-// that leaves the type out carries neither. Every build still knows them,
-// from requestKeysCatalogue (requestkeys_catalogue.go), the own keys of
-// every type of the source tree, generated from a build with every type by
-// make schemas: a configuration that sets a key of a type the build left
-// out under another type is refused as setting a key of another type, as a
-// build with every type refuses it, and the configuration schema, which is
-// the same in every build, describes it.
+// The keys that only one request type takes are read into that type's own
+// struct (RequestType.Config), declared in the type's file, so a build that
+// leaves the type out carries neither. Every build still knows the keys from
+// requestKeysCatalogue (requestkeys_catalogue.go). It holds the own keys of
+// every type of the source tree, and make schemas generates it from a build
+// with every type. So a configuration that sets a key of a left-out type
+// under another type is refused as setting a key of another type, as a
+// build with every type refuses it. The configuration schema, which is the
+// same in every build, describes it.
 
-// RequestKeyEntry is one key of a request type's own, as the catalogue
-// holds it: the type, the key, the Go type of the field it is read into,
-// as reflect names it and by its shape (GoTypeShape), and its
-// configuration schema, as JSON.
+// RequestKeyEntry is one of a request type's own keys, as the catalogue
+// holds it: the type, the key, the Go type of the field it is read into (as
+// reflect names it and by its shape, GoTypeShape), and its configuration
+// schema as JSON.
 type RequestKeyEntry struct {
 	Type, Key, GoType, Shape, Schema string
 }
@@ -95,10 +95,10 @@ var requestKeys = sync.OnceValue(func() *model.RequestKeys {
 	return keys
 })
 
-// refusesRequestKey says whether the validation refuses a key a request
-// block of the type sets, by its path, as one the type does not take
-// (model.RequestKeys.Refuses): a key of the block it does not take, or a
-// key of retry that does not apply to it (checkRetryKeys).
+// refusesRequestKey says whether validation refuses a key, by its path, that
+// a request block of the type sets, as one the type does not take
+// (model.RequestKeys.Refuses). That is a block key the type does not take,
+// or a retry key that does not apply to it (checkRetryKeys).
 func refusesRequestKey(requestType, key string) bool {
 	rt := RequestTypes[requestType]
 	if rt == nil {

@@ -10,11 +10,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// checkTargetTLS checks a static target's own tls block, which replaces its
-// collector's whole for a redis, ldap, tcp, sql, grpc, http or graphite
-// collector, as the collector's is checked: a client certificate needs both
-// its files, and server_name is a host's name. Its values take no placeholder, as no value
-// of a target's own does: there is no probe to fill one.
+// checkTargetTLS checks a static target's own tls block as the collector's
+// is checked. For a redis, ldap, tcp, sql, grpc, http or graphite collector
+// it replaces the collector's whole block. A client certificate needs both
+// its files, and server_name is a host's name. Its values take no
+// placeholder, as no value of a target's own does: there is no probe to fill one.
 func checkTargetTLS(t *model.StaticTarget) error {
 	s := t.Request.TLS
 	if s == nil {

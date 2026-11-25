@@ -29,11 +29,14 @@ import (
 
 // The snmp request type reads an SNMP agent, as snmp_exporter does: a
 // switch, a router, a UPS, a printer. A collector names the objects it
-// reads by their numeric identifiers, each by a name of its own: get, the
-// objects read one by one, sysUpTime.0 and the like, and walk, the tables
-// read whole, each a set of columns whose rows are merged by their index,
-// so that ifDescr comes beside ifHCInOctets in one row. The answer is a
-// JSON document of them, which jq, yq or python read:
+// reads by their numeric identifiers, each under a name of its own:
+//
+//   - get holds the objects read one by one, sysUpTime.0 and the like.
+//   - walk holds the tables read whole. Each is a set of columns whose rows
+//     are merged by their index, so that ifDescr comes beside ifHCInOctets
+//     in one row.
+//
+// The answer is a JSON document of them, which jq, yq or python read:
 //
 //	request:
 //	  type: snmp
@@ -46,21 +49,21 @@ import (
 //	      ifDescr: 1.3.6.1.2.1.2.2.1.2
 //	      ifHCInOctets: 1.3.6.1.2.1.31.1.1.1.6
 //
-// The probe's target is the agent, host or host:port, port 161 when it
-// names none; the requests go over UDP, through the target policy, one
+// The probe's target is the agent, host or host:port, with port 161 when it
+// names none. The requests go over UDP, through the target policy, on one
 // socket for the scrape. A request unanswered within request_timeout is sent
 // again, retries times. v1 walks with GetNext, v2c and v3 with GetBulk of
-// max_repetitions; an object the agent does not have is left out of the
-// document, and a v1 agent's noSuchName, which names it, has it taken out
-// of the request and the rest asked again.
+// max_repetitions. An object the agent does not have is left out of the
+// document. A v1 agent's noSuchName names such an object: it is taken out of
+// the request and the rest are asked again.
 //
-// SNMPv3 speaks the User-based Security Model (snmpusm.go): a scrape
-// first asks the agent its engine ID, boots and time, which an
-// unauthenticated Report answers, localizes the user's passwords to that
-// engine, and signs and encrypts each request as security_level asks.
+// SNMPv3 speaks the User-based Security Model (snmpusm.go). A scrape first
+// asks the agent for its engine ID, boots and time, which an unauthenticated
+// Report answers. It then localizes the user's passwords to that engine, and
+// signs and encrypts each request as security_level asks.
 //
-// MIBs are not read: the names are the collector's, the numbers the
-// agent's, so the type needs neither net-snmp nor a MIB directory, and
+// MIBs are not read: the names are the collector's and the numbers the
+// agent's. So the type needs neither net-snmp nor a MIB directory, and
 // imports nothing outside the standard library.
 
 // SNMPConfig is an snmp collector's own request keys. The v3 user's name is
@@ -169,7 +172,19 @@ func init() {
 }
 
 // snmpRequester is the snmp request type's Requester.
-type snmpRequester struct{}
+type snmpRequester struct{ parsedTarget[snmpTarget] }
+
+// snmpTarget reads an snmp target: label returns the url label of a
+// request of it.
+type snmpTarget struct{}
+
+func (snmpTarget) label(target string) (string, error) {
+	address, err := parseSNMPTarget(target)
+	if err != nil {
+		return "", err
+	}
+	return "snmp://" + address.hostPort, nil
+}
 
 // Validate checks an snmp collector's request and fills in its defaults.
 func (snmpRequester) Validate(c *model.Collector) error {
@@ -214,10 +229,10 @@ func (snmpRequester) Validate(c *model.Collector) error {
 	return nil
 }
 
-// validateSNMPAccount checks the keys of the account a collector reads as:
-// v1's and v2c's community file, required, and none of v3's; v3's user,
-// its security level, and the protocols and password files that level
-// asks for, each refused beside a level that does not use it.
+// validateSNMPAccount checks the keys of the account a collector reads as.
+// v1 and v2c require a community file and none of v3's keys. v3 takes a
+// user, its security level, and the protocols and password files that level
+// asks for. Each is refused beside a level that does not use it.
 func validateSNMPAccount(c *model.Collector, r SNMPConfig) error {
 	name := c.Name
 	v3 := []struct {
@@ -297,10 +312,11 @@ func snmpVersionName(version int) string {
 	return strconv.Itoa(version)
 }
 
-// validateSNMPObjects checks get, walk and hex: at least one object, each
-// name a word, each identifier one (parseSNMPOID), no object of get twice,
-// a column not named index, which each row is keyed by, and every name of
-// hex one of get or a column of walk.
+// validateSNMPObjects checks get, walk and hex. There must be at least one
+// object. Each name must be a word and each identifier valid (parseSNMPOID).
+// No object of get may appear twice, and no column may be named index, which
+// each row is keyed by. Every name of hex must be one of get or a column of
+// walk.
 func validateSNMPObjects(name string, r SNMPConfig) error {
 	if len(r.Get) == 0 && len(r.Walk) == 0 {
 		return fmt.Errorf("collector %q reads nothing; name the objects it reads under request.get, or the tables under request.walk", name)
@@ -362,21 +378,6 @@ func (snmpRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchSNMP(ctx, target, c, overrides)
 }
 
-// CheckTarget checks an snmp collector's target.
-func (snmpRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseSNMPTarget(target)
-	return err
-}
-
-// Label is the url label of an snmp request: snmp://host:port.
-func (snmpRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseSNMPTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return "snmp://" + address.hostPort, nil
-}
-
 // Method is the http_method label of an snmp request: WALK when the
 // collector walks a table, GET when it only reads objects one by one.
 func (snmpRequester) Method(c *model.Collector, _ RequestOverrides) string {
@@ -384,15 +385,6 @@ func (snmpRequester) Method(c *model.Collector, _ RequestOverrides) string {
 		return snmpMethodWalk
 	}
 	return snmpMethodGet
-}
-
-// Display renders an snmp target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (snmpRequester) Display(target string) string {
-	if _, err := parseSNMPTarget(target); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
 }
 
 // snmpAddress is a target as a scrape reaches it.
@@ -435,9 +427,9 @@ func parseSNMPTarget(raw string) (snmpAddress, error) {
 }
 
 // checkSNMPTargetRequest checks a static target's own keys against its
-// collector: a community for v1 and v2c, a user and its passwords for v3
-// as its level uses them, each written out, and request_timeout and retries
-// held as the collector's are.
+// collector: a community for v1 and v2c, and for v3 a user and the passwords
+// its level uses, each written out. request_timeout and retries are held to
+// the same rules as the collector's.
 func checkSNMPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	r, own := snmpRequest(c), &t.Request
 	for _, key := range []struct{ name, value string }{
@@ -471,10 +463,11 @@ func checkSNMPTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	return nil
 }
 
-// checkSNMPFiles reads, for --dry-run, the files of the account a scrape
-// of c reads as, or of static target t's own in place of the collector's:
-// each that cannot be read, is empty, or, of v3, holds a password shorter
-// than 8 characters, is what a scrape would fail on now.
+// checkSNMPFiles reads, for --dry-run, the files of the account a scrape of
+// c reads as, or static target t's own in place of the collector's. It
+// reports each file that cannot be read or is empty, and for v3 each that
+// holds a password shorter than 8 characters. A scrape would fail on these
+// now.
 func checkSNMPFiles(c *model.Collector, t *model.StaticTarget) []string {
 	r := snmpRequest(c)
 	who := fmt.Sprintf("collector %q", c.Name)
@@ -635,15 +628,7 @@ func fetchSNMP(ctx context.Context, target string, c *model.Collector, overrides
 	if limit := responseLimit(c); int64(len(body)) > limit {
 		return nil, model.MarkError(model.Errorf("the JSON document of what %s answered is %d bytes, larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes, or walk fewer columns", address.hostPort, len(body), model.Size(limit)), model.ErrLimitExceeded)
 	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
 // snmpSession is a scrape's requests to its agent: the socket, the
@@ -751,12 +736,12 @@ func snmpRequestID() int64 {
 	return int64(binary.BigEndian.Uint32(b[:]) & 0x7fffffff)
 }
 
-// exchange sends a PDU of kind tag, its two integers after the request-id
-// a and b, error-status and error-index or GetBulk's non-repeaters and
-// max-repetitions, and returns the answer to it: sent again after
-// request_timeout, retries times, and, of v3, once more after a Report that
-// the request was outside the engine's time window, with the time the
-// Report brings.
+// exchange sends a PDU of kind tag and returns the answer to it. a and b are
+// its two integers after the request-id: error-status and error-index, or
+// GetBulk's non-repeaters and max-repetitions. The PDU is sent again after
+// request_timeout, retries times. For v3 it is also sent once more after a
+// Report that the request was outside the engine's time window, with the
+// time the Report brings.
 func (s *snmpSession) exchange(ctx context.Context, tag byte, a, b int, oids []snmpOID) (snmpPDU, error) {
 	requestID := snmpRequestID()
 	pdu := snmpPDUBytes(tag, requestID, a, b, oids)
@@ -926,10 +911,10 @@ func (s *snmpSession) discover(ctx context.Context) error {
 	return nil
 }
 
-// decode reads an answer to the request of msgID and requestID: the PDU,
-// of v3 its signature checked and its scoped PDU decrypted, and the
-// engine's ID, boots and time taken from discovery's Report and from a
-// Report of the time window.
+// decode reads an answer to the request of msgID and requestID. It returns
+// the PDU, for v3 with its signature checked and its scoped PDU decrypted.
+// It takes the engine's ID, boots and time from discovery's Report and from
+// a Report of the time window.
 func (s *snmpSession) decode(msg []byte, msgIDs []int64, requestID int64) (snmpPDU, error) {
 	start, end, err := snmpExpect(msg, 0, len(msg), snmpSequence, "the message")
 	if err != nil {
@@ -1157,9 +1142,9 @@ func snmpStatusName(status int64) string {
 }
 
 // get reads the objects of request.get named names, snmpGetChunk to a
-// request: those the agent has, as each is written (snmpValue). A v1
-// agent's noSuchName takes the object it names out of the request, and
-// the rest are asked again; a tooBig halves the request.
+// request. It returns those the agent has, each written as snmpValue writes
+// it. A v1 agent's noSuchName takes the object it names out of the request,
+// and the rest are asked again. A tooBig halves the request.
 func (s *snmpSession) get(ctx context.Context, names []string, hexNames map[string]bool) (map[string]snmpGot, error) {
 	out := map[string]snmpGot{}
 	for len(names) > 0 {
@@ -1254,11 +1239,11 @@ func (s *snmpSession) walkTable(ctx context.Context, table string, hexNames map[
 	return out, nil
 }
 
-// walk reads the values under root: v1 with GetNext, one a request, until
-// noSuchName; v2c and v3 with GetBulk of max_repetitions, halved on a
-// tooBig, until a value is past root or endOfMibView. Each value is past
-// the one before it, as a walk of an agent that loops is not; and there are
-// at most walk_limit of them.
+// walk reads the values under root. v1 uses GetNext, one value a request,
+// until noSuchName. v2c and v3 use GetBulk of max_repetitions, halved on a
+// tooBig, until a value is past root or endOfMibView. Each value must be
+// past the one before it, which a walk of an agent that loops is not. There
+// are at most walk_limit of them.
 func (s *snmpSession) walk(ctx context.Context, root snmpOID, name string) ([]snmpVarbind, error) {
 	var out []snmpVarbind
 	last := root
@@ -1301,12 +1286,12 @@ func (s *snmpSession) walk(ctx context.Context, root snmpOID, name string) ([]sn
 	}
 }
 
-// snmpValue is a value as the document writes it, the name of its type
-// and whether there is one: an integer of any type as a number, a string
-// as text when it is printable UTF-8 and as hexadecimal bytes when it is
-// not, or when hex, an identifier and an address in dotted form, an
-// Opaque of a float as the number, and nothing of an exception, an object
-// the agent does not have.
+// snmpValue is a value as the document writes it, with the name of its type
+// and whether there is one. An integer of any type is a number. A string is
+// text when it is printable UTF-8, and hexadecimal bytes when it is not or
+// when hex. An identifier and an address are in dotted form. An Opaque of a
+// float is the number. An exception, an object the agent does not have, is
+// nothing.
 func snmpValue(vb snmpVarbind, asHex bool) (string, any, bool, error) {
 	c := vb.content
 	switch vb.tag {
@@ -1394,10 +1379,10 @@ func snmpOpaqueFloat(c []byte) (float64, bool) {
 }
 
 // snmpSchemaRule is what an snmp collector's request is held to beyond its
-// keys, as the exporter holds it (validateSNMPAccount): with snmp_version
-// 3 a username and a security_level, and without it a community_file;
-// with authNoPriv and authPriv an auth_protocol and its password file, and
-// with authPriv a priv_protocol and its password file too.
+// keys, as the exporter holds it (validateSNMPAccount). With snmp_version 3
+// it needs a username and a security_level, and without it a
+// community_file. authNoPriv and authPriv need an auth_protocol and its
+// password file, and authPriv also a priv_protocol and its password file.
 func snmpSchemaRule() map[string]any {
 	both := func(a, b string) map[string]any {
 		return map[string]any{"allOf": []any{SchemaWrittenKey(a), SchemaWrittenKey(b)}}

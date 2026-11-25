@@ -1,12 +1,12 @@
 # SMTP
 
 The `smtp` request type talks to a mail server as a client about to send a
-message does, and stops before the message: it reads the greeting, says
+message does, and stops before the message. It reads the greeting, says
 `EHLO`, begins TLS with `STARTTLS`, logs in with `AUTH` when the collector
-has an account, and, when it names a sender and recipients, asks the server
-about them with `MAIL FROM` and `RCPT TO`. No `DATA` follows, so nothing is
-ever sent. What the server said at each step is handed to the transforms as
-one JSON document. Use it to watch:
+has an account, and, when the collector names a sender and recipients, asks
+the server about them with `MAIL FROM` and `RCPT TO`. No `DATA` follows, so
+nothing is ever sent. What the server said at each step is handed to the
+transforms as one JSON document. Use it to watch:
 
 - that a mail server greets, offers TLS and takes the account your
   applications send with, before they find out;
@@ -21,14 +21,13 @@ The [`tcp` type](TCP.md) can hold the same conversation as `steps` of text;
 this type knows the protocol, so the answers come as numbers and labels,
 and it can log in.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with smtp](#building-with-smtp)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with smtp](#building-with-smtp)).
 
 ## Building with smtp
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=smtp              # bin/prometheus-universal-exporter
@@ -36,10 +35,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=smtp -t exporter:smtp .
 go build -tags "$(sh tools/request-type-tags.sh '' '' smtp)" .
 ```
 
-The tag is `request_type_smtp`. A configuration with an `smtp` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_smtp`. A build without the type refuses a
+configuration with an `smtp` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -100,7 +99,12 @@ A probe takes `timeout` and `param_<name>` parameters, which fill the
 placeholders of `mail_from`, `rcpt_to` and the collector's
 [label values](REQUESTS.md#in-label-values). A value written into an address
 may hold no blank, angle bracket or control character, so a probe adds no
-command. The decoder is `json`; use `jq`, `yq` or `python`.
+command.
+
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 A password or a token is never sent over a connection that is not TLS: a
 server that offers no `STARTTLS` fails the scrape before `AUTH`, unless
@@ -168,10 +172,10 @@ request:
 Without one, as for a Workspace account whose administrator allows OAuth
 alone, use `XOAUTH2`.
 
-Gmail's submission servers answer `RCPT TO` with 250 for any address that
-is well formed, and report what cannot be delivered later, by mail: a
-recipient check says something about a mailbox only when asked of the
-servers that take the domain's mail, its MX hosts, on port 25.
+Gmail's submission servers answer `RCPT TO` with 250 for any well-formed
+address, and report what cannot be delivered later, by mail. A recipient
+check says something about a mailbox only when it asks the servers that
+take the domain's mail, its MX hosts, on port 25.
 
 ### XOAUTH2
 
@@ -203,13 +207,15 @@ request:
 | `refresh_token_file` | The refresh token, read when a token is asked for. Not with `client_credentials`. |
 | `scopes` | Sent as `scope`. For Gmail, `https://mail.google.com/`. |
 
-The token the endpoint answers with is kept until a minute before it
+The token that the endpoint answers with is kept until a minute before it
 expires, so the endpoint is asked about once an hour, and again when the
-server refuses the token kept. The request to the endpoint is made
-with the system's certificates and the proxy the environment names;
-`request.tls` and the collector's target lists are the mail server's. The refresh token is made once, outside the exporter, by a
-consent for the scope with a client of your Google Cloud project; a client
-left in "Testing" has its refresh tokens expire after seven days.
+server refuses the kept token. The request to the endpoint is made with the
+system's certificates and the proxy that the environment names;
+`request.tls` and the collector's target lists apply to the mail server.
+
+The refresh token is made once, outside the exporter, by a consent for the
+scope with a client of your Google Cloud project. A client left in
+"Testing" has its refresh tokens expire after seven days.
 
 `auth: oauthbearer` sends the same token as `OAUTHBEARER` (RFC 7628), the
 standard form of the login, for a server that offers that and no
@@ -233,29 +239,33 @@ request:
     scopes: [https://outlook.office365.com/.default]
 ```
 
-That is Microsoft 365's form of it, which takes `xoauth2` and no
-`oauthbearer`. The application must have the application permission of
-the protocol (`SMTP.SendAsApp`, `IMAP.AccessAsApp` or `POP.AccessAsApp`)
-with an administrator's consent, be registered in Exchange Online as a
-service principal, and be given the mailbox, as
-[Microsoft describes](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth);
-the scope is `https://outlook.office365.com/.default` for all three
-protocols. Gmail has no such grant: a mailbox there takes a refresh token
-or an app password. A
-[static target](#static-targets) of such a collector names another mailbox
-with its `username` alone.
+That is Microsoft 365's form of it, which takes `xoauth2` and not
+`oauthbearer`. The application must:
+
+- have the application permission of the protocol (`SMTP.SendAsApp`,
+  `IMAP.AccessAsApp` or `POP.AccessAsApp`), with an administrator's consent;
+- be registered in Exchange Online as a service principal;
+- be given the mailbox, as
+  [Microsoft describes](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth).
+
+The scope is `https://outlook.office365.com/.default` for all three
+protocols. Gmail has no such grant: a mailbox there takes a refresh token or
+an app password. A [static target](#static-targets) of such a collector
+names another mailbox with its `username` alone.
 
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of an `smtp` collector is a mail
-server, written as a probe's target is. Its `request` may set `timeout`,
-and `username`, `password_file` and `tls` for a server with an account or a
-certificate authority of its own; a target that sets `username` logs in
-with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with a token sets no
-`password_file`; its `username` alone names the mailbox the collector's
-token logs in to, which is how one
-[application's token](#an-applications-own-token) watches many.
+server, written as a probe's target is. Its `request` may set `timeout`, and
+`username`, `password_file` and `tls` for a server with an account or a
+certificate authority of its own.
+
+- A target that sets `username` logs in with its own `password_file`.
+- A `tls` block replaces the collector's whole block.
+- A target of a collector that logs in with a token sets no
+  `password_file`. Its `username` alone names the mailbox that the
+  collector's token logs in to, which is how one
+  [application's token](#an-applications-own-token) watches many mailboxes.
 
 ## Limits
 

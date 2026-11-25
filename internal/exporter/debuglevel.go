@@ -56,23 +56,26 @@ func (s *Server) SetDebug(level DebugLevel) {
 	}
 }
 
-// --web.debug.dangerous lifts, at full, what the playground — a collector
-// written on the debug page — is refused for the server's sake: it may run
-// Python, a python transform or a pre_script, in the workers a configured
-// collector's scripts run in and bounded by the same limits; it may name the
-// server's files, any request key ending in _file or _files and a login;
-// and it may make its own request, through its own request block, as a
-// configured collector's probe makes one, with the target policy and the
-// credentials it writes itself. That last is what makes its files of any
-// use: a localfile playground reads a file under the root it names, and a
-// credential or TLS file is read for the request it is sent with; a pasted
-// response still makes no request. Whoever can open the page can then run
-// code on the server, in the workers' sandbox, which is no wall against a
-// script written to get out, read any file the exporter's user can through
-// a request, and reach any host the exporter can, so it is for a debugging
-// session on a machine of one's own, never a shared deployment. ${NAME} references stay unexpanded
-// even so: the environment is where a deployment keeps its secrets, and
-// nothing written on the page needs them, since it can name a file instead.
+// --web.debug.dangerous lifts, at full, what the playground (a collector
+// written on the debug page) is refused for the server's sake:
+//   - it may run Python, a python transform or a pre_script, in the workers
+//     a configured collector's scripts run in, bounded by the same limits;
+//   - it may name the server's files: any request key ending in _file or
+//     _files and a login;
+//   - it may make its own request, through its own request block, as a
+//     configured collector's probe does, with the target policy and the
+//     credentials it writes itself.
+//
+// That last one is what makes its files of any use: a localfile playground
+// reads a file under the root it names, and a credential or TLS file is read
+// for the request it is sent with. A pasted response still makes no request.
+// Whoever can open the page can then run code on the server, in the workers'
+// sandbox, which is no wall against a script written to get out. They can
+// also read any file the exporter's user can through a request, and reach any
+// host the exporter can. So it is for a debugging session on one's own
+// machine, never a shared deployment. ${NAME} references stay unexpanded even
+// so: the environment is where a deployment keeps its secrets, and nothing
+// written on the page needs them, since it can name a file instead.
 
 // ValidateDebugDangerous refuses --web.debug.dangerous below
 // --web.debug=full: the playground's own request shows what a target

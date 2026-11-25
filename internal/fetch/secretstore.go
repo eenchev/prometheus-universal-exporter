@@ -21,35 +21,35 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A credential is read from a file, at each scrape, by the key that names
-// the file: password_file, bearer_token_file, community_file and the rest.
-// Where a secret may not be written to disk, the same key holds a reference
-// to a secret store instead of a path:
+// A credential is read from a file at each scrape, by the key that names the
+// file: password_file, bearer_token_file, community_file and the rest. Where
+// a secret may not be written to disk, the same key holds a reference to a
+// secret store instead of a path:
 //
 //	password_file: secret://vault-prod/secret/data/db#password
 //
-// secret://, the name of an entry of secret_stores, the secret's path in
-// the store, ?version= for a version other than the current one, and
-// #field for one field of a secret that holds several. Every credential the
-// exporter reads through ReadCredentialFile can be read so; the files it
-// opens otherwise, certificates and private keys among them, cannot, and a
-// reference in one of their keys is refused when the configuration loads
-// (SecretReferences.Check).
+// A reference is secret://, then the name of an entry of secret_stores, then
+// the secret's path in the store. ?version= picks a version other than the
+// current one, and #field picks one field of a secret that holds several.
+// Every credential the exporter reads through ReadCredentialFile can be read
+// this way. The files it opens otherwise, certificates and private keys among
+// them, cannot, and a reference in one of their keys is refused when the
+// configuration loads (SecretReferences.Check).
 //
-// A store is of a type, HashiCorp Vault, Google Cloud Secret Manager or AWS
-// Secrets Manager, each in a file of its own that registers it
+// A store has a type: HashiCorp Vault, Google Cloud Secret Manager or AWS
+// Secrets Manager. Each type is in its own file that registers it
 // (SecretStoreType: secretstore_vault.go, secretstore_gcp.go,
-// secretstore_aws.go); a further one is another such file. Everything here
-// is the same for every type. What a store answered is kept in
-// memory, by secret, for cache_ttl, so a scrape costs the store nothing
-// while it is fresh, and the fields of one secret cost one request. When
-// the store cannot be asked once that has passed, the secret kept is used
-// for max_stale more, logged once and counted, since a store that is down
-// for a minute should not stop every collector that reads from it; past
-// that, and for a secret never read, the read fails, and so does its
-// scrape. A store that failed is not asked again for the same secret for
-// secretRetryAfter, the reads in between failing, or using the kept
-// secret, at once.
+// secretstore_aws.go). A further type is another such file. Everything here
+// is the same for every type.
+//
+// What a store answered is kept in memory, by secret, for cache_ttl. While it
+// is fresh, a scrape costs the store nothing, and the fields of one secret
+// cost one request. If the store cannot be asked after that, the kept secret
+// is used for max_stale more, logged once and counted, since a store that is
+// down for a minute should not stop every collector that reads from it. Past
+// that, and for a secret never read, the read fails, and so does its scrape.
+// A store that failed is not asked again for the same secret for
+// secretRetryAfter. Reads in between fail at once, or use the kept secret.
 
 const (
 	// SecretReferencePrefix is what a reference to a secret store starts
@@ -126,10 +126,10 @@ func parseSecretRef(value string) (SecretReference, error) {
 	return ref, nil
 }
 
-// SecretDocument is a secret as its store answered it: Text, the whole of
-// a secret that is one value, or Fields, those of a secret that is several,
-// as a Vault secret is. A store gives one of the two. A secret of text that
-// is a JSON object has its members for fields too.
+// SecretDocument is a secret as its store answered it. Text is the whole of a
+// secret that is one value. Fields are the fields of a secret that is several
+// values, as a Vault secret is. A store gives one of the two. A text secret
+// that is a JSON object also has its members as fields.
 type SecretDocument struct {
 	Text   string
 	Fields map[string]any
@@ -166,36 +166,36 @@ func (d SecretDocument) value(ref SecretReference, written string) (string, erro
 	return "", fmt.Errorf("%s names the field %q, which is not text, a number or a boolean", written, ref.Field)
 }
 
-// SecretBackend is one store of a type, made of its entry: it asks the
-// store for a secret, within ctx, which carries the entry's timeout. It
-// answers the secret whole, every field of it, whatever field the
-// reference names, since the answer is kept for the other fields too; and
-// it is asked by several scrapes at once. What it keeps of its own, a login
-// or a token, it keeps in memory.
+// SecretBackend is one store of a type, made from its entry. It asks the
+// store for a secret within ctx, which carries the entry's timeout. It
+// returns the whole secret, every field of it, whatever field the reference
+// names, since the answer is kept for the other fields too. Several scrapes
+// may call it at once. State of its own, such as a login or a token, it
+// keeps in memory.
 type SecretBackend interface {
 	Read(ctx context.Context, ref SecretReference) (SecretDocument, error)
 }
 
 // SecretStoreType is a kind of secret store: a value of secret_stores[].type.
-// Each registers itself from its own secretstore_<name>.go file
-// (registerSecretStoreType), and everything else, the references, the
-// cache, the use of a secret past its time, the counts, the checks of a
-// configuration and the schema, is the same for every type and asks the
-// type only what follows.
+// Each type registers itself from its own secretstore_<name>.go file
+// (registerSecretStoreType). Everything else is the same for every type: the
+// references, the cache, the use of a secret past its time, the counts, and
+// the checks of a configuration and the schema. That code asks the type only
+// what follows.
 //
 // To add one: write secretstore_<name>.go with the type's SecretBackend
-// and its registration; give model.SecretStore a field for each key the
-// type takes that no type takes yet, and list the keys in Keys; describe
-// them in KeyRules; test it against a stand-in of the store; and write its
+// and its registration. Give model.SecretStore a field for each key the
+// type takes that no type takes yet, and list the keys in Keys. Describe
+// them in KeyRules. Test it against a stand-in of the store. Write its
 // section of docs/AUTHENTICATION.md and its rule of the specification's
 // § 42.6c. docs/DEVELOPMENT.md has the steps.
 type SecretStoreType struct {
 	// Name is the value of type.
 	Name string
-	// Keys are the keys of an entry the type takes, beside those every
-	// type takes (secretCommonKeys), each by its yaml name, a block such
-	// as auth or tls by its own. An entry that sets another type's key is
-	// refused, naming it.
+	// Keys are the entry keys the type takes, besides those every type
+	// takes (secretCommonKeys). Each is given by its yaml name, and a block
+	// such as auth or tls by its own name. An entry that sets another
+	// type's key is refused, naming it.
 	Keys []string
 	// Check holds an entry to the type's rules when the configuration
 	// loads: the keys it requires and what each may be. Its error follows
@@ -209,10 +209,11 @@ type SecretStoreType struct {
 	// FieldRequired says a secret of the type is fields and never one
 	// value, so a reference without a #field is refused at load.
 	FieldRequired bool
-	// KeyRules is what the configuration schema says of the type's keys:
-	// each key's description, which starts with the type's name, and its
-	// allowed values, pattern or required keys, by the key's path under
-	// an entry (auth.method). A key two types take is described by both.
+	// KeyRules is what the configuration schema says about the type's
+	// keys, by each key's path under an entry (auth.method): its
+	// description, which starts with the type's name, and its allowed
+	// values, pattern or required keys. A key two types take is described
+	// by both.
 	KeyRules func() map[string]map[string]any
 }
 
@@ -546,11 +547,11 @@ func newSecretStore(e model.SecretStore) (*secretStore, error) {
 	return s, err
 }
 
-// FollowSecretStores puts the entries of secret_stores of the
-// configuration in force. A store a reload left as it was is kept, with the
-// secrets it has read and its login; one it changed starts anew, and so
-// reads each secret again. The counts of a store are kept while a store of
-// its name is in force.
+// FollowSecretStores puts the configuration's secret_stores entries in
+// force. A store that a reload left unchanged is kept, with the secrets it
+// has read and its login. A store it changed starts anew and reads each
+// secret again. A store's counts are kept while a store of its name is in
+// force.
 func FollowSecretStores(entries []model.SecretStore) {
 	var before map[string]*secretStore
 	if p := secretStoresInForce.Load(); p != nil {
@@ -591,10 +592,10 @@ func (b failedBackend) Read(context.Context, SecretReference) (SecretDocument, e
 	return SecretDocument{}, b.err
 }
 
-// SecretStoreCount is what a store of secret_stores has counted: the
-// requests made to it for a secret, those that failed, the reads answered
-// with a secret past its cache_ttl because the store could not be asked,
-// and when it began to count, the zero time for since the exporter started.
+// SecretStoreCount is what a store of secret_stores has counted: requests
+// made to it for a secret, those that failed, and reads answered with a
+// secret past its cache_ttl because the store could not be asked. It also
+// holds when counting began, the zero time meaning since the exporter started.
 type SecretStoreCount struct {
 	Name                    string
 	Requests, Failed, Stale uint64
@@ -619,10 +620,10 @@ func SecretStoreCounts() []SecretStoreCount {
 }
 
 // secretFileKeys are the keys that name a file the exporter opens as a
-// file, and not through ReadCredentialFile: certificates and keys, which
-// the TLS and SSH libraries read, descriptors and statements, which are no
-// credentials, and the file a login keeps its token in. A reference to a
-// secret store in one of them is refused.
+// file, not through ReadCredentialFile. They are certificates and keys,
+// which the TLS and SSH libraries read; descriptors and statements, which
+// are not credentials; and the file a login keeps its token in. A reference
+// to a secret store in one of them is refused.
 var secretFileKeys = []string{"ca_file", "cert_file", "key_file", "kubelet_ca_file", "private_key_file", "known_hosts_file", "protoset_file", "proto_files", "statement_file", "keep_file", "collector_files", "value_map_file"}
 
 // SecretReferences checks the references to secret stores in a
@@ -639,12 +640,12 @@ func NewSecretReferences(stores []model.SecretStore) SecretReferences {
 	return names
 }
 
-// Check finds every reference to a secret store in v, a configuration, a
-// static target or a part of one, and says what is wrong with the first
-// that is not one a read would take: one that is not written as a
-// reference is, one that names a store the configuration does not have,
-// and one in a key whose file is not read as a credential. what and name
-// say what v is, for the error: the configuration, or target and its name.
+// Check finds every reference to a secret store in v (a configuration, a
+// static target or a part of one). It reports what is wrong with the first
+// one a read would not take: one not written as a reference, one that names
+// a store the configuration does not have, or one in a key whose file is
+// not read as a credential. what and name describe v for the error: the
+// configuration, or target and its name.
 func (names SecretReferences) Check(what, name string, v any) error {
 	key, written, err := names.walk(reflect.ValueOf(v), "")
 	if err == nil {
@@ -801,10 +802,10 @@ func secretStoreSaid(body []byte) string {
 	return model.CutTo(RedactText(text), 300, false)
 }
 
-// secretClient is the HTTP client a store is asked with: the default
-// transport's proxy and dialing, the TLS settings given, no redirect to
-// another host, since a redirect is followed with the store's token, and
-// timeout for the whole of one request.
+// secretClient is the HTTP client a store is asked with. It uses the default
+// transport's proxy and dialing and the TLS settings given. It follows no
+// redirect to another host, since a redirect is followed with the store's
+// token. timeout covers the whole of one request.
 func secretClient(tlsSettings model.TLSConfig, timeout time.Duration) (*http.Client, error) {
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment}
 	if shared, ok := http.DefaultTransport.(*http.Transport); ok {

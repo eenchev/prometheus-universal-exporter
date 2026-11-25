@@ -15,11 +15,11 @@ import (
 // Authorization header over HTTP, the authorization metadata over gRPC.
 
 // collectorAuthorization is requestAuthorization for a request that also
-// carries forwarded headers: a static target's own, or the ones a probe
+// carries forwarded headers: a static target's own, or those a probe
 // forwards. An Authorization among them is sent instead of the collector's,
-// so the collector's is not built at all: a static target with a credential
-// of its own must not fail because the file of the collector's credential,
-// which it never sends, is missing or empty.
+// so the collector's is not built at all. A static target with its own
+// credential must not fail because the collector's credential file, which
+// it never sends, is missing or empty.
 func collectorAuthorization(c *model.Collector, forwarded ...http.Header) (string, error) {
 	for _, headers := range forwarded {
 		for name, values := range headers {
@@ -31,13 +31,13 @@ func collectorAuthorization(c *model.Collector, forwarded ...http.Header) (strin
 	return requestAuthorization(c)
 }
 
-// CheckBasicUsername refuses the username of a Basic credential that holds
-// a colon. The credential is the username and the password joined by a
-// colon (RFC 7617), and a server splits it at the first one: a username
-// with one in it reaches the server as a shorter username and a password
-// that starts with the rest of it, and is refused there on every scrape, or
-// is never matched by the exporter's own web.basic_auth. The value itself is
-// never shown.
+// CheckBasicUsername refuses a Basic credential's username that holds a
+// colon. The credential is the username and the password joined by a colon
+// (RFC 7617), and a server splits it at the first one. A username with a
+// colon reaches the server as a shorter username plus a password that
+// starts with the rest of it. The server then refuses it on every scrape,
+// or the exporter's own web.basic_auth never matches it. The value itself
+// is never shown.
 func CheckBasicUsername(username string) error {
 	if strings.Contains(username, ":") {
 		return errors.New(`holds a colon (":"), which ends the username of a Basic credential (RFC 7617): the server reads the username up to it and the rest as the start of the password, so a Basic username cannot hold one`)

@@ -14,35 +14,36 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The debug page's OTLP tab, with otlp.enabled: what the next export would
-// send of a run's series, made by the export's own code (otlpProbeSet,
-// targetResource, withoutResourceLabels, otlpResourceMetricsOf) and not by
-// a copy of it, so the tab cannot say one thing while the export does
-// another. It is made of the run alone. Nothing is queued, no start time is
-// asked of the series remembered (otlpStartTimes) or remembered, nothing
-// counts in the export's self-metrics or its status, and nothing is sent:
+// The debug page's OTLP tab, with otlp.enabled, shows what the next export
+// would send of a run's series. It is made by the export's own code
+// (otlpProbeSet, targetResource, withoutResourceLabels,
+// otlpResourceMetricsOf), not by a copy of it, so the tab cannot say one
+// thing while the export does another. It is made of the run alone. Nothing
+// is queued. No start time is read from or stored in the remembered series
+// (otlpStartTimes). Nothing counts in the export's self-metrics or its
+// status, and nothing is sent:
 //
-//   - a probe's run — a pasted response or a target fetched, of a
-//     configured collector or of the playground — is under the exporter-wide
-//     resource, with otlp.probe_attributes' collector and target, as a
-//     probe of its collector is exported; a static target's scrape is under
-//     the target's resource, its otlp.labels_as_resource moved to it, as its
-//     scrape with export_via_otlp is;
-//   - a cumulative point's start time is its own time, which is the start
-//     time a series' first export gives it: the export remembers when each
-//     series started, which a run must neither read nor change;
-//   - the points are checked against one another as the export checks
-//     those of a resource (otlpMetricsOf), and against nothing else: the
+//   - A probe's run (a pasted response or a fetched target, of a configured
+//     collector or of the playground) is under the exporter-wide resource,
+//     with otlp.probe_attributes' collector and target, as a probe of its
+//     collector is exported. A static target's scrape is under the target's
+//     resource, with its otlp.labels_as_resource moved to it, as its scrape
+//     with export_via_otlp is.
+//   - A cumulative point's start time is its own time. That is the start
+//     time a series' first export gives it. The export remembers when each
+//     series started, and a run must neither read nor change that.
+//   - The points are checked against one another as the export checks
+//     those of a resource (otlpMetricsOf), and against nothing else. The
 //     points of other probes and static targets of the same resource, and
 //     the exporter's own series, are not the run's, and an export may have
 //     any of them or none.
 //
 // With otlp.logs on, the run's log lines are shown as the log records the
-// tee would make of them (otlpLogHandler), and those it would take, at
-// otlp.logs.level or above, as the request the log export would send. A run
-// logs to its answer alone, so none of them is queued either. With
-// otlp.traces on, the run's trace is shown as the spans the trace export
-// would make of it (debugotlptraces.go), and never queued.
+// tee would make of them (otlpLogHandler). Those it would take, at
+// otlp.logs.level or above, are shown as the request the log export would
+// send. A run logs to its answer alone, so none of them is queued either.
+// With otlp.traces on, the run's trace is shown as the spans the trace
+// export would make of it (debugotlptraces.go), and is never queued.
 
 // debugOTLP is the otlp field of a run's answer.
 type debugOTLP struct {
@@ -75,10 +76,10 @@ type debugOTLPAttribute struct {
 	Value string `json:"value"`
 }
 
-// debugOTLPPoint is a data point: Prometheus, the name the exposition
-// writes it under, Name, Kind and Unit its metric's, Value its value or, of
-// a histogram or a summary, its count, sum and buckets or quantiles, and
-// Notes each change the export made of its series.
+// debugOTLPPoint is a data point. Prometheus is the name the exposition
+// writes it under. Name, Kind and Unit are its metric's. Value is its value,
+// or for a histogram or a summary its count, sum and buckets or quantiles.
+// Notes lists each change the export made to its series.
 type debugOTLPPoint struct {
 	Prometheus string               `json:"prometheus"`
 	Name       string               `json:"name"`
@@ -118,9 +119,9 @@ type debugOTLPLogRecord struct {
 	Exported       bool                 `json:"exported"`
 	Note           string               `json:"note,omitempty"`
 	// TraceID and SpanID are the run's trace and the span the line was
-	// logged in, which a probe's record is linked to when its trace is
-	// exported (otlptraceslink.go), and Link says so: the run's trace is
-	// never exported, and its records are not linked.
+	// logged in. A probe's record is linked to them when its trace is
+	// exported (otlptraceslink.go), and Link says whether it is. The run's
+	// trace is never exported, and its records are not linked.
 	TraceID string `json:"trace_id,omitempty"`
 	SpanID  string `json:"span_id,omitempty"`
 	Link    string `json:"link,omitempty"`

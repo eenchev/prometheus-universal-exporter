@@ -17,12 +17,13 @@ import (
 //     milliseconds, as the model keeps every timestamp.
 //   - An exemplar after a sample's value or timestamp, " # {labels} value
 //     [timestamp]", is skipped: the model has no place for one.
-//   - A family's type may be unknown, read as untyped; stateset, read as a
-//     gauge, whose samples already are one per state with the value 1 or 0;
-//     info, read as the gauge foo_info with its value, 1, as Prometheus reads
-//     it; and gaugehistogram, read as the gauges foo_bucket (its le a plain
-//     label), foo_gcount and foo_gsum, since a gauge histogram's buckets go
-//     up and down and a histogram's may not.
+//   - A family's type may be unknown, read as untyped. It may be stateset,
+//     read as a gauge, whose samples already are one per state with the
+//     value 1 or 0. It may be info, read as the gauge foo_info with its
+//     value, 1, as Prometheus reads it. It may be gaugehistogram, read as
+//     the gauges foo_bucket (its le a plain label), foo_gcount and foo_gsum,
+//     since a gauge histogram's buckets go up and down and a histogram's
+//     may not.
 //   - A counter foo's samples are foo_total, and foo_created, the time it
 //     started counting. The series is named foo_total, as Prometheus names
 //     it, with the counter's type and help; a family already named foo_total

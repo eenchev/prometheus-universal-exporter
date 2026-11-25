@@ -9,36 +9,38 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// An OTLP cumulative point — a counter's sum, a histogram, a summary — carries
-// the time its series started counting, which a backend uses to tell a reset
+// An OTLP cumulative point (a counter's sum, a histogram, a summary) carries
+// the time its series started counting. A backend uses it to tell a reset
 // from a series that only grew. The exporter reads counters from targets and
-// cannot know when a target began counting, so it does what the
-// OpenTelemetry Collector's Prometheus receiver does: a series starts when the
-// exporter first exports it, and starts again at a point whose count went
-// down, which only a reset does. A series not exported for otlpStartForget is
-// forgotten, and starts again when it comes back.
+// cannot know when a target began counting. So it does what the
+// OpenTelemetry Collector's Prometheus receiver does:
+//   - a series starts when the exporter first exports it;
+//   - it starts again at a point whose count went down, since only a reset
+//     does that;
+//   - a series not exported for otlpStartForget is forgotten, and starts
+//     again when it comes back.
 //
-// A series is seen here when an export has a point of it, also when the
-// point is then left out for another kind of its name written later
-// (otlpMetricsOf): the count is one the series had, so it starts where it
-// was first seen, and a count that fell in a point left out is the reset
-// it is. Two writers of one series under a resource, two probes that
-// answer with one counter, are one series: the lower count of one after
-// the other's is a reset, and the higher after it is none.
+// A series counts as seen when an export has a point of it. This holds even
+// when the point is then left out for another kind of its name written later
+// (otlpMetricsOf). The count is one the series had, so the series starts
+// where it was first seen, and a count that fell in a left-out point is a
+// real reset. Two writers of one series under a resource (for example two
+// probes that answer with one counter) are one series. A lower count of one
+// after the other's is a reset; a higher one is not.
 //
-// The exporter's own counters, histograms and summaries are not among them:
-// it knows when each began to count, and their points carry that time
-// (selfcreated.go, otlpMetrics).
+// The exporter's own counters, histograms and summaries are not tracked
+// here. The exporter knows when each began to count, and their points carry
+// that time (selfcreated.go, otlpMetrics).
 //
-// The series remembered are bounded as well, by otlpStartSeriesPerPoint
-// times otlp.max_pending_points: series whose labels keep changing — a
-// request ID, a timestamp — would otherwise each be kept for an hour, without
-// limit. One export carries at most max_pending_points points, so the bound
-// leaves room for every series being exported and for some churn; past it,
-// the series seen least recently is forgotten first, and starts again if it
-// comes back. And each is remembered by a key of at most otlpKeyLongest
-// bytes, a longer one by its digest (otlpKeyOf), whatever its labels hold:
-// a probe's target, with otlp.probe_attributes, may be 8 KiB.
+// The remembered series are bounded by otlpStartSeriesPerPoint times
+// otlp.max_pending_points. Otherwise series whose labels keep changing (a
+// request ID, a timestamp) would each be kept for an hour, without limit.
+// One export carries at most max_pending_points points, so the bound leaves
+// room for every series being exported plus some churn. Past it, the least
+// recently seen series is forgotten first, and starts again if it comes
+// back. Each series is keyed by at most otlpKeyLongest bytes, whatever its
+// labels hold; a longer key is replaced by its digest (otlpKeyOf). A probe's
+// target, with otlp.probe_attributes, may be 8 KiB.
 
 const (
 	otlpStartForget = time.Hour
@@ -89,13 +91,13 @@ func (t *otlpStartTimes) bound(maxPending int) {
 }
 
 // forResource is the start time of each cumulative point of one resource,
-// whose key resource is. A series is remembered under the resource's key,
-// after its length as a part of a key is written (appendKeyPart), and then
-// its own (otlpSeriesKey): where the one ends and the other begins is not
-// read from what either holds, so no series of one resource has the start
-// time of a series of another. The key is remembered as itself or by its
-// digest (otlpKeyOf), and is made where the point's start time is found,
-// so a series already seen is found without an allocation.
+// whose key is resource. A series is remembered under the resource's key
+// (prefixed with its length as a key part, appendKeyPart), followed by the
+// series' own key (otlpSeriesKey). The boundary between the two does not
+// depend on their contents, so no series of one resource gets the start
+// time of a series of another. The key is stored as is or as its digest
+// (otlpKeyOf). It is built where the point's start time is looked up, so an
+// already seen series is found without an allocation.
 func (t *otlpStartTimes) forResource(resource string) func(m model.Metric, at string) string {
 	of := string(appendKeyPart(nil, resource))
 	return func(m model.Metric, at string) string {

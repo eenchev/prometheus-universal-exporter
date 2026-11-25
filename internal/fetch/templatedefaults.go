@@ -4,18 +4,18 @@ package fetch
 
 import "fmt"
 
-// The load-time rule of a templated field, for the types that have one: http
-// and graphite, in the body, the header and query values and the Graphite
-// expressions, grpc, in the message and the metadata values, and sql, in
-// the database's name. localfile has placeholders in its path alone, so a
-// build with only it leaves this out.
+// The load-time rule of a templated field, for the types that have one. In
+// http and graphite these are the body, the header and query values and the
+// Graphite expressions; in grpc, the message and the metadata values; in
+// sql, the database's name. localfile has placeholders only in its path, so
+// a build with only it leaves this out.
 
 // check is what a field is held to when the configuration loads: its
-// placeholders well formed, and each default one that can be written where
-// it stands. A default its own place refuses — ten under |number, a glob in
-// a Graphite expression, a line break in a header — could never be sent, so
-// every probe that left the parameter out would fail with a 400 that blames
-// the probe.
+// placeholders must be well formed, and each default must be writable where
+// it stands. Some defaults their own place refuses: ten under |number, a
+// glob in a Graphite expression, a line break in a header. Such a default
+// could never be sent, so every probe that left the parameter out would fail
+// with a 400 that blames the probe.
 func (f templateField) check() error {
 	placeholders, err := f.parse()
 	if err != nil {

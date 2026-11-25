@@ -90,35 +90,35 @@ func ValidateShutdownTimeout(timeout time.Duration) error {
 	return nil
 }
 
-// The exporter's own HTTP server bounds what a client can hold open. Headers
-// must arrive within httpReadHeaderTimeout and a whole request within
-// httpReadTimeout, so a stalled client cannot keep a handler waiting, and a
-// keep-alive connection idle for httpIdleTimeout is closed, so a client that
-// went away without closing it does not keep it, and its goroutine, until TCP
-// notices. Prometheus reuses its connection between scrapes, which are far
-// more frequent than that. The server has no write timeout of its own, which
-// would count from the request's arrival and so cut off a probe that takes as
-// long as its scrape timeout: the probe's own deadline bounds that
-// (scrapetimeout.go), and the writing of the answer is bounded from its first
-// byte (AnswerWriteTimeout, middleware.go).
+// The exporter's own HTTP server bounds what a client can hold open.
+// Headers must arrive within httpReadHeaderTimeout and a whole request
+// within httpReadTimeout, so a stalled client cannot keep a handler
+// waiting. A keep-alive connection idle for httpIdleTimeout is closed, so a
+// client that went away without closing it does not keep it, and its
+// goroutine, until TCP notices. Prometheus reuses its connection between
+// scrapes, which are far more frequent than that. The server has no write
+// timeout of its own: it would count from the request's arrival, and so cut
+// off a probe that takes as long as its scrape timeout. The probe's own
+// deadline bounds that (scrapetimeout.go), and writing the answer is
+// bounded from its first byte (AnswerWriteTimeout, middleware.go).
 //
-// A request's line and headers together may be httpMaxHeaderBytes, where Go's
-// default is 1 MiB: a probe is a URL of a few parameters, each bounded on its
-// own (probeparams.go), and the headers Prometheus sends.
+// A request's line and headers together may be httpMaxHeaderBytes, where
+// Go's default is 1 MiB. A probe is a URL of a few parameters, each bounded
+// on its own (probeparams.go), plus the headers Prometheus sends.
 var (
 	httpReadHeaderTimeout = 10 * time.Second
 	httpReadTimeout       = 30 * time.Second
 	httpIdleTimeout       = 2 * time.Minute
 )
 
-// SetReadHeaderTimeout is how long a client has to send a request's headers
-// to an HTTP server made from now on (NewHTTPServer), which is ten seconds in
-// the exporter. It is for tests. A test's client that sends its request at
-// once is ten seconds late with it on a machine with every CPU busy
-// elsewhere, and a test that is not about the limit then fails by it; such a
-// test runs against a server that leaves the headers half a minute, the
-// bound of a hang and what the whole request has. A test of the limit itself
-// sets a short one, and its client never ends its headers.
+// SetReadHeaderTimeout sets how long a client has to send a request's
+// headers to an HTTP server made from now on (NewHTTPServer). In the
+// exporter it is ten seconds. It is for tests. On a machine with every CPU
+// busy elsewhere, a test's client that sends its request at once is ten
+// seconds late with it, and a test that is not about the limit then fails
+// by it. Such a test runs against a server that gives the headers half a
+// minute: the bound of a hang, and what the whole request has. A test of
+// the limit itself sets a short one, and its client never ends its headers.
 func SetReadHeaderTimeout(limit time.Duration) { httpReadHeaderTimeout = limit }
 
 // httpMaxHeaderBytes bounds a request's line and headers.
@@ -170,9 +170,9 @@ func ValidateShutdownDelay(delay time.Duration) error {
 func (s *Server) BeginShutdown() { s.stopping.Store(true) }
 
 // countInProgress counts the requests next is answering, and the probes
-// among them, from the moment the request is routed until its answer is
-// written: what the HTTP server's graceful shutdown waits for, so the
-// shutdown can say what it is waiting for (InProgress).
+// among them, from the moment a request is routed until its answer is
+// written. That is what the HTTP server's graceful shutdown waits for, so
+// the shutdown can say what it is waiting for (InProgress).
 func (s *Server) countInProgress(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		probe := r.URL.Path == "/probe"

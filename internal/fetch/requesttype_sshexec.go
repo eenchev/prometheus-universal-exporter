@@ -22,10 +22,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// The sshexec request type runs one fixed command on a host over SSH and
-// hands what it wrote to stdout to the decoder and the transforms, as an
-// http answer's body is handed to them, and as tcp hands its answer: the
-// output of df, uptime, systemctl is-active, or a script of the host's
+// The sshexec request type runs one fixed command on a host over SSH. It
+// hands what the command wrote to stdout to the decoder and the transforms,
+// as an http answer's body is handed to them and as tcp hands its answer:
+// the output of df, uptime, systemctl is-active, or a script of the host's
 // own, read by regex, text, csv or prometheus.
 //
 //	request:
@@ -36,43 +36,45 @@ import (
 //	  known_hosts_file: /etc/exporter/ssh/known_hosts # required
 //	  success_exit_codes: [0, 1]                      # optional: [0] when left out
 //
-// The probe's target is the host, host:port or ssh://host:port, port 22
-// when it is left out, as an sshfile collector's. The connection is
-// sshfile's (sshconn.go, sshtarget.go): the host's key always verified
-// against known_hosts_file, the private key, its passphrase and the
-// password, keepalives, the idle timeout, max_open_connections and the
-// target policy, each connection kept and shared by the scrapes reaching
-// the host with the same settings. Each scrape opens one session on it and
-// runs the command there.
+// The probe's target is the host, host:port or ssh://host:port, with port
+// 22 when the port is left out, as for an sshfile collector. The connection
+// is sshfile's (sshconn.go, sshtarget.go), with the same settings: the
+// host's key, always verified against known_hosts_file, the private key,
+// its passphrase and the password, keepalives, the idle timeout,
+// max_open_connections and the target policy. Each connection is kept and
+// shared by the scrapes reaching the host with the same settings. Each
+// scrape opens one session on it and runs the command there.
 //
-// The command is a list, never a line a shell reads: the program, an
-// absolute path or a bare name the account's PATH finds, and its
+// The command is a list, never a line a shell reads: the program (an
+// absolute path, or a bare name the account's PATH finds) and its
 // arguments. sshd hands the command line to the account's shell, so the
-// exporter writes every word in single quotes, a ' in it as '\'', and the
-// shell makes each the one word it was in the list, whatever it holds:
-// nothing of it is a variable, a glob, a separator or a redirection. An
-// argument may hold {{param_name}} placeholders, filled from the probe,
-// whose values may hold only the characters tcp's send takes (lineValue):
-// a value adds no word, and nothing a forced command's wrapper could split
-// on. Nor may a value begin its argument with a -, an option to the
-// program, or have .. as a path component. The program takes none, and a static target changes nothing of the
-// command, only the account and the credentials it runs with.
+// exporter writes every word in single quotes, with a ' in it as '\''. The
+// shell then makes each the one word it was in the list, whatever it holds:
+// no part of it is a variable, a glob, a separator or a redirection. An
+// argument may hold {{param_name}} placeholders, filled from the probe.
+// Their values may hold only the characters tcp's send accepts (lineValue),
+// so a value adds no word, and nothing a forced command's wrapper could
+// split on. A value also may not begin its argument with a -, an option to
+// the program, or have .. as a path component. The program takes no
+// placeholders, and a static target changes nothing of the command, only
+// the account and the credentials it runs with.
 //
-// stdout is read against the response limit as it comes, and the scrape
-// fails as over the limit at the first byte past it. stderr is kept, its
-// first sshExecStderrBytes, for the error and the debug report. The exit
-// status decides: 0, or one of success_exit_codes, is a success, and
-// anything else, a signal among it, fails the scrape with the status and
-// the start of stderr, which a probe's caller is not shown: stderr may
-// quote what a file on the host holds. At the scrape's deadline the
-// command is sent KILL and its session closed; a session not ended within
-// sshAbandonGrace, a forced command's, has its connection retired, closed
-// once the other scrapes' sessions on it end.
+// stdout is read against the response limit as it arrives, and the scrape
+// fails as over the limit at the first byte past it. The first
+// sshExecStderrBytes of stderr are kept for the error and the debug report.
+// The exit status decides the result. 0, or one of success_exit_codes, is a
+// success. Anything else, including a signal, fails the scrape with the
+// status and the start of stderr. A probe's caller is not shown stderr,
+// since it may quote what a file on the host holds. At the scrape's
+// deadline the command is sent KILL and its session closed. If a session
+// does not end within sshAbandonGrace, as with a forced command, its
+// connection is retired and closed once the other scrapes' sessions on it
+// end.
 //
-// No environment is sent: OpenSSH accepts only the variables its AcceptEnv
+// No environment is sent. OpenSSH accepts only the variables its AcceptEnv
 // names, which by default are none, so a request would fail or, worse, be
-// ignored on some hosts and not others. The type links x/crypto's SSH client
-// but not the SFTP client.
+// ignored on some hosts and not others. The type links x/crypto's SSH
+// client but not the SFTP client.
 
 // SSHExecConfig is an sshexec collector's own request keys: the command,
 // its program first, and the exit statuses that are a success, 0 alone
@@ -264,10 +266,10 @@ func validateSSHExecRequest(x *model.Collector) error {
 	return validateSSHConnection(x, "the command runs as")
 }
 
-// checkSSHExecProgram holds the program to its rules: written, with no
-// placeholder, no control character, and either an absolute path or a
-// bare name, which the account's PATH finds. A relative path with a / in
-// it would be found from the account's home directory, which the exporter
+// checkSSHExecProgram checks the program: it must be written, with no
+// placeholder and no control character, and be either an absolute path or a
+// bare name, which the account's PATH finds. A relative path with a / in it
+// would be resolved from the account's home directory, which the exporter
 // cannot see, so it is refused.
 func checkSSHExecProgram(program string) error {
 	switch {
@@ -308,18 +310,19 @@ func escapeSSHExecValue(where, name, value string) (string, error) {
 	return value, nil
 }
 
-// hasDotDot says whether value has .. as a path component: is .., begins
-// with ../, ends with /.., or holds /../. A program given a path a probe
-// chose reads or lists what it names, so a value under a directory the
-// configuration writes, as /var/log/app/{{param_file}}, stays under it.
+// hasDotDot reports whether value has .. as a path component: it is ..,
+// begins with ../, ends with /.., or contains /../. A program given a path a
+// probe chose reads or lists what it names. This keeps a value under a
+// directory the configuration writes, as in /var/log/app/{{param_file}}.
 func hasDotDot(value string) bool {
 	return value == ".." || strings.HasPrefix(value, "../") || strings.HasSuffix(value, "/..") || strings.Contains(value, "/../")
 }
 
-// sshExecDotDotRule refuses an argument whose values make .. a path
-// component that no one of them is: . and . in {{param_a}}{{param_b}}, or
-// . after a dot the configuration wrote, .{{param_a}}. A .. the
-// configuration itself writes, ../{{param_file}}, is its own.
+// sshExecDotDotRule refuses an argument whose values together make a ..
+// path component that none of them is alone: . and . in
+// {{param_a}}{{param_b}}, or . after a dot the configuration wrote, as in
+// .{{param_a}}. A .. the configuration writes itself, as in
+// ../{{param_file}}, is the configuration's own and not refused here.
 func sshExecDotDotRule(where, text string, placeholders []pathPlaceholder, filled string) error {
 	var written strings.Builder
 	previous := 0
@@ -377,10 +380,10 @@ func sshExecWords(c *model.Collector, params map[string]string) ([]string, error
 	return words, nil
 }
 
-// sshExecLine is the command line sent for words: each word in single
-// quotes, a single quote in it written as the quotes closed, an escaped
-// quote and the quotes opened again, so that a POSIX shell makes each the
-// one word it is, whatever it holds.
+// sshExecLine returns the command line sent for words. Each word is in
+// single quotes, and a single quote in it is written as closing quote,
+// escaped quote, opening quote, so a POSIX shell makes each the one word it
+// is, whatever it holds.
 func sshExecLine(words []string) string {
 	var b strings.Builder
 	for i, word := range words {
@@ -495,9 +498,9 @@ func (r *sshExecRun) facts() []TraceFact {
 	}
 }
 
-// sshExecFailure is the error of a command whose exit status is not a
-// success: the status, or the signal, and the start of stderr, with what
-// reads as a credential in it masked, as in every text the exporter did not
+// sshExecFailure returns the error of a command whose exit status is not a
+// success: the status or signal, and the start of stderr. Anything in it
+// that reads as a credential is masked, as in all text the exporter did not
 // write.
 func sshExecFailure(c *model.Collector, hostPort string, r *sshExecRun) error {
 	how := "exited with " + strconv.Itoa(r.status)
@@ -518,12 +521,11 @@ func sshExecFailure(c *model.Collector, hostPort string, r *sshExecRun) error {
 		fmt.Sprintf("the command on %s %s; what it wrote to stderr is in the exporter's log", hostPort, how))
 }
 
-// run runs line on a connection for key, in a session of its own, within
-// ctx. A session that cannot be opened because the connection was lost is
-// opened once more, on a new connection, while ctx lasts; a command whose
-// exec request was written is never sent again, since the host may have
-// run it. shown is what a debug probe's request section
-// shows of the host.
+// run runs line on a connection for key, in its own session, within ctx. If
+// a session cannot be opened because the connection was lost, it is opened
+// once more on a new connection while ctx lasts. A command whose exec
+// request was written is never sent again, since the host may have run it.
+// shown is what a debug probe's request section shows of the host.
 func (c *sshConnCache) run(ctx context.Context, key sshConnKey, x *model.Collector, line, shown string) (*sshExecRun, error) {
 	limit := responseLimit(x)
 	for attempt := 0; ; attempt++ {
@@ -581,14 +583,14 @@ type sshExecDone struct {
 	err     error
 }
 
-// abandonExec is a scrape giving up on its command at its deadline: the
-// command is sent KILL and its session closed, which ends it on a server
-// that answers, and the run is given sshAbandonGrace to return. A session
-// that has not ended by then is one the host will not end: OpenSSH refuses
-// a signal to a forced command, and answers the close only once the
-// command has exited. Its connection is retired rather than dropped
-// (retireStalled): the other scrapes' commands on it are left to finish.
-// The connection is released when the run returns, or when it is retired.
+// abandonExec gives up a scrape's command at its deadline. The command is
+// sent KILL and its session closed, which ends it on a server that answers,
+// and the run is given sshAbandonGrace to return. A session that has not
+// ended by then is one the host will not end: OpenSSH refuses a signal to a
+// forced command, and answers the close only after the command has exited.
+// Its connection is retired rather than dropped (retireStalled), so the
+// other scrapes' commands on it can finish. The connection is released when
+// the run returns, or when it is retired.
 func (c *sshConnCache) abandonExec(entry *sshConn, es *sshExecSession, done <-chan sshExecDone) {
 	es.abandon()
 	go func() {
@@ -606,12 +608,13 @@ func (c *sshConnCache) abandonExec(entry *sshConn, es *sshExecSession, done <-ch
 }
 
 // retireStalled forgets a connection whose session could not be ended at
-// its scrape's deadline, so no scrape opens another session on it, and
-// leaves it open for the sessions other scrapes have on it: it is closed
-// when the last of them ends (release), each by its scrape's deadline and
-// sshAbandonGrace. The stalled session's hold is let go of by the caller,
-// since nothing ends that session but the close of its connection, which
-// leaves the command on the host to its own end. Logged once a connection.
+// its scrape's deadline, so no scrape opens another session on it. It
+// leaves the connection open for the sessions other scrapes have on it. It
+// is closed when the last of them ends (release), each bounded by its
+// scrape's deadline and sshAbandonGrace. The caller lets go of the stalled
+// session's hold, since only closing its connection ends that session,
+// which leaves the command on the host to end on its own. Logged once per
+// connection.
 func (c *sshConnCache) retireStalled(entry *sshConn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -671,16 +674,16 @@ func (e *sshExecSession) abandon() {
 	}
 }
 
-// sshExecCloseUnanswered, set by tests, keeps an abandoned session's close
-// from being sent: the test server would answer it at once, where OpenSSH
-// does not answer it while a forced command lives, and the session stays
-// open as it does then.
+// sshExecCloseUnanswered, set by tests, stops an abandoned session's close
+// from being sent. The test server would answer it at once, whereas OpenSSH
+// does not answer it while a forced command runs, so the session stays open
+// as it does with OpenSSH.
 var sshExecCloseUnanswered atomic.Bool
 
-// run opens a session on client, runs line in it, and reads stdout,
-// held to limit, and stderr, of which its first sshExecStderrBytes are
-// kept, until the command exits. started says the exec request was
-// written, whether or not the host answered it.
+// run opens a session on client, runs line in it, and reads stdout (held to
+// limit) and stderr (keeping its first sshExecStderrBytes) until the command
+// exits. started reports that the exec request was written, whether or not
+// the host answered it.
 func (e *sshExecSession) run(client *ssh.Client, line string, limit int64) (*sshExecRun, bool, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -698,10 +701,10 @@ func (e *sshExecSession) run(client *ssh.Client, line string, limit int64) (*ssh
 	if err != nil {
 		return nil, false, err
 	}
-	// From here the exec request is written, and the host may have taken
-	// it whatever becomes of its answer: a connection lost now may have
-	// been lost after the command started, so the run counts as started
-	// and is never retried, lest the command run twice.
+	// From here on the exec request is written, and the host may have
+	// accepted it whatever happens to its answer. A connection lost now may
+	// have been lost after the command started, so the run counts as
+	// started and is never retried, so the command does not run twice.
 	if err := session.Start(line); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 			return nil, true, fmt.Errorf("the connection was lost once the command was sent, so it is not sent again; it may have run: %w", err)
@@ -716,13 +719,13 @@ func (e *sshExecSession) run(client *ssh.Client, line string, limit int64) (*ssh
 	}()
 	body, err := readSSHExecStdout(stdout, limit)
 	if err != nil {
-		// The command is ended rather than waited for: what it writes past
-		// the limit is of no use. A host that will not end it, as OpenSSH
-		// will not end a forced command, leaves its session open, and every
-		// scrape that came to the limit would leave one more on the
-		// connection until the host refused another: the session is given
-		// sshAbandonGrace, as at a deadline, and its connection retired
-		// after it (sshExecStalledError).
+		// The command is ended rather than waited for, since what it writes
+		// past the limit is of no use. A host that will not end it, as
+		// OpenSSH will not end a forced command, leaves its session open.
+		// Every scrape that reached the limit would then leave one more
+		// session on the connection until the host refused another. So the
+		// session is given sshAbandonGrace, as at a deadline, and its
+		// connection is retired after it (sshExecStalledError).
 		_ = session.Signal(ssh.SIGKILL)
 		if !sshExecCloseUnanswered.Load() {
 			_ = session.Close()

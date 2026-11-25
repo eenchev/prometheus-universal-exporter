@@ -1,16 +1,19 @@
 // Package kubetest is a stand-in Kubernetes API server for the tests of
-// internal/kubeapi and of the kubernetes request type: an HTTPS server that
-// answers a listing of the objects a test gave it at a path, a page at a
-// time as the limit asks with a continue token for the rest, refuses a
-// request without the token in its service account directory, or the one
-// it was told to require, with 401,
-// answers 403 and 404 as the API server does, 429 as its priority and
-// fairness does, 410 Expired for a continue token it was told to have
-// lost, a listing of the objects' metadata alone when it is asked for
-// that, can be slow to answer, and records every request it was sent. It writes the service account directory a pod has, the
-// token, the server's CA and the namespace, and can set the environment
-// that points a pod at its API server. It imports nothing but the standard
-// library.
+// internal/kubeapi and of the kubernetes request type. It is an HTTPS server
+// that:
+//   - answers a listing of the objects a test gave it at a path, a page at a
+//     time as the limit asks, with a continue token for the rest;
+//   - answers a listing of the objects' metadata alone when asked for that;
+//   - refuses with 401 a request without the token in its service account
+//     directory, or without the token it was told to require;
+//   - answers 403 and 404 as the API server does, 429 as its priority and
+//     fairness does, and 410 Expired for a continue token it was told to
+//     have lost;
+//   - can be slow to answer, and records every request it was sent.
+//
+// It writes the service account directory a pod has: the token, the
+// server's CA and the namespace. It can set the environment that points a
+// pod at its API server. It imports nothing but the standard library.
 package kubetest
 
 import (
@@ -43,9 +46,9 @@ type Server struct {
 	requests []Request
 	holdFrom int
 	// throttle is how many more requests of a path are answered 429, and
-	// retryAfter their Retry-After; expire whether the next request of a
-	// path with a continue token is answered 410 Expired, and with what
-	// continue token of its own ("" for none).
+	// retryAfter is their Retry-After. expire says whether the next request
+	// of a path with a continue token is answered 410 Expired, and with
+	// which continue token of its own ("" for none).
 	throttle   map[string]int
 	retryAfter map[string]string
 	expire     map[string]*string
@@ -148,11 +151,11 @@ func (s *Server) Throttle(path string, n int, retryAfter string) {
 	s.throttle[path], s.retryAfter[path] = n, retryAfter
 }
 
-// Expire has the server answer the next request of path that carries a
-// continue token 410 Expired, as the API server answers a token whose
-// version etcd compacted away: inconsistent, with the token the Status
-// carries to go on with the listing as it is now, the token asked with;
-// otherwise with none.
+// Expire has the server answer 410 Expired to the next request of path that
+// carries a continue token, as the API server answers a token whose version
+// etcd compacted away. If inconsistent, the Status carries a token to go on
+// with the listing as it is now, which is the token asked with. Otherwise
+// it carries none.
 func (s *Server) Expire(path string, inconsistent bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,9 +166,9 @@ func (s *Server) Expire(path string, inconsistent bool) {
 	s.expire[path] = &token
 }
 
-// HoldFrom has the server hold the answer to its n-th request, counted from
-// 1 since it started, and to every one after it, until the client gives up,
-// so a test of a deadline does not hang on how fast the machine is. A held
+// HoldFrom has the server hold the answer to its n-th request (counted from
+// 1 since it started) and to every later one, until the client gives up. So
+// a test of a deadline does not hang on how fast the machine is. A held
 // request is never answered: the connection is closed without a response.
 func (s *Server) HoldFrom(n int) {
 	s.mu.Lock()

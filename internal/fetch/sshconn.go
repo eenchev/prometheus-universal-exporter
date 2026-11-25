@@ -26,58 +26,61 @@ import (
 )
 
 // sshfile reads and sshexec commands reuse their connections, as grpc calls
-// do (grpcconn.go): one SSH connection per host and port, account,
-// credential files, known_hosts file, keepalive settings and target policy,
-// kept across scrapes and shared by the scrapes reaching it at the same
-// time, an sshfile connection with one SFTP session on it. Each type keeps
-// its connections apart, in a cache of its own (sshConns, sshExecConns),
-// so that a reload's following of one type's collectors leaves the
-// other's alone; this file, built with either type, is the code both use,
-// and it imports no SFTP. A connection is made at the first scrape that
-// needs it, and made again:
+// do (grpcconn.go). There is one SSH connection per host and port, account,
+// credential files, known_hosts file, keepalive settings and target policy.
+// It is kept across scrapes and shared by concurrent scrapes that reach it.
+// An sshfile connection has one SFTP session on it. Each type keeps its
+// connections in its own cache (sshConns, sshExecConns), so a reload's
+// following of one type's collectors leaves the other's alone. This file is
+// the shared code, built with either type, and it imports no SFTP. A
+// connection is made at the first scrape that needs it, and made again:
 //
-//   - when one of its files changes on disk: a rotated key or password, or
-//     a known_hosts line replaced, gets a new connection at the next scrape;
-//   - when it has ended: a scrape that finds it broken, or that loses it
-//     during its read, connects again once, within its own deadline.
+//   - when one of its files changes on disk: a rotated key or password, or a
+//     replaced known_hosts line, gets a new connection at the next scrape;
+//   - when it has ended: a scrape that finds it broken, or loses it during
+//     its read, connects again once, within its own deadline.
 //
-// A connection can die without a word: a host that lost power, a firewall or
-// a NAT that dropped its entry, sends neither FIN nor RST. So every
-// keepalive_interval it sends a keepalive@openssh.com request, which any
-// SSH server answers, if only to say it does not know it; when
-// keepalive_count_max of them in a row go unanswered within an interval, the
-// connection is closed, and the next scrape makes a new one. A connection
-// nothing has used for idle_timeout is closed too; with idle_timeout 0 it is
-// kept as long as a collector uses it.
+// A connection can die silently: a host that lost power, or a firewall or
+// NAT that dropped its entry, sends neither FIN nor RST. So every
+// keepalive_interval the connection sends a keepalive@openssh.com request.
+// Any SSH server answers it, if only to say it does not know it. When
+// keepalive_count_max requests in a row go unanswered within an interval,
+// the connection is closed, and the next scrape makes a new one. A
+// connection unused for idle_timeout is closed too. With idle_timeout 0 it
+// is kept as long as a collector uses it.
 //
-// Each connection notes the collectors whose scrapes used it. When the
+// Each connection records the collectors whose scrapes used it. When the
 // per-collector state follows a configuration (follow), a collector that is
-// gone, or whose connection settings changed, stops being one of them, and a
-// connection left without any is closed: as soon as no read holds it, since
-// a read in progress is not cut off.
+// gone, or whose connection settings changed, is removed from that set. A
+// connection left with no collectors is closed as soon as no read holds it,
+// since a read in progress is not cut off.
 //
-// A connection is made apart from the scrape that asked for it first: the
-// scrapes reaching it while it is made each wait for it within their own
-// deadline, and the making goes on when the first gives up, bounded by the
-// larger of its deadline and sshConnectTimeout, so a connection made for
-// nobody any more is kept for the next scrape.
+// A connection is made separately from the scrape that first asked for it.
+// Scrapes that reach it while it is being made each wait within their own
+// deadline. The making continues when the first scrape gives up, bounded by
+// the larger of its deadline and sshConnectTimeout, so a connection that no
+// one waits for any more is kept for the next scrape.
 //
-// A collector with max_open_connections keeps its connections to itself,
-// so that its limit counts them alone. A scrape that needs a new one at the
-// limit closes the collector's connection no read has used for longest; when
-// none is free, it gives up the making of one no scrape waits for any more,
-// whose dial is cancelled; and when every one is in use, it waits within its
-// deadline for one to be free. A connection being made is given up too at
-// the exporter's shutdown, and, once no scrape waits for it, when a reload
-// leaves it to no collector or a file of it changed; one whose making was
-// given up, or whose collector a reload removed, is not counted as made.
+// A collector with max_open_connections keeps its connections to itself, so
+// that its limit counts only them. When a scrape needs a new connection at
+// the limit:
+//
+//   - it closes the collector's connection that no read has used for longest;
+//   - if none is free, it gives up making one that no scrape waits for any
+//     more, and that dial is cancelled;
+//   - if every one is in use, it waits within its deadline for one to be free.
+//
+// A connection being made is also given up at the exporter's shutdown, and,
+// once no scrape waits for it, when a reload leaves it to no collector or
+// one of its files changed. A connection whose making was given up, or whose
+// collector a reload removed, is not counted as made.
 //
 // A read cannot be cancelled: pkg/sftp takes no context. A scrape whose
-// deadline comes during its read returns at once, closes the files the read
-// has open, and gives the read sshAbandonGrace to return; when it does not,
-// the connection is dropped, which ends the read, and the scrapes on it then
-// connect again. A command's session is closed at the deadline in the same
-// way (requesttype_sshexec.go).
+// deadline arrives during its read returns at once, closes the files the
+// read has open, and gives the read sshAbandonGrace to return. If it does
+// not, the connection is dropped, which ends the read, and the scrapes on it
+// then connect again. A command's session is closed at the deadline in the
+// same way (requesttype_sshexec.go).
 
 // sshSettings are what a connection depends on besides the host: who it
 // authenticates as and with what, how its host key is verified, how it is
@@ -127,17 +130,17 @@ type sshConn struct {
 	// collector while the connection was made, so it is not counted.
 	maker     string
 	makerGone bool
-	// phases are the lookup, connection and SSH handshake of the making,
-	// set before ready is closed, and trace the request trace of the
-	// scrape that began it, whose first request on it they are the phases
-	// of (traceSSH): a scrape that came to wait for it later did not wait
-	// all of them.
+	// phases are the lookup, connection and SSH handshake phases of the
+	// making, set before ready is closed. trace is the request trace of the
+	// scrape that began the making; the phases belong to that scrape's first
+	// request on the connection (traceSSH). A scrape that came to wait later
+	// did not wait through all of them.
 	phases []TracedPhase
 	trace  *RequestTrace
-	// calls is how many reads hold the connection now. retired says the
-	// cache has forgotten it, so it is closed when the last of them ends;
-	// givenUp that its making was cancelled (giveUpLocked); closed that it
-	// has been.
+	// calls is how many reads hold the connection now. retired means the
+	// cache has forgotten it, so it is closed when the last read ends.
+	// givenUp means its making was cancelled (giveUpLocked). closed means it
+	// has been closed.
 	calls    int
 	retired  bool
 	givenUp  bool
@@ -164,9 +167,9 @@ type sshConnCache struct {
 	// requestType is the type whose collectors' connections the cache
 	// keeps, which follow reads the configuration for.
 	requestType string
-	// attach starts what a connection of the type holds beside the SSH
-	// connection once the handshake is done, within the deadline of the
-	// making, an sshfile connection's SFTP session; nil for nothing.
+	// attach starts what a connection of this type holds beside the SSH
+	// connection, such as an sshfile connection's SFTP session. It runs
+	// after the handshake, within the making's deadline; nil means nothing.
 	// attachStage names that stage in the error of a scrape that stops
 	// waiting for it, such as "starting the SFTP session".
 	attach      func(ctx context.Context, key sshConnKey, client *ssh.Client) (io.Closer, error)
@@ -197,21 +200,21 @@ func newSSHConnCache(requestType string, attach func(context.Context, sshConnKey
 	return &sshConnCache{requestType: requestType, attach: attach, attachStage: attachStage, entries: map[sshConnKey]*sshConn{}, connects: map[string]uint64{}, owned: map[string]map[*sshConn]bool{}, making: map[*sshConn]bool{}, freed: make(chan struct{}), limitWaits: map[string]uint64{}, limitFailures: map[string]uint64{}}
 }
 
-// sshConnectTimeout is the least time making a connection is given: the TCP
-// connection, the SSH handshake with authentication, and the start of what
-// the type attaches, such as the SFTP session. The first scrape's deadline
-// is given when it is later.
+// sshConnectTimeout is the minimum time given to making a connection: the
+// TCP connection, the SSH handshake with authentication, and the start of
+// what the type attaches, such as the SFTP session. The first scrape's
+// deadline is used when it is later.
 const sshConnectTimeout = 30 * time.Second
 
 // sshAbandonGrace is how long a read whose scrape's deadline came is given to
 // return before its connection is dropped. It is a variable for the tests.
 var sshAbandonGrace = 2 * time.Second
 
-// sshConnEvent, set by tests, is told what happens to connections: "made",
-// "keepalive" (a keepalive answered), "keepalive failed", "closed: "
-// followed by why, "given up: " followed by why for a connection whose
-// making is cancelled, and "waiting: max_open_connections" for a scrape that
-// waits for room, each with the address of the connection.
+// sshConnEvent, set by tests, is told what happens to connections, each
+// event with the connection's address: "made", "keepalive" (a keepalive
+// answered), "keepalive failed", "closed: " followed by why, "given up: "
+// followed by why for a connection whose making is cancelled, and
+// "waiting: max_open_connections" for a scrape that waits for room.
 var sshConnEvent atomic.Pointer[func(event, address string)]
 
 // beforeSSHRead, set by tests, runs when a read of one file, or a command,
@@ -224,12 +227,12 @@ func sshEvent(event, address string) {
 	}
 }
 
-// get returns the connection for key, making it when there is none, when
-// the one kept has ended, or when one of its files changed since it was
-// made, and holds it for the caller, who calls release when its read has
-// ended. reused says it was made before this scrape asked for it. limit is
-// the collector's max_open_connections, which a key with an owner is held
-// to.
+// get returns the connection for key and holds it for the caller, who calls
+// release when its read has ended. It makes a new connection when there is
+// none, when the kept one has ended, or when one of its files changed since
+// it was made. reused reports that the connection was made before this
+// scrape asked for it. limit is the collector's max_open_connections, which
+// applies to a key with an owner.
 func (c *sshConnCache) get(ctx context.Context, key sshConnKey, collector string, limit int) (entry *sshConn, reused bool, err error) {
 	stamp := sshFilesStamp(key.sshSettings)
 	waited := false
@@ -289,10 +292,10 @@ func (c *sshConnCache) get(ctx context.Context, key sshConnKey, collector string
 	return entry, reused, nil
 }
 
-// startLocked starts making a connection for key, apart from the scrape
-// that asks for it, ctx: the scrapes waiting for it each wait within their
-// own deadline, and the making is bounded by the larger of ctx's deadline
-// and sshConnectTimeout, whoever still waits.
+// startLocked starts making a connection for key, separately from ctx, the
+// scrape that asks for it. Each waiting scrape waits within its own
+// deadline. The making is bounded by the larger of ctx's deadline and
+// sshConnectTimeout, regardless of which scrapes still wait.
 func (c *sshConnCache) startLocked(ctx context.Context, key sshConnKey, stamp, collector string) *sshConn {
 	entry := &sshConn{key: key, stamp: stamp, ready: make(chan struct{}), ended: make(chan struct{}), users: map[string]bool{}, maker: collector, lastUsed: time.Now()}
 	entry.trace, _ = ctx.Value(requestTraceKey{}).(*RequestTrace)
@@ -317,15 +320,15 @@ func (c *sshConnCache) startLocked(ctx context.Context, key sshConnKey, stamp, c
 	return entry
 }
 
-// dial makes the connection of entry, counting it as collector's unless its
-// making was given up, and hands it to the scrapes waiting for it; when none
-// is left, it is kept for the next as a connection a read released, or
-// closed when the cache has forgotten it meanwhile. A connection made after
-// its making was given up, at the exporter's shutdown, at a reload that left
-// it to no collector, or once no scrape waited for it, belongs to no
-// collector's count, as does one whose collector a reload removed; one the
-// cache forgot while a scrape waited for it is counted, since that scrape
-// reads on it.
+// dial makes the connection of entry and hands it to the scrapes waiting for
+// it. It counts the connection as collector's unless its making was given
+// up. When no scrape is left waiting, the connection is kept for the next
+// scrape like one a read released, or closed if the cache has forgotten it
+// meanwhile. A connection made after its making was given up (at the
+// exporter's shutdown, at a reload that left it to no collector, or once no
+// scrape waited for it) counts for no collector, nor does one whose
+// collector a reload removed. One the cache forgot while a scrape waited for
+// it is counted, since that scrape reads on it.
 func (c *sshConnCache) dial(ctx context.Context, entry *sshConn, collector string) {
 	client, attached, phases, err := dialSSH(ctx, entry.key, &entry.stage, c.attach)
 	c.mu.Lock()
@@ -373,11 +376,11 @@ func (c *sshConnCache) unfinished(entry *sshConn, err error) error {
 	return fmt.Errorf("connecting to %s: %w", entry.key.address, err)
 }
 
-// makeRoomLocked makes room for one more connection of owner under limit:
-// it closes the owner's connections no read holds, the one used longest ago
-// first, and then gives up the making of those no scrape waits for, until
-// fewer than limit are left, and says whether that was done. A connection
-// given up is counted until its dial has ended, which wakes the scrapes
+// makeRoomLocked makes room for one more connection of owner under limit.
+// It first closes the owner's connections that no read holds, oldest use
+// first, and then gives up making those no scrape waits for, until fewer
+// than limit are left. It reports whether that succeeded. A given-up
+// connection is counted until its dial has ended, which wakes the scrapes
 // waiting for room. Every connection held by a read, or waited for, stays.
 func (c *sshConnCache) makeRoomLocked(owner string, limit int) bool {
 	for len(c.owned[owner]) >= limit {
@@ -425,10 +428,10 @@ func (c *sshConnCache) giveUpLocked(entry *sshConn, why string) {
 	sshEvent("given up: "+why, entry.key.address)
 }
 
-// takenLocked says what holds the connections of owner, for the error of a
-// scrape that found none free at its max_open_connections: those open and
-// held by a read, those being made, for a scrape waiting for them or not,
-// and those given up but not ended yet.
+// takenLocked describes what holds owner's connections, for the error of a
+// scrape that found none free at its max_open_connections: connections open
+// and held by a read, connections being made (whether a scrape waits for
+// them or not), and connections given up but not yet ended.
 func (c *sshConnCache) takenLocked(owner string) string {
 	var held, free, waited, making, ending int
 	for entry := range c.owned[owner] {
@@ -475,10 +478,10 @@ func (c *sshConnCache) wakeLocked() {
 	c.freed = make(chan struct{})
 }
 
-// release ends a read's hold on a connection. A connection the cache has
-// forgotten is closed when no read holds it, and given up when it is still
-// being made and no scrape waits for it any more; one it keeps waits
-// idle_timeout for the next read.
+// release ends a read's hold on a connection. If the cache has forgotten the
+// connection, it is closed when no read holds it, or given up when it is
+// still being made and no scrape waits for it. A connection the cache keeps
+// waits idle_timeout for the next read.
 func (c *sshConnCache) release(entry *sshConn) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -560,9 +563,9 @@ func (c *sshConnCache) retireLocked(entry *sshConn, why string) {
 }
 
 // closeLocked closes a connection once. Closing the SSH connection closes
-// its socket, which ends whatever waits on it at once. What is attached to
-// it, an SFTP session, is closed after it, apart: its close waits for a
-// request being sent, which the socket's close ends.
+// its socket, which at once ends anything waiting on it. What is attached
+// to it, an SFTP session, is closed afterwards and separately, because its
+// close waits for a request being sent, which the socket's close ends.
 func (c *sshConnCache) closeLocked(entry *sshConn, why string) {
 	if entry.closed || entry.client == nil {
 		return
@@ -638,14 +641,13 @@ func (c *sshConnCache) keepalive(entry *sshConn) {
 	}
 }
 
-// follow forgets, of every connection, the collectors that the
-// configuration in force no longer has, or has with other connection
-// settings, and closes the connections no collector is left using. A
-// collector's settings are its own and those of each of its static
-// targets, whose credentials may replace its own. Two reloads close
-// together may be followed in the other order; the connection the older
-// configuration's following closes is then made again at the next scrape
-// that needs it.
+// follow removes from every connection the collectors that the current
+// configuration no longer has, or has with other connection settings, and
+// closes connections no collector still uses. A collector's settings are
+// its own plus those of each of its static targets, whose credentials may
+// replace its own. Two reloads close together may be followed in reverse
+// order. A connection closed by following the older configuration is then
+// made again at the next scrape that needs it.
 func (c *sshConnCache) follow(collectors []model.Collector, targets []model.StaticTarget) {
 	wanted := map[string]map[sshSettings]bool{}
 	byName := map[string]*model.Collector{}
@@ -693,11 +695,11 @@ func (c *sshConnCache) follow(collectors []model.Collector, targets []model.Stat
 	}
 }
 
-// closeAll closes every connection, for the exporter's shutdown, gives up
-// those being made, those the cache has forgotten among them, and forgets
-// how many each collector made and its counts at max_open_connections: the
-// counts are of the exporter's life, as every other self-metric's, and a
-// test's exporter is a new life.
+// closeAll closes every connection for the exporter's shutdown and gives up
+// those being made, including those the cache has forgotten. It also
+// forgets how many connections each collector made and its counts at
+// max_open_connections. These counts cover the exporter's life, like every
+// other self-metric's, and a test's exporter is a new life.
 func (c *sshConnCache) closeAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -740,11 +742,11 @@ func (c *sshConnCache) limitCounts(collector string) (waited, failed uint64) {
 	return c.limitWaits[collector], c.limitFailures[collector]
 }
 
-// traceSSH records a read, or a command, in a debug probe's request
-// section: method, as the http_method label names it, the host, the
-// account, the file, directory or command, whether the connection was kept
-// from an earlier scrape or made for this one, and what more the type
-// shows, extra, such as the command line.
+// traceSSH records a read or a command in a debug probe's request section:
+// method (as the http_method label names it), the host, the account, the
+// file, directory or command, whether the connection was kept from an
+// earlier scrape or made for this one, and extra, any further fields the
+// type shows, such as the command line.
 func traceSSH(ctx context.Context, method string, key sshConnKey, shown string, extra http.Header, entry *sshConn, reused bool, err error) {
 	connection := "new"
 	if reused {
@@ -796,12 +798,12 @@ func sshFilesStamp(s sshSettings) string {
 	return b.String()
 }
 
-// dialSSH makes a connection: TCP to the address, checked against the
-// policy as it is made, the SSH handshake, with the host key verified
-// against known_hosts_file and the account authenticated, and what attach
-// starts on it, an SFTP session, when it is not nil, all within ctx, or
-// sshConnectTimeout when ctx has no deadline. stage is set to each stage as
-// it starts.
+// dialSSH makes a connection in stages: TCP to the address, checked against
+// the policy as it is made; the SSH handshake, with the host key verified
+// against known_hosts_file and the account authenticated; and, when attach
+// is not nil, what attach starts on it, such as an SFTP session. All of it
+// runs within ctx, or sshConnectTimeout when ctx has no deadline. stage is
+// set to each stage as it starts.
 func dialSSH(ctx context.Context, key sshConnKey, stage *atomic.Int32, attach func(context.Context, sshConnKey, *ssh.Client) (io.Closer, error)) (*ssh.Client, io.Closer, []TracedPhase, error) {
 	client, attached, timing, err := dialSSHTimed(ctx, key, stage, attach)
 	return client, attached, timing.phases(), err
@@ -927,17 +929,17 @@ func sshMethods(s sshSettings) []string {
 }
 
 // sshClientConfig reads a connection's files, as they are now, into the
-// configuration of its handshake: the private key, decrypted with its
-// passphrase, and the password, tried in that order, the password as SSH's
-// password method, or, to a host that does not take that method, as the
-// answer to keyboard-interactive questions, which a host that takes
-// passwords through PAM alone asks (sshInteractiveFallback); and the
-// known_hosts lines, which the host key must be among. The host key
-// algorithms of the lines known for the host are asked for first, so that a
-// host offering several keys presents one the file has; when the host
-// offers none of them, it presents another, which is refused as not the one
-// known_hosts_file holds. When the check refuses the host's key, the
-// returned failure holds why, in the words of sshHostKeyError.
+// configuration of its handshake. It uses the private key, decrypted with
+// its passphrase, and the password, tried in that order. The password is
+// sent with SSH's password method, or, to a host that does not take that
+// method, as the answer to keyboard-interactive questions, which a host that
+// takes passwords only through PAM asks (sshInteractiveFallback). The host
+// key must be among the known_hosts lines. The host key algorithms of the
+// lines known for the host are requested first, so a host offering several
+// keys presents one the file has. If the host offers none of them, it
+// presents another, which is refused as not the one known_hosts_file holds.
+// When the check refuses the host's key, the returned failure holds the
+// reason, in the words of sshHostKeyError.
 func sshClientConfig(key sshConnKey) (*ssh.ClientConfig, *error, error) {
 	var methods []ssh.AuthMethod
 	var callback ssh.ClientAuthCallback
@@ -978,13 +980,13 @@ func sshClientConfig(key sshConnKey) (*ssh.ClientConfig, *error, error) {
 }
 
 // sshInteractiveFallback picks keyboard-interactive, answered with the
-// password, as the next method of a handshake once the host has been offered
-// every other method of the connection it takes, and only when the host
-// neither takes nor has refused the password method: a host that takes both,
-// as OpenSSH with PAM does by default, would otherwise be given a wrong
-// password twice, which counts twice towards its MaxAuthTries, a PAM lockout
-// or fail2ban. Otherwise x/crypto picks from the configured methods, the
-// private key and the password, in that order.
+// password, as the next method of a handshake. It does so only after the
+// host has been offered every other method of the connection that it takes,
+// and only when the host neither takes nor has refused the password method.
+// Otherwise a host that takes both, as OpenSSH with PAM does by default,
+// would get a wrong password twice, which counts twice towards its
+// MaxAuthTries, a PAM lockout or fail2ban. In other cases x/crypto picks from
+// the configured methods, the private key and the password, in that order.
 func sshInteractiveFallback(hasKey bool, interactive ssh.AuthMethod) ssh.ClientAuthCallback {
 	own := []string{"password"}
 	if hasKey {
@@ -1015,10 +1017,10 @@ const sshInteractiveRounds = 3
 // more rounds of questions than sshInteractiveRounds.
 var errSSHInteractiveRounds = errors.New("the host asked more rounds of keyboard-interactive questions than are answered")
 
-// sshAnswers answers a host's keyboard-interactive questions: those it does
-// not echo, which is how a host asks for a secret, with the password, and
-// those it echoes, which is how it asks for a name, with the username; in
-// sshInteractiveRounds rounds at most, after which the method fails.
+// sshAnswers answers a host's keyboard-interactive questions for at most
+// sshInteractiveRounds rounds, after which the method fails. Questions the
+// host does not echo (how a host asks for a secret) get the password.
+// Questions it echoes (how it asks for a name) get the username.
 func sshAnswers(username, password string) ssh.KeyboardInteractiveChallenge {
 	rounds := 0
 	return func(_, _ string, questions []string, echos []bool) ([]string, error) {
@@ -1083,10 +1085,10 @@ func sshSigner(keyFile, passphraseFile string) (ssh.Signer, error) {
 	return signer, nil
 }
 
-// knownHosts is a known_hosts file read: the check of a host key, and,
-// each as ssh.PublicKey.Marshal writes it, the keys of its @cert-authority
-// lines, those of them whose line names every host with a bare *, and the
-// keys of its @revoked lines.
+// knownHosts is a parsed known_hosts file. It holds the host key check and,
+// each in the form ssh.PublicKey.Marshal writes, the keys of its
+// @cert-authority lines, the subset of those whose line names every host
+// with a bare *, and the keys of its @revoked lines.
 type knownHosts struct {
 	check                         ssh.HostKeyCallback
 	authorities, anyHost, revoked map[string]bool
@@ -1132,15 +1134,15 @@ func readKnownHosts(file string) (*knownHosts, error) {
 	return known, nil
 }
 
-// verify checks the key a host presented against the file, and, where
-// x/crypto's check refuses a host certificate that OpenSSH takes, as
-// OpenSSH does: a certificate whose authority has an @cert-authority line
-// naming every host with a bare * is taken on every port, as OpenSSH's *
-// matches [host]:port, while x/crypto takes a bare * for port 22 alone; and
-// a certificate no @cert-authority line trusts for the host is checked again
-// as the plain key it certifies, which a line of the host's may hold
-// (OpenSSH's "no matching CA found, retry with plain key"), unless its
-// authority is @revoked.
+// verify checks the key a host presented against the file. Where x/crypto's
+// check refuses a host certificate that OpenSSH accepts, verify does as
+// OpenSSH does. A certificate whose authority has an @cert-authority line
+// naming every host with a bare * is accepted on every port, since
+// OpenSSH's * matches [host]:port, while x/crypto accepts a bare * only for
+// port 22. A certificate that no @cert-authority line trusts for the host is
+// checked again as the plain key it certifies, which a line of the host's
+// may hold (OpenSSH's "no matching CA found, retry with plain key"), unless
+// its authority is @revoked.
 func (k *knownHosts) verify(address string, remote net.Addr, hostKey ssh.PublicKey) error {
 	err := k.check(address, remote, hostKey)
 	cert, ok := hostKey.(*ssh.Certificate)
@@ -1164,22 +1166,22 @@ func isNoAuthority(err error) bool {
 	return strings.Contains(err.Error(), "ssh: no authorities for hostname")
 }
 
-// knownHostKeyAlgorithms are the host key algorithms to ask address for:
-// those of the keys the file knows for it, in the order the file lists them,
-// and after them every other this client takes, so a host that no longer
-// offers the known type presents another and is refused as presenting a key
-// that is not the known one. When an @cert-authority line is known for the
+// knownHostKeyAlgorithms returns the host key algorithms to request from
+// address. First come those of the keys the file knows for it, in file
+// order, then every other algorithm this client supports. So a host that no
+// longer offers the known type presents another and is refused because the
+// key is not the known one. When an @cert-authority line is known for the
 // address, the certificate algorithms come first, since a host certificate
-// of any key type may be signed by a certificate authority of any; a host
-// whose certificate is signed by another authority is still taken by a line
-// of its plain key (knownHosts.verify). An @cert-authority line naming every
-// host with a bare * asks for the certificate algorithms first only of a
-// host the file holds no plain line of: a host it holds one of is asked for
-// that line's types first, as OpenSSH asks, so a host that also presents a
-// certificate of another authority is taken by its line. None, the client's
-// own order, when the file knows no key for the address. They are found by
-// asking the check about a key no file holds, whose refusal lists the keys
-// known for the address.
+// of any key type may be signed by a certificate authority of any key type.
+// A host whose certificate is signed by another authority is still accepted
+// by a line of its plain key (knownHosts.verify). An @cert-authority line
+// naming every host with a bare * puts the certificate algorithms first
+// only for a host with no plain line in the file. For a host with one, that
+// line's types come first, as OpenSSH does, so a host that also presents a
+// certificate of another authority is accepted by its line. The result is
+// none (the client's own order) when the file knows no key for the address.
+// The algorithms are found by asking the check about a key no file holds,
+// whose refusal lists the keys known for the address.
 func knownHostKeyAlgorithms(k *knownHosts, address string) []string {
 	probe, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public())
 	if err != nil {

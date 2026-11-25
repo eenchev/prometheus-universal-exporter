@@ -6,10 +6,10 @@ import (
 )
 
 // A collector with metric_name_validation_scheme: utf8 exports a name outside
-// the classic characters, http.server.duration or a label service.name, as it
-// is (transform.UTF8Names), and each answer writes it as its scraper asks:
-// Prometheus 3 names an escaping in its Accept header, as Prometheus's own
-// model and Go client read it,
+// the classic characters (http.server.duration, or a label service.name) as
+// it is (transform.UTF8Names). Each answer writes it the way its scraper
+// asks. Prometheus 3 names an escaping in its Accept header, as Prometheus's
+// own model and Go client read it:
 //
 //	escaping=allow-utf-8  the name as it is, quoted: {"http.server.duration",
 //	                      "service.name"="api"}
@@ -21,17 +21,17 @@ import (
 //	                      character as _<hex code point>_:
 //	                      U__http_2e_server_2e_duration
 //
-// and underscores, Prometheus's default, when the range the answer is
-// written for names none or one it does not know. A classic name is never
-// escaped, under dots either, and label values never are. The answer's
-// Content-Type says which escaping it was written with, as
+// The answer uses underscores, Prometheus's default, when the range it is
+// written for names no escaping or one it does not know. A classic name is
+// never escaped, not even under dots, and label values never are. The
+// answer's Content-Type names the escaping it was written with, as
 // "; escaping=underscores".
 //
-// An answer of classic names alone — every answer of a legacy collector, and
-// the self-metrics — has nothing to escape: it is written, and typed,
-// without an escaping, as it always was. Only an answer of a utf8 collector
-// has its names looked at, a legacy collector's being classic by its
-// validation, so the look costs a legacy answer nothing.
+// An answer of classic names only (every answer of a legacy collector, and
+// the self-metrics) has nothing to escape. It is written, and typed, without
+// an escaping, as it always was. Only a utf8 collector's answer has its
+// names checked, since a legacy collector's names are classic by
+// validation. So the check costs a legacy answer nothing.
 
 // answerEscaping is the escaping an answer is written with for the escaping
 // parameter of the media range it answers.
@@ -60,10 +60,10 @@ func hasUTF8Names(s *model.MetricSet) bool {
 	return false
 }
 
-// escapedLabels is labels with every name that is not classic escaped. Two
-// names that escape to one, a.b and a_b under underscores, are one label to
-// the scraper, which can be given one value: the classic name's, or of two
-// escaped names the one first in order, so that every answer gives the same.
+// escapedLabels is labels with every non-classic name escaped. Two names
+// that escape to the same name (a.b and a_b under underscores) are one label
+// to the scraper, which can take one value. It gets the classic name's value,
+// or of two escaped names the first in order, so every answer gives the same.
 func escapedLabels(labels map[string]string, scheme string) map[string]string {
 	out := make(map[string]string, len(labels))
 	for _, k := range model.SortedKeys(labels) {
@@ -87,9 +87,9 @@ func hasKey(m map[string]string, k string) bool {
 	return ok
 }
 
-// escapedSet is s with every name that is not classic escaped by the scheme:
-// underscores, dots or values. A series that has none is shared with s, and
-// one that has one is a copy, its labels a new map. A histogram's or a
+// escapedSet is s with every non-classic name escaped by the scheme:
+// underscores, dots or values. A series without such a name is shared with
+// s. A series with one is a copy with a new labels map. A histogram's or a
 // summary's family name is escaped, and its _bucket, _sum and _count follow
 // it, as Prometheus's Go client escapes a family.
 func escapedSet(s *model.MetricSet, scheme string) *model.MetricSet {

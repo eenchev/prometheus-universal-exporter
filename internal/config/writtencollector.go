@@ -9,27 +9,30 @@ import (
 )
 
 // Each collector loaded from a file keeps the mapping its file writes it as
-// (model.Collector.Written), for the debug page to show the operator's own
-// text rather than the collector as loading has normalised it. It is taken
-// from the file as it is written: its ${NAME} references as references,
-// whatever expansion put in their place, so the environment is not shown
-// through it; the anchors, aliases and merge keys it uses resolved, as the
-// decoder resolves them, so it stands on its own; and its comments left out,
-// since they are not configuration. The keys it takes from its file's
-// defaults block are added where the collector would write them, from the
-// block as it is written, each with a comment that says so. A folded block
-// scalar (>, >-), such as a long statement, keeps the lines the file writes
-// it over (model.Collector.WrittenBlocks): its value is one line, and the
-// page would show it as one.
+// (model.Collector.Written). The debug page shows it, so the operator sees
+// their own text rather than the collector as loading normalised it. It is
+// taken from the file as written:
+//   - ${NAME} references stay as references, whatever expansion put in
+//     their place, so the page does not show the environment.
+//   - Anchors, aliases and merge keys are resolved as the decoder resolves
+//     them, so the mapping stands on its own.
+//   - Comments are left out, since they are not configuration.
+//
+// Keys the collector takes from its file's defaults block are added where
+// the collector would write them, from the block as written, each with a
+// comment that says so. A folded block scalar (>, >-), such as a long
+// statement, keeps the lines the file writes it over
+// (model.Collector.WrittenBlocks). Its value is one line, and the page
+// would show it as one.
 
 // fromDefaultsComment marks a key the collector took from its file's
 // defaults block.
 const fromDefaultsComment = "# from the file's defaults"
 
-// recordWritten gives the collectors decoded from a file, raw being the file
-// as it is written, the mappings it writes them as. A file whose text does
-// not give a mapping for each collector, which a file that decoded always
-// does, leaves them without one.
+// recordWritten gives the collectors decoded from a file the mappings the
+// file writes them as. raw is the file as written. If the file's text does
+// not give a mapping for each collector, they are left without one. A file
+// that decoded always does give one.
 func recordWritten(raw []byte, collectors []model.Collector) {
 	root, ok := sourceRoot(string(raw))
 	if !ok {
@@ -81,11 +84,12 @@ func (w *writtenCopy) inOrder(n *yaml.Node, out []model.WrittenBlock) []model.Wr
 	return out
 }
 
-// blockOf is the folded block scalar n as the file writes it: its header,
-// from where the node starts, and the lines after it that are indented
-// further than the line it starts on, without the indentation of the
-// first; false for a header with an indentation indicator, whose lines
-// cannot be indented anew, or a node the file's lines do not hold.
+// blockOf returns the folded block scalar n as the file writes it. That is
+// its header, from where the node starts, and the following lines indented
+// further than the line it starts on, without the indentation of the first
+// of them. It returns false for a header with an indentation indicator,
+// whose lines cannot be re-indented, or for a node the file's lines do not
+// hold.
 func (w *writtenCopy) blockOf(n *yaml.Node) (model.WrittenBlock, bool) {
 	if n.Line < 1 || n.Line > len(w.lines) || n.Column < 1 || n.Column > len(w.lines[n.Line-1]) {
 		return model.WrittenBlock{}, false
@@ -136,8 +140,8 @@ func sourceRoot(text string) (*yaml.Node, bool) {
 	return doc.Content[0], true
 }
 
-// standalone is a copy of n with its aliases replaced by what they name and
-// its merge keys by the entries the decoder takes from them
+// standalone returns a copy of n with its aliases replaced by what they name
+// and its merge keys replaced by the entries the decoder takes from them
 // (model.DecodedEntries), without anchors or comments. visiting guards
 // against an alias of a node that holds it, which the decoder refuses.
 func (w *writtenCopy) standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *yaml.Node {
@@ -178,10 +182,10 @@ func (w *writtenCopy) standalone(n *yaml.Node, visiting map[*yaml.Node]bool) *ya
 	return out
 }
 
-// addFromDefaults adds to the collector's mapping the value of the defaults
-// block at path, where the collector does not write it, marked as taken
-// from the block. A block the collector writes takes the keys of the
-// defaults' block that it does not, each added on its own path.
+// addFromDefaults adds the defaults block's value at path to the collector's
+// mapping, where the collector does not write it, and marks it as taken
+// from the block. If the collector writes a block, it takes the keys of the
+// defaults' block that it does not write, each added on its own path.
 func (w *writtenCopy) addFromDefaults(collector, defaults *yaml.Node, path []string) {
 	value := lookUp(defaults, path)
 	if value == nil {

@@ -13,57 +13,59 @@ import (
 )
 
 // A fetch that fails says what the network said, and the network's errors
-// name the connection they happened on: `read tcp
+// name the connection they happened on. `read tcp
 // 10.0.0.1:53412->10.0.0.2:80: read: connection reset by peer` has the port
-// the exporter's end of that one connection had, which is another on the
+// of the exporter's end of that one connection, which is another on the
 // next. The failure log tells a failure that keeps happening from a new one
-// by its text (model.SameFailureText), so a target that resets every
+// by its text (model.SameFailureText). So a target that resets every
 // connection was a new failure on every probe: logged in full each time,
 // never summed up as a repeat, and its recovery counted from the last one.
 //
 // So a failed fetch's error is given the text it is recognised by
-// (model.SameFailureAs): its text with what belongs to the one connection or
-// the one attempt replaced by the mark of a moving part. The text itself,
-// which is what is logged and what a scraper is answered, is unchanged.
-// What is left out:
+// (model.SameFailureAs). That is its text with what belongs to the one
+// connection or the one attempt replaced by the mark of a moving part. The
+// text itself, which is what is logged and what a scraper is answered, is
+// unchanged. What is left out:
 //
 //   - the address a connection was made from, of every *net.OpError in the
 //     chain that has one (Source): the exporter's own address and the port
 //     the system picked for that connection. A SOCKS proxy's error has the
 //     proxy there, which is the same on every attempt and is left out with
-//     it. The address the connection went to stays: it is what was asked;
-//   - the same address in the text of an error a resolver's exchange with
-//     its name server failed with, which *net.DNSError keeps as text (Err);
+//     it. The address the connection went to stays, since it is what was
+//     asked;
+//   - the same address in the text of an error that a resolver's exchange
+//     with its name server failed with, which *net.DNSError keeps as text
+//     (Err);
 //   - the stream of an HTTP/2 stream error, and the last stream a GOAWAY
-//     names: the requests of one connection are numbered as they are made;
+//     names, since the requests of one connection are numbered as they are
+//     made;
 //   - the time an expired certificate, or one not valid yet, was held
 //     against, which x509.CertificateInvalidError has in its Detail;
 //   - the offset at which a compressed body turned out to be corrupt
 //     (flate.CorruptInputError), a position in the response;
-//   - and, in the message of a gRPC status, which is text and nothing else,
-//     what the client's own libraries wrote there, each after the words that
-//     library leads up to it with: the address a connection was made from,
-//     after `read tcp ` or `write tcp `; that time, after `x509: certificate
-//     has expired or is not yet valid: current time `; and the size of an
-//     answer over the limit, in `grpc: received message larger than max (5007
-//     vs. 1000)`.
+//   - in the message of a gRPC status, which is only text, what the client's
+//     own libraries wrote there, each after the words that library puts
+//     before it: the address a connection was made from, after `read tcp `
+//     or `write tcp `; that time, after `x509: certificate has expired or is
+//     not yet valid: current time `; and the size of an answer over the
+//     limit, in `grpc: received message larger than max (5007 vs. 1000)`.
 //
 // Where the error's type has the value, the value is taken from the type.
-// Where a library keeps it only in a text — the name server exchange, the
+// Some libraries keep it only in a text: the name server exchange, the
 // certificate's Detail, and everything gRPC says, which reaches a call as a
-// status message — the text is read for the one form that library writes it
-// in, here and nowhere else, and a text that is not of that form is left as
-// it is, so the failure is then recognised by the whole of its text, as it
-// was.
+// status message. There the text is read for the one form that library
+// writes it in, here and nowhere else. A text that is not of that form is
+// left as it is, so the failure is then recognised by the whole of its
+// text, as it was.
 //
-// A status message is the target's as often as the client's: what a server
+// A status message is the target's as often as the client's. What a server
 // answers a call with reaches the call the same way, and a value the target
-// sent is part of what the failure is — `replica 10.0.0.7:5432->10.0.0.9:5432
+// sent is part of what the failure is: `replica 10.0.0.7:5432->10.0.0.9:5432
 // is lagging` is another failure for another replica. So nothing is taken
-// for the client's by its shape alone, an address before `->`, a time, a size
-// in brackets: only what stands after the library's own words, in full, is.
-// A server that sends those very words, with the value after them, has that
-// value left out as the client's would be; that is accepted.
+// for the client's by its shape alone (an address before `->`, a time, a
+// size in brackets). Only what stands after the library's own words, in
+// full, is. A server that sends those very words, with the value after
+// them, has that value left out as the client's would be; that is accepted.
 
 // sameFetchFailure gives a failed fetch's error the text it is recognised
 // by: err itself when nothing in it belongs to one connection or attempt,
@@ -72,12 +74,12 @@ func sameFetchFailure(err error) (recognised error) {
 	if err == nil {
 		return nil
 	}
-	// Reading an error for what moves must never be what takes a probe
-	// down: some of it is read from types that are internal to net/http, by
-	// their shape (uint32Field), and an error may be a nil pointer of its
-	// type, or one a later Go lays out otherwise. So whatever panics here,
-	// the error is handed on as it came, and the failure is recognised by
-	// the whole of its text.
+	// Reading an error for what moves must never take a probe down. Some of
+	// it is read from types internal to net/http, by their shape
+	// (uint32Field), and an error may be a nil pointer of its type, or one a
+	// later Go lays out otherwise. So whatever panics here, the error is
+	// handed on as it came, and the failure is recognised by the whole of
+	// its text.
 	defer func() {
 		if recover() != nil {
 			recognised = err
@@ -139,9 +141,9 @@ func appendMovingParts(parts []string, e error) []string {
 		}
 	default:
 		// The HTTP/2 client's errors are of types internal to net/http, as
-		// its connection error is (http2ProtocolError), so they are told
-		// by what they are: a struct named for a stream error with the
-		// stream's number, and one named for a GOAWAY with the last
+		// its connection error is (http2ProtocolError), so they are
+		// recognised by their shape: a struct named for a stream error with
+		// the stream's number, and one named for a GOAWAY with the last
 		// stream's.
 		v := reflect.ValueOf(e)
 		if id, ok := uint32Field(v, "StreamError", "StreamID"); ok {
@@ -155,12 +157,12 @@ func appendMovingParts(parts []string, e error) []string {
 }
 
 // uint32Field is the field of v by that name as text, when v is a struct
-// whose type is named, or ends with, typeName and has such a field of 32
-// unsigned bits, a field of its own.
+// whose type is named, or ends with, typeName and that has such a field of
+// its own, of 32 unsigned bits.
 //
-// The field is looked up in the type, not in the value: a field of that name
-// that an embedded struct brings is none of the HTTP/2 client's, and asking
-// the value for one brought through an embedded pointer that is nil panics.
+// The field is looked up in the type, not in the value. A field of that
+// name brought by an embedded struct is not one of the HTTP/2 client's, and
+// asking the value for one brought through a nil embedded pointer panics.
 func uint32Field(v reflect.Value, typeName, field string) (string, bool) {
 	if !v.IsValid() || v.Kind() != reflect.Struct || !strings.HasSuffix(v.Type().Name(), typeName) {
 		return "", false
@@ -173,12 +175,12 @@ func uint32Field(v reflect.Value, typeName, field string) (string, bool) {
 }
 
 // withoutSourceAddresses is text with the mark in place of each address a
-// connection was made from, in the form (*net.OpError).Error writes it for a
-// read or a write that failed: the operation, the network, an address and a
+// connection was made from. The form is the one (*net.OpError).Error writes
+// for a failed read or write: the operation, the network, an address and a
 // port, `->`, and the address the connection went to, as in `read udp
 // 10.0.0.5:41234->10.0.0.1:53: i/o timeout`. What stands before a `->` is
-// taken for one only when it reads as an IP address with a port and stands
-// after those words (afterReadOrWrite).
+// taken for such an address only when it reads as an IP address with a
+// port and stands after those words (afterReadOrWrite).
 func withoutSourceAddresses(text string) string {
 	const arrow = "->"
 	var b strings.Builder
@@ -208,11 +210,12 @@ func withoutSourceAddresses(text string) string {
 	return b.String()
 }
 
-// afterReadOrWrite reports whether text ends as (*net.OpError).Error begins
-// for a read or a write on a connection that has ports: `read tcp `, `write
-// udp `, the operation as a word of its own and the network one of TCP's or
-// UDP's, which net names with the family asked for too (tcp4, udp6). The
-// address of a Unix socket's end is a path, or nothing, and is left.
+// afterReadOrWrite reports whether text ends the way (*net.OpError).Error
+// begins for a read or a write on a connection that has ports: `read tcp `,
+// `write udp `. The operation must be a word of its own, and the network
+// one of TCP's or UDP's, which net also names with the family asked for
+// (tcp4, udp6). The address of a Unix socket's end is a path, or nothing,
+// and is left.
 func afterReadOrWrite(text string) bool {
 	text, ok := strings.CutSuffix(text, " ")
 	if !ok {
@@ -255,11 +258,12 @@ func withoutExpiryTime(message string) string {
 }
 
 // withoutCurrentTime is the detail of an expired certificate's error with
-// the mark in place of the time the certificate was held against, in the
-// form crypto/x509 writes it, which the detail starts with: `current time
-// 2026-10-04T08:06:25Z is after 2026-10-03T05:06:25Z`, or `is before`. The
-// time the certificate is valid to, or from, stays: it is the certificate's.
-// What stands there is taken for the time only when it reads as one.
+// the mark in place of the time the certificate was held against. The
+// detail starts with that time, in the form crypto/x509 writes it: `current
+// time 2026-10-04T08:06:25Z is after 2026-10-03T05:06:25Z`, or `is before`.
+// The time the certificate is valid to, or from, stays, since it is the
+// certificate's. What stands there is taken for the time only when it reads
+// as one.
 func withoutCurrentTime(text string) string {
 	const before = "current time "
 	if !strings.HasPrefix(text, before) {
@@ -296,14 +300,14 @@ func readsAsTime(s string) bool {
 }
 
 // withoutReceivedSize is a gRPC status message with the mark in place of
-// the size of a message that was over a limit, after the words grpc-go's
-// client says it with, in full (google.golang.org/grpc v1.85.0, rpc_util.go):
-// `grpc: received message larger than max (5007 vs. 1000)`, the same of a
-// message once decompressed, and of one larger than the machine can hold.
-// The limit, which the configuration gave, stays. Any other words before a
-// size and a limit, as a server's own `batch larger than max (5007 vs.
-// 1000)` or the `trying to send message larger than max` of a grpc-go
-// server, are the target's, and are left.
+// the size of a message that was over a limit. It applies after the words
+// grpc-go's client says it with, in full (google.golang.org/grpc v1.85.0,
+// rpc_util.go): `grpc: received message larger than max (5007 vs. 1000)`,
+// the same for a message once decompressed, and for one larger than the
+// machine can hold. The limit, which the configuration gave, stays. Any
+// other words before a size and a limit, such as a server's own `batch
+// larger than max (5007 vs. 1000)` or a grpc-go server's `trying to send
+// message larger than max`, are the target's, and are left.
 func withoutReceivedSize(message string) string {
 	const versus = " vs. "
 	start := -1

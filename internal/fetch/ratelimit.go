@@ -17,36 +17,37 @@ import (
 )
 
 // request.rate_limit bounds how fast an http or graphite collector asks one
-// origin — scheme, host and port — of its targets: requests_per_second on
-// average, and burst at once after a pause. It is there for a target that
-// answers badly when asked too often, such as an old appliance, which many
-// probes, static targets, retries and pages can otherwise ask at the same
-// moment.
+// origin (scheme, host and port) of its targets: requests_per_second on
+// average, and burst at once after a pause. It is meant for a target that
+// answers badly when asked too often, such as an old appliance. Without
+// it, many probes, static targets, retries and pages can ask such a target
+// at the same moment.
 //
-// Every request sent counts, where it is sent: each attempt of a retry, each
-// page, each hop of a followed redirect and each request of a login, the
-// last two against the origin they go to, which is the target's own when
-// they stay on it. A request takes a token from its bucket, waiting for one
-// within its deadline; one that would have to wait past its deadline is
-// refused at once rather than left to time out, since the wait could only
-// end in the same failure later, with the target asked nothing.
+// Every request sent counts, against the origin it is sent to: each retry
+// attempt, each page, each hop of a followed redirect and each login
+// request. Redirects and logins count against the origin they go to, which
+// is the target's own when they stay on it. A request takes a token from
+// its bucket, waiting for one within its deadline. A request that would
+// have to wait past its deadline is refused at once rather than left to
+// time out: the wait could only end in the same failure later, with the
+// target asked nothing.
 //
-// The buckets are kept by collector and origin, and by the limit itself: two
-// collectors asking the same host each have their own, so one collector's
-// traffic never slows another's, and a static target with a rate_limit of
-// its own has its own bucket for its origin, beside the one the collector's
-// other targets there share. A configuration that changes a limit starts
-// the new limit from a full bucket.
+// Buckets are kept per collector, origin and limit. Two collectors asking
+// the same host each have their own, so one collector's traffic never
+// slows another's. A static target with its own rate_limit has its own
+// bucket for its origin, beside the one the collector's other targets
+// there share. A configuration that changes a limit starts the new limit
+// from a full bucket.
 //
-// A bucket that has filled up again is as good as a new one, so it is
-// dropped once it has; at most rateLimitMaxBuckets are kept, the least
-// recently used dropped first beyond that, so a collector probed for many
-// targets keeps no more than that.
+// A bucket that has filled up again is as good as a new one, so it is then
+// dropped. At most rateLimitMaxBuckets are kept, dropping the least
+// recently used beyond that, so a collector probed for many targets keeps
+// no more than that.
 
 // rateLimitMaxBuckets is the most buckets kept at once. Beyond it the least
-// recently used is dropped, which forgets the requests it counted: the bound
-// is on memory, and is far above the origins a deployment asks within the
-// time a bucket takes to fill.
+// recently used is dropped, which forgets the requests it counted. The
+// bound is on memory, and is far above the number of origins a deployment
+// asks within the time a bucket takes to fill.
 var rateLimitMaxBuckets = 10000
 
 // rateLimitNow and rateLimitSleep are the clock and the wait, which tests
@@ -92,13 +93,13 @@ func (e *rateLimitError) Error() string {
 // Is makes every rateLimitError match errRateLimitRefused.
 func (e *rateLimitError) Is(target error) bool { return target == errRateLimitRefused }
 
-// rateLimitSetting is the limit in force for one trip's requests, carried in
-// its context, so the requests the trip makes beyond the first — retries,
-// pages, redirects, logins — wait on it wherever they are sent. Every http
-// and graphite trip carries one, perSecond 0 when the collector has no
-// limit of its own, since the entries of rate_limits apply to its requests
-// all the same; no other type's trip carries one, and their requests take
-// no turn under either.
+// rateLimitSetting is the limit in force for one trip's requests, carried
+// in its context. So the trip's requests after the first (retries, pages,
+// redirects, logins) wait on it wherever they are sent. Every http and
+// graphite trip carries one, with perSecond 0 when the collector has no
+// limit of its own, since the rate_limits entries apply to its requests
+// all the same. No other type's trip carries one, and their requests take
+// no turn under either limit.
 type rateLimitSetting struct {
 	collector string
 	perSecond float64
@@ -230,13 +231,13 @@ func rateLimitTurns(setting *rateLimitSetting, u *url.URL) []rateLimitTurn {
 	return turns
 }
 
-// waitRateLimit waits for the turns of a request to u under the rate limits
-// that apply to it — the one ctx carries and the entry of rate_limits its
-// host matches — one after the other, and returns how long it waited:
-// nothing without a limit, or with a token to spare in each. A wait that
-// would end past ctx's deadline is not begun, and the request is refused
-// with a rateLimitError; the turns it took under the others are given back,
-// since it is not sent.
+// waitRateLimit waits, one after the other, for a request's turns under
+// the rate limits that apply to u: the one ctx carries and the rate_limits
+// entry its host matches. It returns how long it waited: nothing without a
+// limit, or with a token to spare in each. A wait that would end past
+// ctx's deadline is not started, and the request is refused with a
+// rateLimitError. The turns it took under the other limits are given back,
+// since the request is not sent.
 func waitRateLimit(ctx context.Context, u *url.URL) (rateLimitWait, error) {
 	setting, ok := ctx.Value(rateLimitContextKey{}).(*rateLimitSetting)
 	if !ok {
@@ -290,11 +291,11 @@ func takeRateLimitTurn(ctx context.Context, turn rateLimitTurn, counted bool) (t
 	return wait, nil
 }
 
-// traceRateLimitWait records on the last request recorded, the one just
-// waited for, how long it waited for its turns and why. recordedBefore says
-// it was recorded before the wait, a redirect being recorded before it is
-// checked: its duration then starts after the wait, which is no time the
-// target took.
+// traceRateLimitWait records how long the last recorded request (the one
+// just waited for) waited for its turns, and why. recordedBefore says it
+// was recorded before the wait, as a redirect is recorded before it is
+// checked. Its duration then starts after the wait, since the wait is no
+// time the target took.
 func traceRateLimitWait(ctx context.Context, w rateLimitWait, recordedBefore bool) {
 	if w.waited <= 0 {
 		return
@@ -323,10 +324,10 @@ func joinWaits(recorded, wait string) string {
 	return recorded + "; " + wait
 }
 
-// rateLimitKey names a bucket: a collector's requests to an origin under one
-// limit. For an entry of rate_limits (hostratelimit.go), collector is the
-// entry's name, under which its waits are counted, and origin its hosts, so
-// an entry a reload changes in any way has a new bucket.
+// rateLimitKey names a bucket: a collector's requests to an origin under
+// one limit. For a rate_limits entry (hostratelimit.go), collector is the
+// entry's name, under which its waits are counted, and origin is its
+// hosts. So any change a reload makes to an entry gives it a new bucket.
 type rateLimitKey struct {
 	collector string
 	origin    string
@@ -364,7 +365,7 @@ func newRateLimiterSet() *rateLimiterSet {
 	return &rateLimiterSet{buckets: map[rateLimitKey]*list.Element{}, order: list.New(), waited: map[string]uint64{}, refused: map[string]uint64{}}
 }
 
-// reserve takes a turn for a request under key at now: at once, when the
+// reserve takes a turn for a request under key at now: at once when the
 // bucket has a token, or after the wait it returns. A turn that would come
 // at or past deadline is not taken. counted says the wait or the refusal
 // is counted for the collector.

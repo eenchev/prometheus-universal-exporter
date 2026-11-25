@@ -12,14 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A reload that succeeds says what it changed: the info line it logs for
-// the configuration names the collectors it added, removed and changed, the
-// one for the static target file the static targets, and the landing page
-// shows the last reload's changes with its time. The self-metrics say that
-// a reload went through (reloadstatus.go), not what it did; after an edit to
-// a ConfigMap, a bundle from the allocator or a reload asked for by hand,
-// the question is whether the collector that was edited is the one now in
-// force, and the count alone does not answer it.
+// A reload that succeeds says what it changed. The info line it logs for the
+// configuration names the collectors it added, removed and changed, and the
+// one for the static target file names the static targets. The landing page
+// shows the last reload's changes with its time. The self-metrics say that a
+// reload went through (reloadstatus.go), not what it did. After an edit to a
+// ConfigMap, a bundle from the allocator or a reload asked for by hand, the
+// question is whether the edited collector is the one now in force, and the
+// count alone does not answer it.
 
 // reloadChangesNamed is how many names each list of a summary gives before
 // it counts the rest: a reload that replaces a thousand static targets
@@ -61,14 +61,14 @@ func (m *Manager) LastReload() (ReloadSummary, bool) {
 	return *s, true
 }
 
-// SetFingerprint makes fingerprint how a reload tells whether a collector
+// SetFingerprint makes fingerprint the way a reload tells whether a collector
 // kept under its name changed: fingerprint(cfg, i) is a digest of the
 // definition of cfg's collector at i. The exporter keys a probe's cached
-// results by such digests, and works them out for a configuration once,
-// before a reload puts it in force (OnPrepare); with them, telling what the
-// reload changed encodes no definition again. Without one, a collector's
-// YAML encoding is compared. It is called under the lock that serializes
-// reloads, before what the reload read is in force.
+// results by such digests, and works them out once for a configuration,
+// before a reload puts it in force (OnPrepare). With them, telling what the
+// reload changed encodes no definition again. Without a fingerprint, a
+// collector's YAML encoding is compared. It is called under the lock that
+// serializes reloads, before what the reload read is in force.
 func (m *Manager) SetFingerprint(fingerprint func(cfg *model.Config, index int) string) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
@@ -79,11 +79,10 @@ func (m *Manager) SetFingerprint(fingerprint func(cfg *model.Config, index int) 
 // collector's definition itself (SetDefinitionEncoded).
 var definitionEncoded atomic.Pointer[func()]
 
-// SetDefinitionEncoded asks for encoded to be called whenever a reload
-// encodes a collector's definition to tell what it changed, having been
-// given no fingerprint (SetFingerprint), and nil stops it. It is for tests:
-// an exporter's reload reads the fingerprints the exporter made, and
-// encodes nothing here.
+// SetDefinitionEncoded asks for encoded to be called whenever a reload with
+// no fingerprint (SetFingerprint) encodes a collector's definition to tell
+// what it changed. nil stops it. It is for tests: an exporter's reload reads
+// the fingerprints the exporter made, and encodes nothing here.
 func SetDefinitionEncoded(encoded func()) {
 	if encoded == nil {
 		definitionEncoded.Store(nil)
@@ -113,9 +112,9 @@ func encodedDefinition(cfg *model.Config, index int) string {
 type changeLists struct{ added, removed, changed []string }
 
 // collectorChanges are the names of the collectors added, removed and
-// changed from before to after, each sorted. A collector kept under its
-// name is changed when fingerprint tells its definitions apart; one added
-// or removed is told by its name alone, and its definition never read.
+// changed from before to after, each sorted. A collector kept under its name
+// is changed when fingerprint tells its definitions apart. One added or
+// removed is found by its name alone, and its definition is never read.
 func collectorChanges(before, after *model.Config, fingerprint func(*model.Config, int) string) changeLists {
 	var added, removed, changed []string
 	if fingerprint == nil {
@@ -190,11 +189,11 @@ func targetChanges(before, after *model.StaticTargetFile) changeLists {
 	return changeLists{added, removed, changed}
 }
 
-// reloadChanges says what a reload changed of what, "collectors" or
-// "static targets", given the names it added, removed and changed (lists):
-// "collectors added: a, b; collectors changed: c", the lists that are not
-// empty in that order, each naming reloadChangesNamed names and counting the
-// rest, or "no changes".
+// reloadChanges says what a reload changed in what ("collectors" or "static
+// targets"), given the names it added, removed and changed (lists). The
+// result is like "collectors added: a, b; collectors changed: c": the lists
+// that are not empty, in that order, each naming reloadChangesNamed names
+// and counting the rest. With no changes it is "no changes".
 func reloadChanges(what string, lists changeLists) string {
 	var parts []string
 	for _, list := range reloadChangeLists(what, lists) {

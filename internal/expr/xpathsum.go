@@ -6,20 +6,21 @@ import (
 	"unicode/utf8"
 )
 
-// The XPath engine's sum() adds up the nodes whose text it reads as a number
-// and leaves the others out without a word: `1,234`, `n/a`, and a number
-// with blanks around it, as pretty-printed markup and the cells of an HTML
-// table have. The sum of a column was then a wrong number, often 0, and no
-// error, where XPath says it is NaN. The engine cannot be told otherwise, so
-// the exporter reads the nodes of a sum() itself (transform/xpathsum.go),
-// and for that the calls are found here, once for an expression, when it is
-// compiled.
+// The XPath engine's sum() adds up the nodes whose text it reads as a number,
+// and silently leaves out the others: `1,234`, `n/a`, and a number with
+// blanks around it, as in pretty-printed markup and the cells of an HTML
+// table. The sum of a column was then a wrong number, often 0, with no
+// error, where XPath says it is NaN. The engine cannot be configured
+// otherwise, so the exporter reads the nodes of a sum() itself
+// (transform/xpathsum.go), and for that the calls are found here, once per
+// expression, when it is compiled.
 //
-// A call is found where it is evaluated in the expression's own context:
+// Only calls evaluated in the expression's own context are found: those
 // outside every predicate. The argument of such a call selects the same
-// nodes compiled on its own and evaluated where the expression is. Inside a
-// predicate the context is each node the predicate is asked of, which only
-// the engine walks, so a sum() there stays the engine's alone.
+// nodes when compiled on its own and evaluated where the expression is.
+// Inside a predicate, the context is each node that the predicate is
+// evaluated for, which only the engine walks, so a sum() there is left to
+// the engine.
 
 // XPathSum is one call of sum() in an expression's own context: its argument
 // as written, and compiled as an expression of its own.
@@ -99,16 +100,18 @@ type xpathSumCall struct {
 }
 
 // scanXPathSums finds the calls of sum() outside every predicate of an
-// expression, in the order they start, nested ones after the one around
-// them. It reads the expression as the engine's scanner does: a string
-// literal is passed over, a name is taken whole, so that checksum( and
-// my-sum( are other names, a prefix before the name is left aside as the
-// engine leaves it (fn:sum), and blanks may stand between the name and its
-// parenthesis. A name after a slash, an axis, an @ or a $ is a step, an
-// attribute or a variable and no function. The argument is what stands
-// before the first comma of the call, since the engine adds up its first
-// argument and passes over the rest. An expression whose parentheses or
-// brackets do not pair has no calls.
+// expression, in the order they start, with nested calls after the one
+// around them. It reads the expression as the engine's scanner does:
+//   - a string literal is skipped;
+//   - a name is taken whole, so checksum( and my-sum( are other names;
+//   - a prefix before the name is ignored, as the engine ignores it (fn:sum);
+//   - blanks may stand between the name and its parenthesis;
+//   - a name after a slash, an axis, an @ or a $ is a step, an attribute or
+//     a variable, not a function.
+//
+// The argument is what stands before the first comma of the call, since the
+// engine adds up its first argument and skips the rest. An expression whose
+// parentheses or brackets do not pair has no calls.
 func scanXPathSums(expression string) []xpathSumCall {
 	// open holds, for each parenthesis that is open, the index in calls of
 	// the sum() it opened, -1 for any other; brackets counts the predicates

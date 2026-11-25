@@ -27,45 +27,52 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-// A target that wants a token it hands out itself, rather than one the
-// operator can put in a file, is reached with request.login: before the
-// request, the exporter logs in and sends the token it was given on the
-// request, in Authorization as a bearer token unless the login says
-// otherwise. Two kinds of login are made:
+// request.login reaches a target that issues its own token, instead of one
+// the operator can put in a file. Before the request, the exporter logs in
+// and sends the returned token on the request. By default it goes in
+// Authorization as a bearer token, unless the login says otherwise. There
+// are two kinds of login:
 //
-//   - json posts a JSON object to the login URL, of the fields written in
-//     the configuration and those read from files (field_files), and reads
-//     the token from the answer: from its body with a jq expression
-//     (token), from a header of it (token_header), or from a cookie it sets
-//     (token_cookie), which is then sent back as that cookie.
-//   - oauth2 asks a token endpoint for a token with the client credentials
-//     grant (RFC 6749 § 4.4), with golang.org/x/oauth2's clientcredentials,
-//     or with the refresh token grant (§ 6), the refresh token read from
-//     refresh_token_file, for an API that acts on a user's account, which a
-//     user consented to once, such as Gmail's or Microsoft Graph's mail.
+//   - json posts a JSON object to the login URL. The object holds the fields
+//     written in the configuration and those read from files (field_files).
+//     The token is read from the response: from its body with a jq
+//     expression (token), from a response header (token_header), or from a
+//     cookie the response sets (token_cookie), which is then sent back as
+//     that cookie.
+//   - oauth2 asks a token endpoint for a token with golang.org/x/oauth2's
+//     clientcredentials, using the client credentials grant (RFC 6749 § 4.4).
+//     It can also use the refresh token grant (§ 6), with the refresh token
+//     read from refresh_token_file. That grant is for an API that acts on a
+//     user's account after the user consented once, such as Gmail's or
+//     Microsoft Graph's mail.
 //
-// Where a login goes is the configuration's alone, never a probe's: login.url
-// is absolute, fixed for the collector, or a path from the root resolved
-// against the target's scheme, host and port, the only part of it a probe
-// chooses. A relative login.url is sent with the request's Host override
-// too (hostOverride), the virtual host a target reached by its IP address
-// is asked for, which an absolute one, naming its own host, is not. Either
-// way the login request is held to the collector's allowed_schemes, allowed_targets and
-// denied_targets as the request is, follows no redirect, and is sent with
-// login.tls, or the collector's request.tls, never with what a probe
-// parameter or a static target's request.insecure_skip_verify changes of it.
-// The secrets are read from their files at each login, so a rotated one is
-// used by the next.
+// Only the configuration decides where a login goes, never a probe.
+// login.url is either absolute and fixed for the collector, or a path from
+// the root resolved against the target's scheme, host and port. Those are
+// the only parts a probe chooses. A relative login.url is also sent with the
+// request's Host override (hostOverride): the virtual host asked for on a
+// target reached by its IP address. An absolute one names its own host and
+// is not. In both cases the login request:
+//   - is held to the collector's allowed_schemes, allowed_targets and
+//     denied_targets, like the request;
+//   - follows no redirect;
+//   - is sent with login.tls, or the collector's request.tls, never with
+//     changes from a probe parameter or a static target's
+//     request.insecure_skip_verify.
 //
-// A token is kept (loginCache), by the collector, the login, the URL it
-// was sent to and the Host it was sent with, until shortly before it expires: refreshed when a tenth of
-// its life is left, or 30 seconds, whichever comes first, and never later
-// than half way through it. A token whose answer says no lifetime is kept
-// for login.ttl, or, without it, until the target refuses it. Probes that
-// need the same token while it is being fetched wait for that one login. A
-// target that answers 401 has the token used dropped, and the request is sent
-// once more with a token from a new login; that retry is not one of
-// request.retry's attempts, and is made within the probe's deadline.
+// The secrets are read from their files at each login, so the next login
+// uses a rotated one.
+//
+// loginCache keeps a token per collector, login, URL it was sent to and Host
+// it was sent with, until shortly before it expires. It is refreshed when a
+// tenth of its life is left or 30 seconds are left, whichever comes first,
+// and never later than half way through it. A token whose response gives no
+// lifetime is kept for login.ttl, or, without it, until the target refuses
+// it. Probes that need the same token while it is being fetched wait for
+// that one login. When a target answers 401, the token used is dropped and
+// the request is sent once more with a token from a new login. That retry is
+// not one of request.retry's attempts and is made within the probe's
+// deadline.
 
 // loginStage names the stage a failed login is reported under, in logs, the
 // probe's answer and a debug report.
@@ -81,10 +88,10 @@ const loginAnswerLimit = 1 << 20
 const maxLoginEntries = 1000
 
 // loginTimeout bounds a login. A login is shared by every request that needs
-// its token while it is made, so it runs under a bound of its own rather
-// than the deadline of the request that began it: a probe with a short
-// timeout, or a debug probe, would otherwise cut it short for every request
-// waiting on it, each of which still returns at its own deadline.
+// its token while it runs, so it has its own bound instead of the deadline of
+// the request that started it. Otherwise a probe with a short timeout, or a
+// debug probe, would cut it short for every waiting request. Each of those
+// still returns at its own deadline.
 var loginTimeout = 30 * time.Second
 
 // loginNow is the clock a token's lifetime is read by; a test sets it.
@@ -210,13 +217,13 @@ func validateLogin(l *model.LoginConfig, allowedSchemes []string, where string, 
 	return nil
 }
 
-// checkLoginURL checks login.url: an absolute http or https URL with a host,
-// of a scheme the collector allows, or a path from the root, with a query if
-// need be, resolved against the target's scheme, host and port. A path
-// relative to the target's own would let the target's path, which a probe
-// chooses, choose where the secrets go, and give each path a token of its
-// own. Neither holds credentials, a fragment or a placeholder: the URL is the
-// configuration's, and nothing of a probe's is put in it.
+// checkLoginURL checks login.url. It must be either an absolute http or https
+// URL with a host and a scheme the collector allows, or a path from the root,
+// with a query if needed, resolved against the target's scheme, host and
+// port. A path relative to the target's own path is refused: a probe chooses
+// that path, so it would choose where the secrets go and give each path its
+// own token. Neither form may hold credentials, a fragment or a placeholder.
+// The URL belongs to the configuration, and nothing from a probe goes in it.
 func checkLoginURL(raw string, allowedSchemes []string) error {
 	if strings.TrimSpace(raw) == "" {
 		return errors.New("is required: the URL the login is sent to, absolute or a path resolved against the target")
@@ -306,13 +313,15 @@ func checkJSONLogin(l *model.LoginConfig, where string, order []string) error {
 	return nil
 }
 
-// checkOAuth2Login holds an oauth2 login's rules: the client's id, in the
-// configuration or a file, and its secret, in a file, which a public client
-// of the refresh token grant has none of; the grant, client_credentials or
-// refresh_token, the latter's refresh token in a file and the former with
-// none; scopes without blanks, which separate them in the request; no
-// endpoint parameter the grant sets itself; and an auth_style the library
-// has.
+// checkOAuth2Login checks an oauth2 login's rules:
+//   - the client id, in the configuration or a file;
+//   - the client secret, in a file (a public client of the refresh token
+//     grant has none);
+//   - the grant, client_credentials or refresh_token; refresh_token needs a
+//     refresh token in a file, client_credentials takes none;
+//   - scopes without blanks, since blanks separate them in the request;
+//   - no endpoint parameter that the grant sets itself;
+//   - an auth_style the library has.
 func checkOAuth2Login(l *model.LoginConfig, where string) error {
 	if (l.ClientID == "") == (l.ClientIDFile == "") {
 		return fmt.Errorf("%s needs exactly one of client_id and client_id_file", where)
@@ -357,11 +366,11 @@ func checkOAuth2Login(l *model.LoginConfig, where string) error {
 	return nil
 }
 
-// checkLoginBeside refuses a login whose header another credential or a
-// header of the same request sets too: basic_auth or bearer_token
-// beside a login sent in Authorization, and a request.headers entry, the
-// collector's or a static target's, of the login's header. Which of the two
-// would be sent is not for a reader of the configuration to work out.
+// checkLoginBeside refuses a login whose header is also set by another
+// credential or header of the same request: basic_auth or bearer_token next
+// to a login sent in Authorization, or a request.headers entry (the
+// collector's or a static target's) for the login's header. A reader of the
+// configuration should not have to work out which of the two would be sent.
 func checkLoginBeside(l *model.LoginConfig, basic, bearer bool, headers map[string]string, where string) error {
 	header := LoginHeader(l)
 	if header == "Authorization" && (basic || bearer) {
@@ -455,10 +464,11 @@ func firstLoginURL(l *model.LoginConfig) *model.LoginConfig {
 	return l
 }
 
-// stepsTargetKey is what tells apart the tokens of a steps login l at two
-// targets when its first step's url, the login's place in the key, is
-// absolute and another step's is a path resolved against the target: the
-// target's scheme, host and port; "" for every other login.
+// stepsTargetKey separates the tokens of a steps login l at two targets. It
+// is needed when the first step's url, which is the login's place in the
+// key, is absolute and another step's url is a path resolved against the
+// target. It returns the target's scheme, host and port, or "" for every
+// other login.
 func stepsTargetKey(l *model.LoginConfig, target string) string {
 	if l.Type != "steps" || relativeLoginURL(firstLoginURL(l)) || !relativeLogin(l) {
 		return ""
@@ -470,10 +480,10 @@ func stepsTargetKey(l *model.LoginConfig, target string) string {
 	return "\x00" + base.String()
 }
 
-// relativeLogin says whether a login of l goes to the target: its url, or
-// a url of one of its steps, is a path resolved against it. Such a login
-// is sent with the request's Host override, and its token kept for each
-// target.
+// relativeLogin reports whether a login of l goes to the target, that is,
+// whether its url or the url of one of its steps is a path resolved against
+// the target. Such a login is sent with the request's Host override, and its
+// token is kept per target.
 func relativeLogin(l *model.LoginConfig) bool {
 	if l.Type != "steps" {
 		return relativeLoginURL(l)
@@ -508,12 +518,12 @@ func loginTLS(c *model.Collector, l *model.LoginConfig) model.TLSConfig {
 	return c.Request.TLS
 }
 
-// loginTokenFingerprint is what keeps the tokens of l, for a request of c,
-// apart from those of other logins: the login block and the tls block it is
-// made with. Two static targets that log in with one block but with client
-// certificates or CAs of their own make two logins, so neither is sent a
-// token the other's certificate was given, nor one taken from a server its
-// own roots would not have trusted.
+// loginTokenFingerprint separates the tokens of l, for a request of c, from
+// those of other logins. It covers the login block and the tls block the
+// login uses. Two static targets that share a login block but have their own
+// client certificates or CAs make two logins. So neither gets a token issued
+// to the other's certificate, or one from a server its own roots would not
+// have trusted.
 func loginTokenFingerprint(c *model.Collector, l *model.LoginConfig) string {
 	return loginFingerprint(l) + "\x00" + fmt.Sprintf("%#v", loginTLS(c, l))
 }
@@ -553,13 +563,14 @@ func (r *requestLogin) refuses(status int) bool {
 	return slices.Contains(r.reloginOn, status)
 }
 
-// startLogin is the login of a request of c to target, its token taken from
-// the cache or fetched: nil when the request makes none — the collector and
-// the static target set no login, or a header the request carries from the
-// static target or the probe is the one the login would send, which is
-// sent instead. host is the request's Host override (hostOverride), sent on
-// a login whose URL is relative: that login goes to the target's address,
-// where the virtual host the request asks for is the one that logs it in.
+// startLogin returns the login of a request of c to target, with its token
+// taken from the cache or fetched. It returns nil when the request makes no
+// login: the collector and the static target set none, or the request
+// already carries the login's header from the static target or the probe,
+// and that header is sent instead. host is the request's Host override
+// (hostOverride). It is sent on a login with a relative URL, because that
+// login goes to the target's address, where the requested virtual host is
+// the one that logs it in.
 func startLogin(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded []http.Header, host string) (*requestLogin, error) {
 	l := loginOf(c, overrides)
 	if l == nil {
@@ -580,10 +591,11 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 		host = ""
 	}
 	fingerprint := loginTokenFingerprint(c, l)
-	// The Host is part of the key: two virtual hosts on one address are
-	// two logins, and neither is sent the other's token. So is the target
-	// a steps login's relative step goes to when its first step's url is
-	// absolute, which alone would not tell two targets apart.
+	// The Host is part of the key: two virtual hosts on one address are two
+	// logins, and neither gets the other's token. The target is part of it
+	// too for a steps login whose first step's url is absolute and a later
+	// step's url is relative, since the first url alone cannot tell two
+	// targets apart.
 	key := c.Name + "\x00" + fingerprint + "\x00" + u.String() + "\x00" + host + stepsTargetKey(l, target)
 	login := func(ctx context.Context) (loginToken, error) {
 		return logIn(ctx, c, l, u, target, host, key)
@@ -607,12 +619,12 @@ func startLogin(ctx context.Context, target string, c *model.Collector, override
 	}}, nil
 }
 
-// notTargetRefused is err with ErrTargetRefused no longer in its chain: the
-// login's URL refused by the collector's policy is the login's failure, not
-// the target's, as the target was let through, and is not counted or
+// notTargetRefused returns err with ErrTargetRefused removed from its chain.
+// When the collector's policy refuses the login's URL, the login failed, not
+// the target, since the target was let through. So it is not counted or
 // answered as refused. The text is kept, and so is what a probe's caller is
-// answered of it (model.CallerText), which a copy of the text alone would
-// lose: what the error held for the operator alone would be answered.
+// told (model.CallerText). Copying only the text would lose that, and the
+// caller would get what was meant for the operator alone.
 func notTargetRefused(err error) error {
 	if !errors.Is(err, ErrTargetRefused) {
 		return err
@@ -752,11 +764,11 @@ func finishLoginToken(l *model.LoginConfig, token loginToken, start time.Time) (
 }
 
 // loginTracer sends each login request with the Host host, when it is not
-// "", and records it in a debug probe's trace, marked as a login: its
-// headers as any request's are, by the rules that withhold a credential's
-// value when it is shown, and never its body. The Host is set here, where
-// the json and the oauth2 login's requests alike pass; a login follows no
-// redirect, so every request it makes is to the URL the Host belongs with.
+// "", and records it in a debug probe's trace, marked as a login. Its headers
+// are recorded like any request's, under the rules that hide a credential's
+// value, and its body never is. The Host is set here because both json and
+// oauth2 login requests pass through here. A login follows no redirect, so
+// every request it makes goes to the URL the Host belongs to.
 type loginTracer struct {
 	next http.RoundTripper
 	host string
@@ -833,8 +845,8 @@ func jsonLogin(ctx context.Context, client *http.Client, l *model.LoginConfig, u
 		return loginToken{}, err
 	}
 	// u is login.url from the configuration, resolved against the target
-	// (loginURL), and logIn holds the request to the collector's target
-	// policy (withTargetPolicy) before it is sent; a probe cannot set or
+	// (loginURL). logIn checks the request against the collector's target
+	// policy (withTargetPolicy) before sending it. A probe cannot set or
 	// change it.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload)) // #nosec G704 -- the configured login URL, checked against the target policy
 	if err != nil {
@@ -936,19 +948,20 @@ func loginAnswerToken(ctx context.Context, l *model.LoginConfig, resp *http.Resp
 	return token, nil
 }
 
-// answeredError is the error of a login answered with a status that is not
-// 2xx: the status, and the start of what the server said, with what reads as
-// a credential masked. A redirect is named as one, since it is not followed.
+// answeredError is the error of a login answered with a non-2xx status. It
+// holds the status and the start of the server's response, with anything
+// that looks like a credential masked. A redirect is named as one, since it
+// is not followed.
 //
-// What the server said is the operator's: an identity provider's refusal
-// may name the user, the client or the directory it asked, and a probe's
-// caller is answered the status alone, and where the rest is
+// The server's response is for the operator only. An identity provider's
+// refusal may name the user, the client or the directory it asked. A probe's
+// caller gets only the status and where to find the rest
 // (model.WithOperatorDetail).
 //
-// sent are the secrets the login sent, or read on its way: a server that
-// answers a refused login with what it was sent, a form with its fields
-// filled in again, puts the password in its answer under whatever name the
-// page has for it, which no rule that reads names would mask.
+// sent holds the secrets the login sent or read along the way. A server may
+// answer a refused login with what it was sent, such as a form with its
+// fields filled in again. The password then appears under whatever name the
+// page uses, which no name-based rule would mask.
 func answeredError(status int, redirect bool, body []byte, sent ...string) error {
 	if redirect || status >= 300 && status < 400 {
 		return fmt.Errorf("the login was answered with the redirect %d, which a login does not follow; login.url must be the URL that answers the login itself", status)
@@ -985,19 +998,19 @@ func withoutSecrets(body []byte, secrets []string) []byte {
 // refused login had: where it is.
 const loginAnswerLogged = "; what it said is in the exporter's log"
 
-// oauth2ErrorCodes are the error codes RFC 6749 § 5.2 registers for a token
-// endpoint's refusal. A probe's caller is answered one of these; any other
-// code is the provider's own text, and is the operator's, as its
-// error_description is.
+// oauth2ErrorCodes are the error codes that RFC 6749 § 5.2 registers for a
+// token endpoint's refusal. A probe's caller is told one of these. Any other
+// code is the provider's own text and is for the operator only, like its
+// error_description.
 var oauth2ErrorCodes = map[string]bool{
 	"invalid_request": true, "invalid_client": true, "invalid_grant": true,
 	"unauthorized_client": true, "unsupported_grant_type": true, "invalid_scope": true,
 }
 
 // oauth2RefusedError is the error of a token endpoint that answered with an
-// RFC 6749 error: the status, the code and the start of its
-// error_description. A probe's caller is answered the status, the code when
-// RFC 6749 registers it, and where the rest is.
+// RFC 6749 error. It holds the status, the code and the start of the
+// error_description. A probe's caller gets the status, the code if RFC 6749
+// registers it, and where to find the rest.
 func oauth2RefusedError(status int, code, description string) error {
 	answered := fmt.Sprintf("the token endpoint answered HTTP status %d", status)
 	text := answered + ", " + loginExcerpt([]byte(code))
@@ -1031,10 +1044,10 @@ func loginExcerpt(body []byte) string {
 	return text
 }
 
-// jqOne runs a login's jq expression on its answer, with $status and
-// $headers as a rule has them, and returns its one value and the kind of
-// it. An error says what went wrong without the value gojq's own words
-// would quote, which may be the token.
+// jqOne runs a login's jq expression on its response, with $status and
+// $headers as a rule has them. It returns the single value and its kind.
+// Errors describe what went wrong without quoting the value, as gojq's own
+// messages would, since the value may be the token.
 func jqOne(ctx context.Context, expression string, page any, resp *http.Response) (value any, kind string, err error) {
 	code, err := expr.CompileJQ(expression)
 	if err != nil {
@@ -1110,10 +1123,10 @@ func loginSeconds(value any) (time.Duration, bool) {
 }
 
 // oauth2Login asks the token endpoint u for a token with the client
-// credentials grant, or with the refresh token grant: the same request of
-// the form, its grant_type refresh_token and the refresh token beside it,
-// which clientcredentials sends as it does its own (it lets grant_type be
-// another's). A public client, with no secret, sends its id as a parameter.
+// credentials grant or the refresh token grant. The refresh token grant uses
+// the same form request, with grant_type refresh_token and the refresh token
+// added, which clientcredentials sends like its own (it allows another
+// grant_type). A public client, with no secret, sends its id as a parameter.
 func oauth2Login(ctx context.Context, client *http.Client, l *model.LoginConfig, u *url.URL, host string, start time.Time) (loginToken, error) {
 	id := l.ClientID
 	if l.ClientIDFile != "" {
@@ -1204,14 +1217,14 @@ type oauth2Refresh struct {
 	key, file, sent string
 }
 
-// oauth2Rotated are the refresh tokens token endpoints answered in place
-// of the ones sent, by the login block and the endpoint they were answered
-// to: an endpoint that rotates its refresh tokens, as Microsoft's identity
-// platform and Okta's and Auth0's with rotation on do, takes the new one
-// from then on, and may refuse the old. The new one is sent until the
-// file changes, which is the operator putting another in place; the file
-// itself is never written, a Secret mounted read-only being where it
-// lives. At most maxLoginEntries are kept, as tokens are.
+// oauth2Rotated holds the refresh tokens that token endpoints returned in
+// place of the ones sent, keyed by login block and endpoint. An endpoint that
+// rotates refresh tokens (Microsoft's identity platform, and Okta and Auth0
+// with rotation on) expects the new one from then on and may refuse the old.
+// The new one is sent until the file changes, which means the operator put
+// another one in place. The file itself is never written, since it lives in
+// a Secret mounted read-only. At most maxLoginEntries are kept, as for
+// tokens.
 var oauth2Rotated = struct {
 	sync.Mutex
 	byLogin map[string]oauth2Rotation
@@ -1222,12 +1235,12 @@ type oauth2Rotation struct {
 	file, current string
 }
 
-// oauth2RefreshToken reads the refresh token a login of l to the endpoint
-// u, at the virtual host host when it is not "", sends: the file's, unless
-// that endpoint answered one in its place since, and the file still holds
-// what it did then. A relative login.url is another endpoint at each
-// target, and at each virtual host of one, whose refresh tokens are its
-// own.
+// oauth2RefreshToken reads the refresh token that a login of l sends to the
+// endpoint u, at the virtual host host when it is not "". This is the file's
+// token, unless that endpoint has since returned a replacement and the file
+// still holds what it held then. A relative login.url is a different
+// endpoint at each target, and at each virtual host of one, with its own
+// refresh tokens.
 func oauth2RefreshToken(l *model.LoginConfig, u *url.URL, host string) (oauth2Refresh, error) {
 	file, err := ReadCredentialFile(l.RefreshTokenFile)
 	if err != nil {
@@ -1310,13 +1323,13 @@ func loginRefreshAt(start, expires time.Time) time.Time {
 	return expires.Add(-margin)
 }
 
-// get returns the token kept under key while it is fresh, and otherwise
-// makes the login, once for every request that asks while it is made. The
-// login is made apart from the request that began it, within loginTimeout,
-// so a probe that goes away, or whose deadline is near, leaves it to those
-// still waiting; each waits within its own deadline. A login that fails
-// while the token kept has not expired leaves that token in use, counted as
-// a failed login.
+// get returns the token kept under key while it is fresh. Otherwise it makes
+// the login, once for all requests that ask while it runs. The login runs
+// apart from the request that started it, within loginTimeout, so a probe
+// that goes away, or whose deadline is near, leaves it to the others still
+// waiting. Each waits within its own deadline. If a login fails while the
+// kept token has not expired, that token stays in use, and the failure is
+// counted as a failed login.
 func (c *loginCache) get(ctx context.Context, key, collector, fingerprint string, login func(context.Context) (loginToken, error)) (string, error) {
 	c.mu.Lock()
 	now := loginNow()

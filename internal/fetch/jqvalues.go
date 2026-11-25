@@ -10,10 +10,10 @@ import (
 	"strings"
 )
 
-// What the jq expressions a request reads an answer with — request.pagination's
-// next, and request.login's token and expires_in — are given of the answer,
-// and how they name what they gave. Both types that make a request over
-// HTTP have them, for a login; pagination is http's alone.
+// What the answer gives the jq expressions a request reads it with
+// (request.pagination's next, and request.login's token and expires_in),
+// and how they name what it gives. Both types that make a request over HTTP
+// have them, for a login; pagination is http's alone.
 
 // jqHeaders are an answer's headers as jq's $headers has them: by lower-case
 // name, each with its values joined by ", ", as the transform has them.

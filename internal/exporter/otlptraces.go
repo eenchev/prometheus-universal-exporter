@@ -20,37 +20,38 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// With otlp.traces, a probe or a static target's scrape that took
-// otlp.traces.threshold or longer, with otlp.traces.errors one that failed,
-// and one the other sampling rules keep (otlptracesampling.go), is exported
-// over OTLP as a trace: a span for the probe or the scrape, and under it
-// one for each stage of its trip and each request it sent. The export is OTLP/HTTP with a JSON body, sent as the metrics and
-// the log records are (deliverOTLPOf), with the otlp block's headers, TLS,
-// compression, timeout, retries and batch bounds, under the scope and the
-// resource the metrics have.
+// With otlp.traces, some probes and static target scrapes are exported over
+// OTLP as a trace: those that took otlp.traces.threshold or longer, with
+// otlp.traces.errors those that failed, and those the other sampling rules
+// keep (otlptracesampling.go). A trace has a span for the probe or the
+// scrape, and under it one span for each stage of its trip and each request
+// it sent. The export is OTLP/HTTP with a JSON body, sent like the metrics
+// and the log records (deliverOTLPOf). It uses the otlp block's headers,
+// TLS, compression, timeout, retries and batch bounds, under the same scope
+// and resource as the metrics.
 //
 // Which probes are slow is known only once they have ended, so the trace is
-// decided at the end, tail first: every probe and scrape records its stages
-// and requests while the export is on, in memory, as the times the debug
-// report shows of a run (tripStages, fetch.WithSpanTrace), and at its end
-// the spans are made of them when it is one to export, and otherwise
-// forgotten. Nothing is made of a probe while the export is off: its trip
-// carries no recorder, and the stages ask for none.
+// decided at the end (tail sampling). While the export is on, every probe
+// and scrape records its stages and requests in memory, like the times the
+// debug report shows for a run (tripStages, fetch.WithSpanTrace). At its
+// end, the spans are built from them if it is to be exported; otherwise the
+// record is forgotten. Nothing is recorded for a probe while the export is
+// off: its trip carries no recorder, and the stages ask for none.
 //
-// A debug run makes the same record (runDebug), and the debug page's OTLP
-// tab shows the spans made of it by the same code (debugotlp.go), and
-// whether the export would send them. The export never does: a run is never
-// seen by the export, as its series and its log are not.
+// A debug run makes the same record (runDebug). The debug page's OTLP tab
+// shows the spans built from it by the same code (debugotlp.go), and whether
+// the export would send them. The export never does: it never sees a run,
+// just as it never sees a run's series or log.
 //
 // The spans wait in a queue bounded by their count,
-// otlp.traces.max_pending_spans: a trace that finds no room for all of its
-// spans is dropped whole, and counted, rather than waited for or cut, and
-// what a failed export puts back, or a lower bound a reload sets, drops the
-// oldest traces whole: the queue is never cut inside a trace. A probe
-// never waits for the export: the queue is taken under a lock held for no
-// more than appending to it, and is sent every otlp.traces.interval in the
-// background. The export logs what becomes of it to stderr alone, as the log
-// export does (otlplogs.go), and readiness does not depend on it.
+// otlp.traces.max_pending_spans. A trace that finds no room for all of its
+// spans is dropped whole and counted, rather than waited for or cut. When a
+// failed export puts spans back, or a reload sets a lower bound, the oldest
+// traces are dropped whole. The queue is never cut inside a trace. A probe
+// never waits for the export: the queue's lock is held only to append to
+// it, and the queue is sent every otlp.traces.interval in the background.
+// The export logs its outcome to stderr only, like the log export
+// (otlplogs.go), and readiness does not depend on it.
 
 // Span kinds and status codes as OTLP/JSON writes them: numbers.
 const (
@@ -89,11 +90,11 @@ type otlpSpanStatus struct {
 
 // tripSpans is what a probe or a scrape records for its trace: its stages,
 // with their times, and the requests its trip sent (requests). A trip shared
-// by several probes records into a recorder of its own (probeFlight.spans),
-// not the one of the probe that started it, which may leave before the trip
-// ends; each probe that used the trip copies the trip's record into its own
-// (adopt), and so has the trip's spans in its trace under span ids of its
-// own. What a probe records after its record was closed is dropped (done).
+// by several probes records into its own recorder (probeFlight.spans), not
+// into that of the probe that started it, which may leave before the trip
+// ends. Each probe that used the trip copies the trip's record into its own
+// (adopt), so its trace has the trip's spans under its own span ids. What a
+// probe records after its record was closed is dropped (done).
 type tripSpans struct {
 	mu       sync.Mutex
 	stages   []spanStage
@@ -105,9 +106,9 @@ type tripSpans struct {
 	// fetched none.
 	bytes int
 	done  bool
-	// link is the probe's or the scrape's trace as what links to it knows
-	// it (otlptraceslink.go); a shared trip's own record has none, and
-	// sentUnder is the trace its requests' traceparent named, that of the
+	// link is the probe's or the scrape's trace, as known to what links to
+	// it (otlptraceslink.go). A shared trip's own record has none.
+	// sentUnder is the trace named by its requests' traceparent: that of the
 	// probe that started it.
 	link, sentUnder *traceLink
 }
@@ -124,14 +125,14 @@ func (t *tripSpans) traceLink() *traceLink {
 // trace has it was given up by its caller (adopt).
 const unfinishedFact = "request.unfinished"
 
-// adopt copies into t, a probe's record, what trip, the record of a shared
-// trip the probe used, holds: its stages, under the stage named under where
-// that is set and a stage names no parent of its own, its requests and the
-// size of the response it fetched. A probe whose caller left before the trip
-// ended copies what the trip had recorded by then, at cut: the stages that
-// had ended, and its requests, of which one still unanswered is marked
-// unfinished (unfinishedFact) and failed, and ends at cut. A zero cut is a
-// trip that ended. t and trip may be nil.
+// adopt copies into t (a probe's record) what trip (the record of a shared
+// trip the probe used) holds: its stages, its requests and the size of the
+// response it fetched. A stage that names no parent of its own is put under
+// the stage named under, if that is set. If the probe's caller left before
+// the trip ended, the probe copies what the trip had recorded by cut: the
+// stages that had ended, and its requests. A request still unanswered is
+// marked unfinished (unfinishedFact) and failed, and ends at cut. A zero cut
+// means the trip ended. t and trip may be nil.
 func (t *tripSpans) adopt(trip *tripSpans, under string, cut time.Time) {
 	if t == nil || trip == nil {
 		return
@@ -194,8 +195,8 @@ type tripSpansKey struct{}
 
 // withTripSpans returns a context whose trip records its stages and
 // requests for its trace, and the recorder. requests is the request trace
-// of a debug run, which records the requests already; nil makes one that
-// keeps no headers (fetch.WithSpanTrace).
+// of a debug run, which already records the requests. If it is nil, one is
+// made that keeps no headers (fetch.WithSpanTrace).
 func withTripSpans(ctx context.Context, requests *fetch.RequestTrace) (context.Context, *tripSpans) {
 	if requests == nil {
 		ctx, requests = fetch.WithSpanTrace(ctx)
@@ -279,9 +280,10 @@ func (s tripStages) step(stage, outcome string, mark time.Time, note string) {
 }
 
 // scripts records, for the trace, the time the transform's Python scripts
-// ran, which timer added up, as a python stage within the transform that
-// began at mark: the scripts' runs are told apart by no time of their own,
-// so the stage is their sum, from the transform's start.
+// ran, as added up by timer. It records it as a python stage within the
+// transform that began at mark. The scripts' runs have no times of their
+// own to tell them apart, so the stage is their sum, from the transform's
+// start.
 func (s tripStages) scripts(timer *transform.ScriptTimer, mark time.Time) {
 	if s.spans == nil {
 		return
@@ -305,10 +307,10 @@ type spanRoot struct {
 	// parent is the span of a caller that sent a traceparent, whose trace
 	// the probe's continues.
 	parent traceParent
-	// traceID is the trace's id, which the spans are then of, and spanID
-	// the root span's, both made when the trace began (traceLink); zero
-	// has buildSpans make them. traceState is the spans' tracestate, and
-	// reason, when set, the root's sampling.reason.
+	// traceID is the trace's id, which the spans then belong to, and spanID
+	// is the root span's id. Both are made when the trace began (traceLink);
+	// if they are zero, buildSpans makes them. traceState is the spans'
+	// tracestate, and reason, when set, is the root's sampling.reason.
 	traceID    [16]byte
 	spanID     [8]byte
 	traceState string
@@ -338,9 +340,9 @@ func callerTrace(h http.Header) traceParent {
 
 // parseTraceparent reads a W3C traceparent header: version-traceid-
 // parentid-flags, each lowercase hex. A version this exporter does not know
-// is read as version 00 is, as the W3C's rules for a newer version ask, but
-// for ff, which is no version; an id of zeros is no id. A header that
-// cannot be read is no parent: the probe begins a trace of its own.
+// is read like version 00, as the W3C rules for a newer version ask, except
+// ff, which is not a version. An id of all zeros is no id. A header that
+// cannot be read gives no parent, and the probe begins its own trace.
 func parseTraceparent(header string) traceParent {
 	if header == "" {
 		return traceParent{}
@@ -420,11 +422,12 @@ func factAttribute(fact fetch.TraceFact) otlpAnyAttribute {
 	return otlpAnyAttribute{Key: fact.Key, Value: otlpAnyValue{IntValue: strconv.FormatInt(fact.Int, 10)}}
 }
 
-// buildSpans makes the spans of a trip: root's, and under it one INTERNAL
-// span for each stage, under the stage it ran within where it names one,
-// and one CLIENT span for each request, under the stage it was sent in,
-// with an INTERNAL rate_limit span before it where it waited for its turn
-// under request.rate_limit.
+// buildSpans makes the spans of a trip: the root's span, and under it:
+//   - one INTERNAL span for each stage, under the stage it ran within if it
+//     names one;
+//   - one CLIENT span for each request, under the stage it was sent in, with
+//     an INTERNAL rate_limit span before it if it waited for its turn under
+//     request.rate_limit.
 func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedRequest) []otlpSpan {
 	traceID := root.traceID
 	switch {
@@ -550,14 +553,14 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 }
 
 // phaseSpans are the spans of an HTTP request's phases, under its span,
-// parent: http.first_byte, from the request's start, when it asked for a
-// connection, to the answer's first byte, as $timings.first_byte measures
-// it; and under it, which their times are within, http.dns, http.connect
-// and http.tls, for the name's lookup, the connection and the TLS
-// handshake the request made, each only when it made it. A request on a
-// connection it reused has http.first_byte alone; one that failed before
-// its first byte has the phases that went through before what failed,
-// with no http.first_byte to hold them, so they are under its span.
+// parent. http.first_byte runs from the request's start, when it asked for
+// a connection, to the answer's first byte, as $timings.first_byte measures
+// it. Under it, within its time, are http.dns, http.connect and http.tls:
+// the name lookup, the connection and the TLS handshake, each only if the
+// request made it. A request on a reused connection has only
+// http.first_byte. A request that failed before its first byte has the
+// phases completed before the failure, with no http.first_byte to hold
+// them, so they are under its span.
 func phaseSpans(trace, state, parent string, phases []fetch.TracedPhase) []otlpSpan {
 	if len(phases) == 0 {
 		return nil
@@ -603,18 +606,22 @@ func stageFailed(outcome string) bool {
 	return true
 }
 
-// requestAttributes are a request's span's attributes, by OpenTelemetry's
-// conventions for an HTTP client's where they apply: its method, its URL as
-// an error in the log quotes one — the userinfo withheld, every query value
-// masked, no fragment (fetch.MaskQueryValues) — the server's address and
-// port, the answer's status and how many times the request was sent again
-// before, for a retry or a redirect; and the exporter's own: the attempt
-// under request.retry, the page of request.pagination, whether it followed
-// a redirect or made request.login's login, and the facts its request type
-// tells of how it ended (fetch.TracedRequest.Facts). How it ended as a
-// debug report tells it (fetch.TracedRequest.Outcome) is not among them: it
-// may quote what the target sent, a greeting or a command's stderr, which
-// the log never shows of a request that went through.
+// requestAttributes are the attributes of a request's span. Where they
+// apply, they follow OpenTelemetry's conventions for an HTTP client:
+//   - its method;
+//   - its URL as an error in the log quotes it: userinfo withheld, every
+//     query value masked, no fragment (fetch.MaskQueryValues);
+//   - the server's address and port, and the answer's status;
+//   - how many times the request was sent again before, for a retry or a
+//     redirect.
+//
+// The exporter adds its own: the attempt under request.retry, the page of
+// request.pagination, whether it followed a redirect or made
+// request.login's login, and the facts its request type gives about how it
+// ended (fetch.TracedRequest.Facts). The outcome as a debug report gives it
+// (fetch.TracedRequest.Outcome) is not included. It may quote what the
+// target sent, such as a greeting or a command's stderr, which the log never
+// shows for a request that went through.
 func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 	var attrs []otlpAnyAttribute
 	u, err := url.Parse(r.URL)
@@ -670,13 +677,14 @@ func requestFailed(r fetch.TracedRequest) bool {
 	return r.Failed
 }
 
-// requestFailure is the message of a failed request's span: what the log
-// line of its failure says, and nothing the log does not. The request the
-// fetch failed on (failedFetch) is the failure of its stage, which the log
-// tells as the stage's note does (note); an HTTP answer of 400 or more is
-// its status, as the log tells one; and a request that failed and was sent
-// again, or was followed by one that went through, is in no line of the
-// log, and its span says no more than its error.type.
+// requestFailure is the message of a failed request's span. It says what the
+// log line of its failure says, and nothing the log does not:
+//   - the request the fetch failed on (failedFetch) is its stage's failure,
+//     told as the stage's note tells it (note);
+//   - an HTTP answer of 400 or more gives its status, as the log does;
+//   - a request that failed and was sent again, or was followed by one that
+//     went through, is in no log line, so its span says no more than its
+//     error.type.
 func requestFailure(r fetch.TracedRequest, failedFetch bool, note string) string {
 	switch {
 	case failedFetch:
@@ -723,10 +731,10 @@ func otlpTraceThreshold(cfg model.OTLPConfig) time.Duration {
 // otlpTraces is the trace export's queue and its record.
 type otlpTraces struct {
 	mu sync.Mutex
-	// queue holds the spans waiting, the oldest first, each with its
-	// resource, and traces how many of them each trace has, in the same
-	// order: the queue is cut by whole traces, never inside one, which
-	// would leave spans whose parent is gone.
+	// queue holds the waiting spans, oldest first, each with its resource.
+	// traces holds how many of them each trace has, in the same order. The
+	// queue is cut only at whole traces, never inside one, which would leave
+	// spans whose parent is gone.
 	queue  []otlpQueuedSpan
 	traces []int
 	// The counts since the start, the status page's and the
@@ -803,13 +811,13 @@ func (t *otlpTraces) add(spans []otlpQueuedSpan, limit int) {
 	_ = t.addWhileOn(spans, limit, nil)
 }
 
-// addWhileOn is add, but that it drops the spans, counting them nowhere, when
-// on, asked under the queue's lock, says the configuration in force no
+// addWhileOn is add, except that it drops the spans, counting them nowhere,
+// when on (asked under the queue's lock) says the configuration in force no
 // longer exports traces. A reload that switches the export off empties the
-// queue under the same lock (configure) once its configuration is in force,
-// so a trace is either queued before that and emptied with the rest, or
-// sees the export off and is never queued: none waits through the time the
-// export is off, to be sent if a later reload switches it on again.
+// queue under the same lock (configure) once its configuration is in force.
+// So a trace is either queued before that and emptied with the rest, or
+// sees the export off and is never queued. No trace waits through the time
+// the export is off, to be sent if a later reload switches it on again.
 func (t *otlpTraces) addWhileOn(spans []otlpQueuedSpan, limit int, on func() bool) bool {
 	if len(spans) == 0 {
 		return false
@@ -838,11 +846,11 @@ func (t *otlpTraces) drain() ([]otlpQueuedSpan, []int) {
 	return spans, traces
 }
 
-// requeue puts the spans of drained an export could not deliver, those from
-// the from-th on, back before those queued since, within limit, the oldest
-// whole traces dropped past it. traces is how many spans each trace of
-// drained has; what is left of a trace an earlier request delivered the
-// start of is a trace of its own here.
+// requeue puts back the spans of drained that an export could not deliver
+// (from the from-th on), before those queued since, within limit. Past the
+// limit the oldest whole traces are dropped. traces is how many spans each
+// trace of drained has. If an earlier request delivered the start of a
+// trace, the rest of it counts as a trace of its own here.
 func (t *otlpTraces) requeue(drained []otlpQueuedSpan, traces []int, from, limit int) {
 	spans := drained[from:]
 	if len(spans) == 0 {
@@ -919,10 +927,10 @@ func (t *otlpTraces) record(endpoint string, started time.Time, spans, sent int,
 	h.errorText, h.failedAt = shownOTLPError(err), started
 }
 
-// beginTrace returns a context whose trip records its trace, which
-// continues parent's when the caller sent one, and the recorder, with the
-// trace's ids made now (traceLink), while cfg exports traces; ctx and nil
-// otherwise, which costs a probe nothing more.
+// beginTrace returns, while cfg exports traces, a context whose trip
+// records its trace, and the recorder. The trace continues parent's if the
+// caller sent one, and its ids are made now (traceLink). Otherwise it
+// returns ctx and nil, which costs a probe nothing more.
 func beginTrace(ctx context.Context, cfg model.OTLPConfig, parent traceParent) (context.Context, *tripSpans) {
 	if !otlpTracesOn(cfg) {
 		return ctx, nil
@@ -935,17 +943,17 @@ func beginTrace(ctx context.Context, cfg model.OTLPConfig, parent traceParent) (
 
 // endTrace ends the record of a probe or a scrape that ran from start to
 // end, failed as failed says, and whose caller sent parent, if any. Nearly
-// every one is not exported, and is forgotten: its record is dropped, and
-// nothing more is made of it. One that a rule keeps (decideTrace) and
-// otlp.traces.max_per_second lets through has its span made by root, of the
-// size of the response fetched, and its spans queued under the resource
-// identity makes.
+// all are not exported and are forgotten: the record is dropped and nothing
+// more is built from it. If a rule keeps it (decideTrace) and
+// otlp.traces.max_per_second lets it through, root makes its span from the
+// size of the response fetched, and its spans are queued under the resource
+// that identity makes.
 //
 // cfg is the configuration the probe or the scrape began under, whose rules
-// decide of its trace. A reload since that switched the export off drops
-// the trace, counted nowhere, as a trace that began after it is never
-// recorded: no rule decided of it while the export was off, and nothing of
-// it waits for an export that is off (addWhileOn).
+// decide its trace. If a reload since then switched the export off, the
+// trace is dropped and counted nowhere, just as a trace that began after it
+// is never recorded. No rule decided it while the export was off, and
+// nothing of it waits for an export that is off (addWhileOn).
 func (s *Server) endTrace(cfg model.OTLPConfig, spans *tripSpans, start, end time.Time, failed bool, parent traceParent, root func(bytes int) spanRoot, identity func() otlpResourceIdentity) {
 	t := s.otlpTraces
 	inForce := func() bool { return otlpTracesOn(s.manager.Get().OTLP) }
@@ -1055,8 +1063,8 @@ func probeTraceEndOf(result *probeResult) probeTraceEnd {
 
 // endProbeTrace ends a probe's trace, under the exporter-wide resource, as
 // its series are exported. The probe ran from start to finished, when its
-// answer was ready: what its caller takes to read the answer is not its
-// time, as it is not in the self-metrics' durations.
+// answer was ready. The time its caller takes to read the answer is not
+// counted, just as it is not in the self-metrics' durations.
 func (s *Server) endProbeTrace(cfg model.OTLPConfig, spans *tripSpans, c *model.Collector, target, method string, start, finished time.Time, parent traceParent, end probeTraceEnd) {
 	s.endTrace(cfg, spans, start, finished, end.failed, parent, func(bytes int) spanRoot {
 		return probeSpanRoot(c, target, method, start, finished, parent, end, bytes)
@@ -1100,11 +1108,11 @@ type otlpTraceRequest struct {
 	from, to int
 }
 
-// otlpTraceRequests makes the requests that send spans to the endpoint:
-// each of at most otlp.batch_max_size spans and otlp.batch_max_bytes bytes
-// of JSON, a span larger alone in a request of its own, as the log
-// records' requests are made (otlpLogRequests). A request holds the spans
-// of each of its resources under that resource, and the scope.
+// otlpTraceRequests makes the requests that send spans to the endpoint.
+// Each holds at most otlp.batch_max_size spans and otlp.batch_max_bytes
+// bytes of JSON; a larger single span goes in a request of its own, as with
+// the log records' requests (otlpLogRequests). A request holds the spans of
+// each of its resources under that resource, and the scope.
 func otlpTraceRequests(cfg model.OTLPConfig, spans []otlpQueuedSpan) ([]otlpTraceRequest, error) {
 	scope, err := json.Marshal(otlpScopeOf(cfg))
 	if err != nil {
@@ -1196,14 +1204,17 @@ func (s *Server) flushOTLPTraces(cfg model.OTLPConfig, deadline time.Time) {
 	s.exportOTLPTraces(context.Background(), cfg, max(time.Until(deadline), otlpLogsLastAttempt), true)
 }
 
-// exportOTLPTraces sends every span waiting, retrying within budget, in as
-// many requests as otlp.batch_max_size and otlp.batch_max_bytes make of
-// them, one after another, as the log export sends its records
-// (exportOTLPLogs): what could not be delivered for a reason worth retrying
-// waits for the next export, before the spans queued since; what the
-// endpoint refused outright is dropped and counted; and at shutdown, when
-// last says there is no next export, what is left is dropped and counted.
-// What becomes of it is logged to stderr alone (unexportedLogger).
+// exportOTLPTraces sends every waiting span, retrying within budget, one
+// request after another, in as many requests as otlp.batch_max_size and
+// otlp.batch_max_bytes require, as the log export sends its records
+// (exportOTLPLogs):
+//   - spans not delivered for a reason worth retrying wait for the next
+//     export, before the spans queued since;
+//   - spans the endpoint refused outright are dropped and counted;
+//   - at shutdown, when last says there is no next export, what is left is
+//     dropped and counted.
+//
+// The outcome is logged to stderr only (unexportedLogger).
 func (s *Server) exportOTLPTraces(ctx context.Context, cfg model.OTLPConfig, budget time.Duration, last bool) {
 	t := s.otlpTraces
 	spans, traces := t.drain()

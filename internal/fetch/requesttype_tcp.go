@@ -27,11 +27,11 @@ import (
 )
 
 // The tcp request type reads a service that answers a line of text over a
-// TCP connection with its statistics, as text: memcached's stats, a
+// TCP connection with its statistics as text: memcached's stats, a
 // ZooKeeper four-letter word, HAProxy's runtime API, NUT's upsd,
-// Beanstalkd's stats. The answer is handed to the decoder and the
-// transforms as an http answer's body is, so text, regex, csv, prometheus,
-// json or yaml read it as each would read a body.
+// Beanstalkd's stats. The answer goes to the decoder and the transforms
+// like an http answer's body, so text, regex, csv, prometheus, json or yaml
+// read it as they would read a body.
 //
 //	request:
 //	  type: tcp
@@ -39,66 +39,66 @@ import (
 //	  send: "stats\r\n"     # optional: written once the connection is made
 //	  terminator: "END\r\n" # optional: the answer ends with it; else at the close
 //
-// A server that starts in plaintext and turns to TLS when asked, SMTP on
-// 587, IMAP on 143, POP3 on 110, FTP on 21, is read with starttls: the
-// greeting is read, the protocol's request for TLS spoken (startTLS), and
-// the handshake made with the tls block's settings, or the defaults without
-// one, before send is written over TLS.
+// A server that starts in plaintext and switches to TLS on request (SMTP on
+// 587, IMAP on 143, POP3 on 110, FTP on 21) is read with starttls. The
+// greeting is read, the protocol's request for TLS is sent (startTLS), and
+// the handshake is made with the tls block's settings, or the defaults
+// without one. Then send is written over TLS.
 //
-// A service that speaks first — SMTP, FTP, POP3, IMAP, SSH — is checked
-// with greeting: the greeting is read, and must match the pattern, before
-// send is written, so the server never sees a command before it has
-// greeted, as these protocols require; without send, the greeting is the
-// answer. The greeting is its first line, or, where that line begins with a
-// three-digit code and a '-' (SMTP's and FTP's continuation), every line up
-// to the one that begins with the code and no '-' (tcpReadGreeting).
+// A service that speaks first (SMTP, FTP, POP3, IMAP, SSH) is checked with
+// greeting. The greeting is read and must match the pattern before send is
+// written, so the server never sees a command before it has greeted, as
+// these protocols require. Without send, the greeting is the answer. The
+// greeting is the first line. If that line begins with a three-digit code
+// and a '-' (SMTP's and FTP's continuation), it is every line up to the one
+// that begins with the code and no '-' (tcpReadGreeting).
 //
-// How long each step took, and the greeting, are given to the transforms as
-// the answer's headers (tcpHeaders), which jq and yq read as $headers and
-// Python as response.headers: the body stays the answer the server wrote,
+// The duration of each step, and the greeting, are given to the transforms
+// as the answer's headers (tcpHeaders). jq and yq read them as $headers and
+// Python as response.headers. The body stays the answer the server wrote,
 // so a collector that reads only the body sees what it saw before.
 //
-// The probe's target is host:port or [v6]:port, the port required, since no
-// port is any such service's; a tls block makes the scrape speak TLS. The
-// exporter dials the target through the target policy, as every type that
-// reaches a server does, and makes one connection for each scrape, closed
-// when the scrape is over: these services answer one command on a
-// connection, several close it after the answer, and a connection kept
-// between scrapes would need a keepalive, an idle timeout and a limit of
-// its own.
+// The probe's target is host:port or [v6]:port. The port is required, since
+// none of these services has a port of its own. A tls block makes the
+// scrape speak TLS. The exporter dials the target through the target
+// policy, as every type that reaches a server does. It makes one connection
+// per scrape and closes it when the scrape is over. These services answer
+// one command per connection, several close it after the answer, and a
+// connection kept between scrapes would need its own keepalive, idle
+// timeout and limit.
 //
 // send may hold {{param_name}} placeholders, filled from the probe. A value
-// may hold only letters, digits and . _ - : / @ + = , % (lineValue), and
-// any other is refused before the connection is made: a line break would
-// end the line the configuration wrote, but so would less, since these
-// servers split a line on more than its end. HAProxy's runtime API runs
-// each ';'-separated command of a line, and memcached, ZooKeeper and NUT
-// split arguments on blanks, so a value with a ';' or a blank could add a
-// command or an argument of the probe's.
+// may hold only letters, digits and . _ - : / @ + = , % (lineValue). Any
+// other value is refused before the connection is made. A line break would
+// end the line the configuration wrote, but less can do the same, since
+// these servers split a line on more than its end. HAProxy's runtime API
+// runs each ';'-separated command of a line, and memcached, ZooKeeper and
+// NUT split arguments on blanks. So a value with a ';' or a blank could add
+// a command or an argument of the probe's.
 //
 // Reading stops once the answer ends with terminator, which stays in the
 // body, or, without one, when the server closes the connection. Either way
-// the answer is held to the response limit as it arrives, and the scrape's
-// deadline bounds the connection, the handshake, the write and the read: a
-// server that keeps the connection open without the terminator fails the
-// scrape when the deadline comes.
+// the answer is held to the response limit as it arrives. The scrape's
+// deadline bounds the connection, the handshake, the write and the read. A
+// server that keeps the connection open without sending the terminator
+// fails the scrape when the deadline comes.
 //
 // The type imports nothing outside the standard library.
 
-// TCPConfig is a tcp collector's own request keys: the pattern the
-// server's greeting must match, no greeting being read when empty, the text
-// written once the connection is made, or once the greeting has come,
-// nothing when empty, what the answer ends with, the answer ending when
-// the server closes the connection when it is empty, and whether the answer is
-// a JSON document of the exchange. request.starttls, which tlscert takes
-// too, is of the common part (model.RequestConfig.StartTLS).
+// TCPConfig is a tcp collector's own request keys. They are the pattern the
+// server's greeting must match (no greeting is read when empty), the text
+// written once the connection is made or the greeting has come (nothing
+// when empty), what the answer ends with (when empty, the answer ends when
+// the server closes the connection), and whether the answer is a JSON
+// document of the exchange. request.starttls, which tlscert also takes,
+// belongs to the common part (model.RequestConfig.StartTLS).
 //
 // UDP sends send, or send_hex, as one datagram and takes the first datagram
 // that comes back as the answer. SendHex is send as hexadecimal bytes, for
-// a protocol whose requests are binary, and AnswerBytes a length the answer
-// ends at, for one whose answers end neither with a terminator nor with the
-// connection: Modbus TCP, whose server keeps the connection open and whose
-// answer to a read is as long as the read asks.
+// a protocol whose requests are binary. AnswerBytes is a length the answer
+// ends at, for a protocol whose answers end neither with a terminator nor
+// with the connection: Modbus TCP, whose server keeps the connection open
+// and whose answer to a read is as long as the read asks.
 type TCPConfig struct {
 	Greeting    string `yaml:"greeting,omitempty"`
 	Send        string `yaml:"send,omitempty"`
@@ -111,12 +111,12 @@ type TCPConfig struct {
 	// ends: each step's text written and its answer read until it matches
 	// the step's until (tcpsteps.go).
 	Steps []TCPStep `yaml:"steps,omitempty"`
-	// ConnectOnly makes the scrape a check that the port takes a
-	// connection: it dials, makes the TLS handshake with a tls block, and
-	// closes, writing and reading nothing, its answer a JSON document of
+	// ConnectOnly makes the scrape a check that the port accepts a
+	// connection. It dials, makes the TLS handshake with a tls block, and
+	// closes, writing and reading nothing. Its answer is a JSON document of
 	// whether it connected (tcpconnect.go). ConnectTimeout bounds the
-	// connection and the handshake, and Ports are the ports of the target's
-	// host dialed at once, in place of the target's port.
+	// connection and the handshake. Ports are the ports of the target's host
+	// to dial at once, in place of the target's port.
 	ConnectOnly    bool           `yaml:"connect_only,omitempty"`
 	ConnectTimeout model.Duration `yaml:"connect_timeout,omitempty"`
 	Ports          []int          `yaml:"ports,omitempty"`
@@ -271,12 +271,13 @@ func validateTCPRequest(x *model.Collector) error {
 	return nil
 }
 
-// validateTCPBinary checks send_hex and answer_bytes: send_hex is pairs of
-// hexadecimal digits, blanks between them or not, of at most tcpMaxText
-// bytes, holding no placeholder, since a probe's value would be text in a
-// binary request, and not beside send; answer_bytes is above 0 and not
-// beside terminator, either being where the answer ends. A length past the
-// response limit fails the scrape before anything is read (tcpReadBytes).
+// validateTCPBinary checks send_hex and answer_bytes. send_hex must be pairs
+// of hexadecimal digits, with or without blanks between them, of at most
+// tcpMaxText bytes. It must hold no placeholder, since a probe's value would
+// be text in a binary request, and must not be beside send. answer_bytes
+// must be above 0 and not beside terminator, since each marks where the
+// answer ends. A length past the response limit fails the scrape before
+// anything is read (tcpReadBytes).
 func validateTCPBinary(name string, r TCPConfig) error {
 	if r.SendHex != "" {
 		if r.Send != "" {
@@ -326,9 +327,9 @@ func tcpHexBytes(text string) ([]byte, error) {
 }
 
 // validateTCPTransport checks udp and unix_socket. A UDP exchange is one
-// datagram each way: it has no greeting, no TLS and no terminator or length
-// to read up to, and sends something, since a UDP server speaks only when
-// spoken to. A Unix socket is a stream connection to a path of the
+// datagram each way. It has no greeting, no TLS, and no terminator or length
+// to read up to, and it must send something, since a UDP server speaks only
+// when spoken to. A Unix socket is a stream connection to a path on the
 // exporter's side (validateUnixSocket); a datagram socket is not reached.
 func validateTCPTransport(x *model.Collector, r TCPConfig) error {
 	if err := validateUnixSocket(x, x.Request.UnixSocket); err != nil {
@@ -352,10 +353,10 @@ func validateTCPTransport(x *model.Collector, r TCPConfig) error {
 	return nil
 }
 
-// validateTCPGreeting checks request.greeting: a pattern Go's regexp
-// compiles, bounded as send is, holding no placeholder, since it is the
-// configuration's check of the server and no probe's; and, without send, no
-// terminator, since nothing is read after the greeting then.
+// validateTCPGreeting checks request.greeting. It must be a pattern Go's
+// regexp compiles, bounded as send is, with no placeholder, since it is the
+// configuration's check of the server and not a probe's. Without send,
+// there must be no terminator, since nothing is read after the greeting.
 func validateTCPGreeting(name string, r TCPConfig) error {
 	if r.Greeting == "" {
 		return nil
@@ -378,10 +379,11 @@ func validateTCPGreeting(name string, r TCPConfig) error {
 	return nil
 }
 
-// validateTCPStartTLS checks request.starttls: a protocol startTLS speaks,
-// and, without send, no terminator, since nothing is read after the
-// handshake then. A tls block is the handshake's settings, so any goes with
-// it; no tls block is the defaults, never plaintext.
+// validateTCPStartTLS checks request.starttls. It must be a protocol
+// startTLS speaks, and without send there must be no terminator, since
+// nothing is read after the handshake. A tls block gives the handshake's
+// settings, so any tls block may go with it. With no tls block the defaults
+// apply, never plaintext.
 func validateTCPStartTLS(name, protocol string, r TCPConfig) error {
 	if protocol == "" {
 		return nil
@@ -405,10 +407,10 @@ type tcpAddress struct {
 	host, hostPort string
 }
 
-// parseTCPTarget reads a target: host:port or [v6]:port, the port required
-// unless portRequired is false, as for a collector of request.unix_socket,
-// whose target names the service and is never dialed. Nothing else may
-// come with it.
+// parseTCPTarget reads a target: host:port or [v6]:port. The port is
+// required unless portRequired is false, as for a request.unix_socket
+// collector, whose target names the service and is never dialed. Nothing
+// else may come with it.
 func parseTCPTarget(raw string, portRequired bool) (tcpAddress, error) {
 	target := strings.TrimSpace(raw)
 	if strings.Contains(target, "://") {
@@ -443,19 +445,19 @@ func parseTCPTarget(raw string, portRequired bool) (tcpAddress, error) {
 	return tcpAddress{host: canonical, hostPort: net.JoinHostPort(canonical, port)}, nil
 }
 
-// tcpSecure says whether a scrape of c speaks TLS: when it writes a tls
-// block, even an empty one (model.TLSConfig.Set), which asks for TLS
-// verified with the system roots rather than leaving the scrape plaintext,
-// or starttls, which begins TLS with the tls block's settings, or with the
+// tcpSecure reports whether a scrape of c speaks TLS. It does when c has a
+// tls block, even an empty one (model.TLSConfig.Set), which asks for TLS
+// verified with the system roots rather than plaintext. It also does with
+// starttls, which begins TLS with the tls block's settings, or with the
 // system roots without one.
 func tcpSecure(c *model.Collector) bool {
 	return c.Request.TLS != model.TLSConfig{} || c.Request.StartTLS != ""
 }
 
-// tcpURL is the url label and the trace's URL of a scrape: tcp://host:port,
-// tls:// over TLS, from the start or after STARTTLS, udp:// over UDP, and
-// over a Unix socket unix:// and the socket's path, the target the name the
-// service goes by in the labels, which is never dialed.
+// tcpURL returns the url label and the trace's URL of a scrape:
+// tcp://host:port, tls:// over TLS (from the start or after STARTTLS), or
+// udp:// over UDP. Over a Unix socket it is unix:// and the socket's path;
+// the target is then the service's name in the labels and is never dialed.
 func tcpURL(a tcpAddress, c *model.Collector) string {
 	switch {
 	case c.Request.UnixSocket != "" && tcpSecure(c):
@@ -498,10 +500,10 @@ func tcpMethod(c *model.Collector, _ RequestOverrides) string {
 	return tcpMethodSend
 }
 
-// tcpDisplay renders a target for logs and labels: as written, since it
-// holds no credentials, when it is one at all. A target without a port is
-// one of a collector of request.unix_socket or request.ports, which the
-// display does not know of, and so is an IPv6 address alone.
+// tcpDisplay renders a target for logs and labels. A valid target is shown
+// as written, since it holds no credentials. A target without a port belongs
+// to a request.unix_socket or request.ports collector, which the display
+// does not know about, or is a bare IPv6 address.
 func tcpDisplay(target string) string {
 	if _, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(target), "[]")); err == nil {
 		return strings.TrimSpace(target)
@@ -553,10 +555,10 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 			cfg.ServerName = address.host
 		}
 	}
-	// The host's name now; the address the connection is made to when it
-	// is made, as an http request's connections are checked.
-	// Over a Unix socket, the target's name as written, which is never
-	// looked up (overSocket).
+	// Check the host's name now, and the address when the connection is
+	// made, as an http request's connections are checked. Over a Unix
+	// socket, check the target's name as written, which is never looked up
+	// (overSocket).
 	if policy := policyOf(c); policy != nil {
 		guard := &policyGuard{policy: policy, hosts: map[string]bool{}, socket: c.Request.UnixSocket != ""}
 		if err := guard.check(ctx, &url.URL{Scheme: "tcp", Host: address.hostPort}); err != nil {
@@ -617,10 +619,10 @@ func fetchTCP(ctx context.Context, target string, c *model.Collector, overrides 
 	}, nil
 }
 
-// tcpExchanged is what a scrape's exchange read, and how long each of its
-// steps took: a step it did not take is 0, greeting is nil without
-// request.greeting or request.starttls, and starttls, the protocol, empty
-// without the latter.
+// tcpExchanged holds what a scrape's exchange read and how long each step
+// took. A step it did not take is 0. greeting is nil without
+// request.greeting or request.starttls, and starttls, the protocol, is
+// empty without request.starttls.
 type tcpExchanged struct {
 	body     []byte
 	how      string
@@ -649,9 +651,9 @@ type tcpExchanged struct {
 }
 
 // tcpDocument is a scrape's answer as request.document hands it to the
-// transforms: a step the scrape did not take, and what it did not read, are
-// left out, rather than written null or 0, as a dns record's fields of
-// another type are.
+// transforms. Steps the scrape did not take, and what it did not read, are
+// left out rather than written as null or 0, unlike a dns record's fields
+// of another type.
 type tcpDocument struct {
 	Greeting        *string  `json:"greeting,omitempty"`
 	Answer          *string  `json:"answer,omitempty"`
@@ -666,14 +668,14 @@ type tcpDocument struct {
 	DurationSeconds float64           `json:"duration_seconds"`
 }
 
-// document is the exchange as a JSON document (tcpDocument). JSON text is
-// UTF-8, so a greeting or an answer holding other bytes fails the scrape,
-// as a redis reply or an LDAP value does, rather than reaching the rules
-// with its bytes replaced. The document is the body the rules read, so it
-// is held to the response limit as a body is: the greeting and the answer
-// share the limit as they are read (tcpExchange), but JSON writes a control
-// byte in six ("\u0001") and adds its keys and timings, so a document of
-// a greeting and an answer within it can still be past it.
+// document returns the exchange as a JSON document (tcpDocument). JSON text
+// is UTF-8, so a greeting or answer holding other bytes fails the scrape, as
+// a redis reply or an LDAP value does, rather than reaching the rules with
+// its bytes replaced. The document is the body the rules read, so it is held
+// to the response limit like a body. The greeting and the answer share the
+// limit as they are read (tcpExchange). But JSON writes a control byte as
+// six bytes ("\u0001") and adds its keys and timings, so a document of a
+// greeting and an answer within the limit can still exceed it.
 func (x *tcpExchanged) document(address tcpAddress, limit int64) ([]byte, error) {
 	seconds := func(d time.Duration) *float64 { s := d.Seconds(); return &s }
 	doc := tcpDocument{ConnectSeconds: x.connect.Seconds(), DurationSeconds: x.total.Seconds()}
@@ -720,13 +722,13 @@ const (
 	tcpHeaderAnswer   = "X-Tcp-Answer-Seconds"
 )
 
-// headers are the answer's headers: how long the connection, the TLS
-// handshake, the greeting, the request for TLS and the answer took, in seconds, each when the
-// scrape took the step, and the greeting, a value for each of its lines
-// without its line end, as a header sent once for each. A tcp answer has no
-// headers of its own, so these name no header a server sent; they are how
-// a jq rule ($headers) and a Python script (response.headers) read what is
-// not the body without the body changing.
+// headers returns the answer's headers: how long the connection, the TLS
+// handshake, the greeting, the request for TLS and the answer took, in
+// seconds, each when the scrape took that step; and the greeting, one value
+// per line without its line end, like a header sent once per line. A tcp
+// answer has no headers of its own, so these name no header a server sent.
+// They let a jq rule ($headers) and a Python script (response.headers) read
+// what is not the body, without changing the body.
 func (x *tcpExchanged) headers() http.Header {
 	h := http.Header{tcpHeaderConnect: {tcpSeconds(x.connect)}}
 	if x.secure {
@@ -824,9 +826,9 @@ func tcpGreetingLines(greeting []byte) []string {
 	return lines
 }
 
-// tcpExchange connects, speaks TLS when cfg is set, from the start or after
-// the greeting with request.starttls, reads the greeting when the
-// collector expects one, writes send and reads the answer, saying how
+// tcpExchange connects, speaks TLS when cfg is set (from the start, or after
+// the greeting with request.starttls), reads the greeting when the
+// collector expects one, writes send and reads the answer. It reports how
 // reading stopped and how long each step took.
 func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send string, steps []tcpStepRendered, c *model.Collector) (*tcpExchanged, error) {
 	r := tcpRequest(c)
@@ -965,11 +967,11 @@ func tcpExchange(ctx context.Context, address tcpAddress, cfg *tls.Config, send 
 	return x, nil
 }
 
-// tcpReadGreeting reads the greeting (readStartTLSGreeting), its failures
-// naming the key that expects it, request.greeting, or else
-// request.starttls. With starttls: ftp, the 120 replies an FTP server may
-// say before its 220 are before, and the greeting, which request.greeting
-// is matched against and the answer and the document hold, is the 220.
+// tcpReadGreeting reads the greeting (readStartTLSGreeting). Its failures
+// name the key that expects it: request.greeting, or else request.starttls.
+// With starttls: ftp, the 120 replies an FTP server may send before its 220
+// are returned in before. The greeting is the 220: request.greeting is
+// matched against it, and the answer and the document hold it.
 func tcpReadGreeting(ctx context.Context, reader *bufio.Reader, address tcpAddress, limit int64, c *model.Collector) (before, greeting []byte, err error) {
 	key := "request.greeting"
 	if tcpRequest(c).Greeting == "" {
@@ -982,9 +984,9 @@ func tcpReadGreeting(ctx context.Context, reader *bufio.Reader, address tcpAddre
 const tcpLimitKeys = "request.max_response_bytes or limits.max_response_bytes"
 
 // tcpRead reads the answer from conn until it ends with terminator, or,
-// without one, until the server closes the connection, holding it to limit
-// as it arrives, with the shared bytes of the greeting a document holds
-// beside it counted against limit too.
+// without one, until the server closes the connection. It holds the answer
+// to limit as it arrives, counting against limit also the shared bytes of
+// the greeting that a document holds beside it.
 func tcpRead(ctx context.Context, conn io.Reader, address tcpAddress, terminator []byte, limit, shared int64) ([]byte, string, error) {
 	var body []byte
 	chunk := make([]byte, 32<<10)
@@ -1033,12 +1035,11 @@ func tcpSendKey(r TCPConfig) string {
 }
 
 // udpRead reads the answer to a datagram: the first datagram that comes
-// back, held to limit. A read of one byte more than limit tells a datagram
-// past the limit from one that fills it, since a datagram's bytes beyond
-// what the read holds are dropped. A port no server listens on answers with
-// ICMP port unreachable, which the connected socket's read reports as
-// connection refused: that fails the scrape at once rather than at the
-// deadline.
+// back, held to limit. It reads one byte more than limit to tell a datagram
+// past the limit from one that fills it, since bytes beyond what the read
+// holds are dropped. A port with no listening server answers with ICMP port
+// unreachable, which the connected socket's read reports as connection
+// refused. That fails the scrape at once rather than at the deadline.
 func udpRead(ctx context.Context, conn net.Conn, address tcpAddress, limit int64) ([]byte, string, error) {
 	buf := make([]byte, min(limit, 64<<10)+1)
 	n, err := conn.Read(buf)
@@ -1051,10 +1052,11 @@ func udpRead(ctx context.Context, conn net.Conn, address tcpAddress, limit int64
 	return buf[:n], "the answer is the first datagram that came back", nil
 }
 
-// tcpReadBytes reads the answer up to request.answer_bytes, the length a
-// binary protocol's answer is, and no further: a server that keeps the
-// connection open has said all once that many bytes have come. One that
-// closes the connection sooner fails the scrape, the answer being short.
+// tcpReadBytes reads the answer up to request.answer_bytes, the length of a
+// binary protocol's answer, and no further. A server that keeps the
+// connection open has said everything once that many bytes have come. A
+// server that closes the connection sooner fails the scrape, because the
+// answer is short.
 func tcpReadBytes(ctx context.Context, reader io.Reader, address tcpAddress, want int, limit, shared int64) ([]byte, string, error) {
 	if shared+int64(want) > limit {
 		return nil, "", model.MarkError(model.Errorf("request.answer_bytes is %d, and the answer of %s would be larger than the response limit of %d bytes; raise request.max_response_bytes or limits.max_response_bytes", want, address.hostPort, model.Size(limit)), model.ErrLimitExceeded)
@@ -1104,12 +1106,12 @@ func escapeLineValue(where, name, value string) (string, error) {
 	return value, nil
 }
 
-// refuseEmptySend refuses a send that its placeholders' values leave
-// empty, as {{param_cmd:}} does when the probe gives no param_cmd. Writing
-// nothing would make the scrape a read of what the server says first, which
-// a server that waits for a command never ends but at the deadline, while
-// the collector's method, its terminator and its debug report say it sends:
-// the probe is refused, naming the parameters, as one missing a value is.
+// refuseEmptySend refuses a send that its placeholders' values leave empty,
+// as {{param_cmd:}} does when the probe gives no param_cmd. Writing nothing
+// would turn the scrape into a read of what the server says first. A server
+// that waits for a command would end that read only at the deadline, while
+// the collector's method, its terminator and its debug report say it sends.
+// The probe is refused, naming the parameters, like one missing a value.
 func refuseEmptySend(where string, placeholders []pathPlaceholder, rendered string) error {
 	if rendered != "" {
 		return nil

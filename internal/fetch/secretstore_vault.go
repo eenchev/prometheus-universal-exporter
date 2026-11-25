@@ -16,19 +16,19 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A vault store reads a secret over HashiCorp Vault's HTTP API: GET
-// /v1/<path>, the path as the API has it, which for a KV version 2 mount
-// has data/ after the mount (secret/data/db) and for version 1 has not
+// A vault store reads a secret over HashiCorp Vault's HTTP API with GET
+// /v1/<path>, the path as the API has it. For a KV version 2 mount the path
+// has data/ after the mount (secret/data/db); for version 1 it has not
 // (secret/db). Either answer is read: the fields of a version 2 secret are
-// those under data.data, told by the metadata beside them.
+// those under data.data, which the metadata beside them identifies.
 //
-// The exporter logs in as auth says. token sends the token of auth.token_file,
-// read at each request so that one a Vault Agent renews is used as it is
-// renewed, or of the VAULT_TOKEN environment variable. kubernetes exchanges
-// the pod's service account token for a Vault token, and approle a role id
-// and a secret id; the token either gives is kept in memory until nine
-// tenths of its lease have passed, and asked for again at once when Vault
-// refuses it.
+// The exporter logs in as auth says. token sends the token of
+// auth.token_file, read at each request so that a token a Vault Agent renews
+// is used as it is renewed, or of the VAULT_TOKEN environment variable.
+// kubernetes exchanges the pod's service account token for a Vault token,
+// and approle exchanges a role id and a secret id. The token either gives is
+// kept in memory until nine tenths of its lease have passed, and is asked for
+// again at once when Vault refuses it.
 
 const (
 	vaultAuthToken      = "token"
@@ -130,10 +130,10 @@ type vaultBackend struct {
 	client   *http.Client
 }
 
-// httpClient is the client Vault is asked with, made at the first request:
-// the files of the store's tls block are read then, so a store whose CA is
-// mounted after the exporter starts is reached once it is, and a file that
-// cannot be read fails the read that needed it, saying so, and no other.
+// httpClient returns the client used to call Vault, made at the first
+// request. The store's tls block files are read then, so a store whose CA is
+// mounted after the exporter starts is reached once it is mounted. A file
+// that cannot be read fails only the read that needed it, saying so.
 func (b *vaultBackend) httpClient() (*http.Client, error) {
 	b.clientMu.Lock()
 	defer b.clientMu.Unlock()

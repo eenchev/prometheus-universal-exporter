@@ -15,11 +15,11 @@ import (
 
 // Environment expansion is opt-in, through --config.expand-env for the
 // configuration and its collector files and --static-targets.expand-env for
-// the static target file, because a configuration file is full of characters that look like references and are
-// not: a regex metric rule, a jq expression and a Python pre-script can all
-// contain a dollar sign, and expanding by default would rewrite them behind the
-// operator's back. Off by default, nothing in a configuration file means
-// anything but itself.
+// the static target file. A configuration file is full of characters that
+// look like references and are not: a regex metric rule, a jq expression and
+// a Python pre-script can all contain a dollar sign, and expanding by default
+// would rewrite them behind the operator's back. With expansion off, the
+// default, nothing in a configuration file means anything but itself.
 //
 // Only the braced form is a reference. `$VAR` is left exactly as written, which
 // is what keeps `expression: '\$([0-9]+)'` and shell-style text in a pre-script
@@ -31,17 +31,18 @@ var envReference = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // configuration document.
 //
 // A reference is expanded where the document holds it as a value, and the
-// value is written back so that YAML reads exactly it: the document is parsed
-// first, each scalar — a value, or a key — that holds a reference is expanded,
-// and its text in the document is replaced by the expansion, written plain
-// when YAML reads it back unchanged and as a double-quoted string otherwise.
-// Substituting the text of the file as it stood, as this once did, let a
-// value change the document around it: a token holding " #" lost the rest to
-// a comment, one starting with "*" or "&" became an alias or an anchor, and a
-// reference in a comment had to be set. Now a value is only ever a value, a
-// line break in one included, and a reference in a comment is left alone.
-// The rewritten scalar keeps its lines, so the document's line numbers, which
-// its errors name, are those of the file.
+// value is written back so that YAML reads exactly it. The document is
+// parsed first. Each scalar (a value or a key) that holds a reference is
+// expanded, and its text in the document is replaced by the expansion. The
+// expansion is written plain when YAML reads it back unchanged, and as a
+// double-quoted string otherwise. This code once substituted the file's text
+// as it stood, which let a value change the document around it: a token
+// holding " #" lost the rest to a comment, one starting with "*" or "&"
+// became an alias or an anchor, and a reference in a comment had to be set.
+// Now a value is only ever a value, even one with a line break, and a
+// reference in a comment is left alone. The rewritten scalar keeps its
+// lines, so the document's line numbers, which its errors name, are those of
+// the file.
 //
 // A reference to a variable that is not set is an error rather than an empty
 // string. An empty substitution produces a document that parses and is wrong —
@@ -54,9 +55,9 @@ func expandEnvironment(path string, raw []byte, flag string) ([]byte, error) {
 	text := string(raw)
 	doc, ok := parseDocument(text)
 	// A bare reference in a flow collection, as in [${A}, b] or
-	// {k: Bearer ${A}}, is not YAML until it is expanded: { and } end an
-	// unquoted value there. The document is then read with the braces of
-	// every reference masked (maskReferences), which changes neither what a
+	// {k: Bearer ${A}}, is not valid YAML until it is expanded: { and } end
+	// an unquoted value there. So the document is read with the braces of
+	// every reference masked (maskReferences). This changes neither what a
 	// value is nor where it stands, so each value is found, and written
 	// back, exactly as in a document that needed no help.
 	if !ok && envReference.MatchString(text) {
@@ -139,12 +140,12 @@ func parseDocument(text string) (*yaml.Node, bool) {
 // YAML inside a value, plain or quoted, in a flow collection or out of one.
 var referenceMasks = []string{"<>", "()", "~~", "^^", "++", "=="}
 
-// maskReferences writes every reference of text with its braces replaced by
-// the first pair of referenceMasks that no text of the document already looks
-// like a masked reference with, so ${NAME} becomes, say, $<NAME>. The masked
-// text has every character where it was, and unmask turns a value read from
-// it back into the value the document holds. It reports false when every
-// pair is taken, which no configuration written by hand comes near.
+// maskReferences rewrites every reference of text, replacing its braces with
+// the first pair of referenceMasks that no text of the document already
+// looks like a masked reference with. So ${NAME} becomes, say, $<NAME>. Every
+// character of the masked text stays in place, and unmask turns a value read
+// from it back into the value the document holds. It reports false when
+// every pair is taken, which no configuration written by hand comes near.
 func maskReferences(text string) (masked string, unmask func(string) string, ok bool) {
 	for _, pair := range referenceMasks {
 		open, closing := pair[:1], pair[1:]
@@ -182,9 +183,9 @@ type scalarRef struct {
 
 // scalarContext is where a scalar stands: as a mapping key, and within a flow
 // collection, [...] or {...}. Both limit how a value may be written back.
-// indent is the column, from 0, of the block mapping's keys or the block
-// sequence's dashes the scalar is an entry of, and -1 for the document's own
-// value: what a block scalar's indentation indicator counts from.
+// indent is the column, from 0, of the keys of the block mapping or the
+// dashes of the block sequence that the scalar is an entry of, and -1 for the
+// document's own value. A block scalar's indentation indicator counts from it.
 type scalarContext struct {
 	key, flow bool
 	indent    int
@@ -217,8 +218,9 @@ func collectReferences(n *yaml.Node, where scalarContext, out *[]scalarRef) {
 // every scalar, keys included, except within a top-level x- entry, which the
 // exporter ignores (yamlerrors.go), unless an alias elsewhere uses what an
 // anchor there defines. A top-level key that is an alias of x-something is
-// such an entry too, as the decoder reads it (model.KeyName). A reference in an x- block nothing uses is left as it
-// is, so a variable only such a block names need not be set.
+// such an entry too, as the decoder reads it (model.KeyName). A reference in
+// an x- block that nothing uses is left as it is, so a variable named only
+// by such a block need not be set.
 func documentReferences(doc *yaml.Node) []scalarRef {
 	var all []scalarRef
 	collectReferences(doc, scalarContext{indent: -1}, &all)
@@ -325,13 +327,13 @@ func blockIndentation(header string) int {
 // blockEdit expands the references in the lines of a literal or folded block
 // scalar, whose text is its value line by line. A value with a line break
 // would need the block's indentation on each new line, and more lines, so it
-// is refused there; a quoted value takes one.
+// is refused there; a quoted value can take one.
 //
-// The block's lines are those indented at least as far as its content: as far
-// as its first line that is not blank, or, when the header says how far, as
-// in |2, that many columns past the mapping or sequence it is an entry of
-// (parentIndent) — the first line may then be indented further than the rest,
-// which is what the indicator is for.
+// The block's lines are those indented at least as far as its content. That
+// is as far as its first non-blank line or, when the header says how far (as
+// in |2), that many columns past the mapping or sequence it is an entry of
+// (parentIndent). The first line may then be indented further than the
+// rest, which is what the indicator is for.
 func blockEdit(text string, lineStarts []int, n *yaml.Node, header string, parentIndent int, expand func(string) string) (textEdit, error) {
 	first := n.Line // the block's first content line, 0-based
 	if first >= len(lineStarts) {
@@ -411,15 +413,15 @@ func quotedEnd(text string, start int) (int, bool) {
 // written there by hand, as the reference was.
 var plainSafe = regexp.MustCompile(`^[A-Za-z0-9_./+-][A-Za-z0-9_./+=:@?&%~-]*$`)
 
-// encodeScalar writes value as YAML reads it back. A value in place of an
+// encodeScalar writes value so that YAML reads it back. A value replacing an
 // unquoted one is written unquoted when that is safe, so a number or a
-// boolean stays one; everything else is a double-quoted string, JSON's
-// escapes being YAML's. An empty value is "" everywhere: written as nothing
-// it would be YAML's null, which no key takes, so a header or any other
-// value given an empty variable was refused as a key with nothing after its
-// colon, where the same value written "" loads. A key is always quoted: a
-// key is a name, and a plain one at the start of a line may be taken for
-// something else, as --- is.
+// boolean stays one. Everything else is a double-quoted string, since JSON's
+// escapes are YAML's. An empty value is always "": written as nothing it
+// would be YAML's null, which no key takes. So a header or any other value
+// given an empty variable was refused as a key with nothing after its colon,
+// while the same value written "" loads. A key is always quoted: a key is a
+// name, and a plain one at the start of a line may be taken for something
+// else, as --- is.
 func encodeScalar(value string, plain bool, where scalarContext) string {
 	if plain && !where.key {
 		switch {

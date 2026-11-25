@@ -13,11 +13,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the sshfile and sshexec request types share of their configuration
-// and their targets: the target, host or host:port; the account and its
-// credential files, a static target's among them; the keys of the
-// connection kept to a host (sshconn.go); and the check of the files for
-// --dry-run. Built with either type, so that each builds without the other.
+// This file holds the configuration and target handling shared by the
+// sshfile and sshexec request types: the target (host or host:port), the
+// account and its credential files (including a static target's), the keys
+// of the connection kept to a host (sshconn.go), and the --dry-run check of
+// the files. It builds with either type, so each builds without the other.
 
 // The defaults of the connection settings.
 const (
@@ -34,10 +34,10 @@ const sshDefaultPort = "22"
 // round trip would close every connection as soon as it is made.
 const sshMinKeepaliveInterval = time.Second
 
-// validateSSHConnection checks the keys of how an sshfile or sshexec
-// collector connects: its account, credential files, known_hosts_file,
-// keepalives, idle timeout and max_open_connections. account says what the
-// account is to the type, as "the file is read as".
+// validateSSHConnection checks the connection keys of an sshfile or sshexec
+// collector: its account, credential files, known_hosts_file, keepalives,
+// idle timeout and max_open_connections. account says what the account
+// means to the type, such as "the file is read as".
 func validateSSHConnection(x *model.Collector, account string) error {
 	r := &x.Request
 	if strings.TrimSpace(r.Username) == "" {
@@ -71,15 +71,19 @@ func validateSSHConnection(x *model.Collector, account string) error {
 	return nil
 }
 
-// checkSSHCredentialKeys holds the account and credential keys to their
-// rules: a private key, a password or both; a passphrase only for a private
-// key; none written with blanks alone, which is neither a name nor the key
-// left out, which "" is; and no placeholder in any of them, since none is a
-// template. An empty username is the collector's to require; a static
-// target's empty one keeps the collector's. requestType names the type in
-// the refusal, and order is the request block's keys in the order the file
-// has them, of which a refusal names the first. required says a key or a
-// password must be named, as it must for every request that is made.
+// checkSSHCredentialKeys checks the account and credential keys against
+// these rules:
+//   - a private key, a password, or both;
+//   - a passphrase only with a private key;
+//   - no value of blanks only, which is neither a name nor an omitted key
+//     ("" is an omitted key);
+//   - no placeholder in any of them, since none is a template.
+//
+// An empty username is for the collector to require; a static target's
+// empty username keeps the collector's. requestType names the type in the
+// refusal. order is the request block's keys in file order, and a refusal
+// names the first of them. required says a key or a password must be
+// named, as every request that is made needs.
 func checkSSHCredentialKeys(requestType, username, privateKeyFile, passphraseFile, passwordFile string, order []string, required bool) error {
 	if strings.Contains(username, "{{") {
 		return fmt.Errorf("request.username %q has a placeholder; the account is named as it is, so it takes none", username)
@@ -129,12 +133,11 @@ func checkSSHFileKey(key, value string) error {
 	return nil
 }
 
-// checkSSHTargetAccount checks the account and credential keys a static
-// target's request block sets for an sshfile or sshexec collector, c. The
-// credential files go together: a target that sets any of
+// checkSSHTargetAccount checks the account and credential keys that a
+// static target's request block sets for an sshfile or sshexec collector,
+// c. The credential files go together: a target that sets any of
 // private_key_file, passphrase_file and password_file replaces all three of
-// the collector's with its own, so it must name a key or a password of its
-// own.
+// the collector's, so it must name its own key or password.
 func checkSSHTargetAccount(c *model.Collector, t *model.StaticTarget) error {
 	r := &t.Request
 	if r.PrivateKeyFile == "" && r.PassphraseFile == "" && r.PasswordFile == "" {
@@ -157,10 +160,10 @@ type sshAddress struct {
 	hostPort string
 }
 
-// parseSSHTarget reads a target: host, host:port, [v6]:port, or the same
-// after ssh://. Nothing else may come with it: the account is
-// request.username, and the file request.root and request.path or the
-// command request.command. requestType names the type in the refusal.
+// parseSSHTarget reads a target: host, host:port, [v6]:port, or any of these
+// after ssh://. Nothing else may be included. The account comes from
+// request.username, the file from request.root and request.path, and the
+// command from request.command. requestType names the type in the refusal.
 func parseSSHTarget(requestType, raw string) (sshAddress, error) {
 	raw = strings.TrimSpace(raw)
 	rest := raw
@@ -265,13 +268,14 @@ func onSSHHost(err error, hostPort string) error {
 	return fmt.Errorf("%w (on %s)", err, hostPort)
 }
 
-// checkSSHFiles reads the credential files and known_hosts_file of a
-// collector, or the credential files of a static target that sets its own,
-// as making a connection reads them, for --dry-run: a file missing or
-// unreadable, a key that is none or is encrypted without its passphrase,
-// a passphrase that does not decrypt it, an empty password, a known_hosts
-// file without a line or with one that is none. Loading the configuration
-// reads none of them, since a file may be mounted after the exporter starts.
+// checkSSHFiles reads, for --dry-run, the credential files and
+// known_hosts_file of a collector, or the credential files of a static
+// target that sets its own, the same way making a connection reads them.
+// It reports: a missing or unreadable file, a key that is not a key or is
+// encrypted without its passphrase, a passphrase that does not decrypt it,
+// an empty password, and a known_hosts file with no lines or an invalid
+// line. Loading the configuration reads none of them, since a file may be
+// mounted after the exporter starts.
 func checkSSHFiles(c *model.Collector, t *model.StaticTarget) []string {
 	who := fmt.Sprintf("collector %q", c.Name)
 	overrides := RequestOverrides{}

@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// What the dns request type and the allocator's dns_sd discovery source
-// share: reading a server and a name, and a resolver that asks that server.
-// This file has no build tag, unlike the request type's own, so that the
+// Shared code of the dns request type and the allocator's dns_sd discovery
+// source: reading a server and a name, and a resolver that asks that server.
+// Unlike the request type's own file, this file has no build tag, so the
 // allocator, which builds in every selection of request types, can use it.
 
 // dnsDefaultPort is the port of a server that names none.
@@ -49,11 +49,11 @@ func ParseDNSServer(raw string) (string, error) {
 	return net.JoinHostPort(canonical, port), nil
 }
 
-// CanonicalDNSName reads a DNS name as canonicalHost reads a host, held
-// besides to the lengths of the DNS: at most 253 characters, each label from
-// 1 to 63. It returns the name in lower case without a trailing dot; a name
-// canonicalHost refuses is refused with its *TargetRefusedError, and one of
-// the wrong length with an error starting with the name quoted.
+// CanonicalDNSName reads a DNS name as canonicalHost reads a host, and also
+// holds it to the DNS lengths: at most 253 characters, and 1 to 63 per
+// label. It returns the name in lower case without a trailing dot. A name
+// canonicalHost refuses is refused with its *TargetRefusedError. A name of
+// the wrong length is refused with an error starting with the name quoted.
 func CanonicalDNSName(raw string) (string, error) {
 	name, err := canonicalHost(raw)
 	if err != nil {
@@ -70,12 +70,12 @@ func CanonicalDNSName(raw string) (string, error) {
 	return name, nil
 }
 
-// DNSResolver is Go's own resolver (PreferGo), which needs no library and
-// tells a name that does not exist, or has no records of the type, from a
-// failure. With server, host:port as ParseDNSServer writes it, every
-// question goes there instead of to the system's nameservers; with tcp, over
-// TCP. Over UDP an answer marked truncated is asked again over TCP, as the
-// resolver always does.
+// DNSResolver is Go's own resolver (PreferGo). It needs no library, and it
+// tells a name that does not exist, or has no records of the type, apart
+// from a failure. With server (host:port as ParseDNSServer writes it), every
+// question goes there instead of to the system's nameservers. With tcp, it
+// goes over TCP. Over UDP, an answer marked truncated is asked again over
+// TCP, as the resolver always does.
 func DNSResolver(server string, tcp bool) *net.Resolver {
 	dialer := &net.Dialer{}
 	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {

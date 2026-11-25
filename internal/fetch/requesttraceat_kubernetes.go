@@ -2,10 +2,10 @@
 
 package fetch
 
-// What a kubernetes collector, whose requests are sent at once, records of
-// each at its own place in the trace (tracedAt) that no other type does;
-// the phases, which an HTTP trip records too, are in requesttrace.go, and
-// how a request ended in requesttraceat.go.
+// What a kubernetes collector records of each request at its own place in
+// the trace (tracedAt) that no other type does; its requests are sent at
+// once. The phases, which an HTTP trip records too, are in requesttrace.go,
+// and how a request ended is in requesttraceat.go.
 
 // spanID records the span id the request was sent under (traceSpanID).
 func (a tracedAt) spanID(span [8]byte) {

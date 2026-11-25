@@ -25,9 +25,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The mqtt request type reads messages from an MQTT broker: it connects,
-// subscribes to the collector's topics, and hands the transforms the
-// messages that came, as one JSON document.
+// The mqtt request type reads messages from an MQTT broker. It connects,
+// subscribes to the collector's topics, and passes the messages that
+// arrived to the transforms as one JSON document.
 //
 //	request:
 //	  type: mqtt
@@ -38,28 +38,30 @@ import (
 //	  username: exporter           # optional
 //	  password_file: /etc/exporter/mqtt-pass
 //
-// It stays a pull: a scrape asks the broker and answers with what the
-// broker sent it; nothing reaches the exporter but what a collector
-// subscribed to. Three ways of reading, by what the collector sets:
+// It is still a pull: a scrape asks the broker and answers with what the
+// broker sent. Only messages on topics a collector subscribed to reach the
+// exporter. There are three ways of reading, chosen by what the collector
+// sets:
 //
 //   - Neither (the default): each scrape connects, subscribes, reads the
 //     retained messages and whatever is published within window, and
-//     disconnects. Between scrapes nothing is connected and nothing is kept.
+//     disconnects. Nothing is connected or kept between scrapes.
 //   - persistent_session: true, with a client_id: each scrape still
-//     connects and disconnects, but asks the broker to keep its session, so
-//     what was published at QoS 1 between scrapes is queued by the broker
-//     and delivered to the next one.
-//   - keep_connection: true: the connection made by the first scrape is
-//     kept, and what comes on it is remembered, the last message of each
-//     topic; a scrape answers with that at once. The connection is closed
-//     when no scrape used it for idle_timeout, and made again by the next.
+//     connects and disconnects, but asks the broker to keep its session.
+//     Messages published at QoS 1 between scrapes are queued by the broker
+//     and delivered to the next scrape.
+//   - keep_connection: true: the first scrape's connection is kept, and the
+//     last message of each topic received on it is remembered. A scrape
+//     answers with that at once. The connection is closed when no scrape
+//     has used it for idle_timeout, and the next scrape opens it again.
 //
-// The type only subscribes: no PUBLISH is in the code, but for the
-// acknowledgements QoS 1 has. MQTT 3.1.1 (protocol level 4), by hand.
+// The type only subscribes. The code has no PUBLISH, except for the
+// acknowledgements QoS 1 needs. It implements MQTT 3.1.1 (protocol level
+// 4) by hand.
 //
 // The target is host, host:port, mqtt://host:port (port 1883) or
-// mqtts://host:port (8883, TLS); a target without a scheme is TLS when the
-// collector has a tls block.
+// mqtts://host:port (8883, TLS). A target without a scheme uses TLS when
+// the collector has a tls block.
 //
 // The type imports nothing outside the standard library.
 
@@ -640,7 +642,7 @@ func (mqttRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 		return nil, model.MarkError(model.Errorf("the document of %d messages is %d bytes, larger than the response limit; lower request.max_messages, or raise request.max_response_bytes or limits.max_response_bytes", len(doc.Messages), model.Size(int64(len(body)))), model.ErrLimitExceeded)
 	}
 	traceFacts(ctx, intFact("mqtt.messages", len(doc.Messages)))
-	resp := &HTTPResponse{StatusCode: http.StatusOK, NoStatus: true, Headers: http.Header{"Content-Type": {"application/json"}}, Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
+	resp := jsonBody(body, target, c, start)
 	if state != nil && state.connection != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: state.connection}
 	}

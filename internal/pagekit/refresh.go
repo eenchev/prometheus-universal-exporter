@@ -4,17 +4,18 @@ import (
 	"time"
 )
 
-// A page that refreshes itself does so as a Grafana dashboard does: a
+// A page that refreshes itself does so as a Grafana dashboard does: with a
 // Refresh button, and an auto-refresh of Off or one of Grafana's intervals,
-// kept in the page's URL, ?refresh=30s, so a bookmark or a shared link keeps
-// it. These are its bounds, its choices and its controls (RefreshStyle);
-// each page's script fetches its own content again and swaps it in.
+// kept in the page's URL (?refresh=30s) so that a bookmark or a shared link
+// keeps it. These are its bounds, its choices and its controls
+// (RefreshStyle); each page's script fetches its own content again and swaps
+// it in.
 
-// Bounds of an auto-refresh. Below 5s, the least Grafana offers, a page
-// left open in a few tabs would rebuild its content many times a second
-// between them for nothing a person reads; above a day a browser's timer,
-// which holds about 24.8 days, is no longer far off, and nobody waits that
-// long for a page anyway.
+// Bounds of an auto-refresh. Below 5s, the shortest that Grafana offers, a
+// page left open in a few tabs would rebuild its content many times a second
+// for nothing that a person reads. Above a day, a browser's timer, which
+// holds about 24.8 days, is no longer far off, and nobody waits that long
+// for a page anyway.
 const (
 	MinRefresh = 5 * time.Second
 	MaxRefresh = 24 * time.Hour
@@ -68,10 +69,10 @@ type RefreshChoice struct {
 	Selected bool
 }
 
-// NewRefreshControl is the controls of a page whose default interval is
-// def, asked for with query, the value of ?refresh=: one that is no
-// auto-refresh is ignored, as a mistyped link still shows the page, and the
-// default applies.
+// NewRefreshControl returns the controls of a page whose default interval is
+// def, as requested by query, the value of ?refresh=. A value that is not a
+// valid auto-refresh is ignored and the default applies, so a mistyped link
+// still shows the page.
 func NewRefreshControl(def time.Duration, query string) RefreshControl {
 	interval := def
 	if d, ok := RefreshOf(query); ok {
@@ -96,10 +97,9 @@ func NewRefreshControl(def time.Duration, query string) RefreshControl {
 	return control
 }
 
-// RefreshStyle is the style of a page's refresh controls: a form.refresh
-// of a Refresh a.button, an Auto-refresh label around its select, a button
-// for a browser without JavaScript, and a line saying how old the content
-// is.
+// RefreshStyle is the style of a page's refresh controls: a form.refresh with
+// a Refresh a.button, an Auto-refresh label around its select, a button for
+// a browser without JavaScript, and a line saying how old the content is.
 const RefreshStyle = `
 form.refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0 0; }
 form.refresh label { display: inline-flex; align-items: center; gap: 6px; }

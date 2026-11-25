@@ -11,7 +11,7 @@ import (
 )
 
 // request.aws_sigv4 signs an http collector's requests with AWS Signature
-// Version 4, so the collector reads an AWS API as it reads any other: a
+// Version 4, so the collector can read an AWS API like any other: a
 // CloudWatch statistic, an SQS queue's depth, a cost report.
 //
 //	request:
@@ -25,13 +25,13 @@ import (
 //	    region: eu-west-1
 //
 // The credentials are those the AWS SDK's default chain finds, as for an
-// s3file collector, a role for the service account, EKS Pod Identity, the
-// instance's role or the environment, unless access_key_id_file and
-// secret_access_key_file name a static access key. The SDK's signer and
-// credential providers are the modules the s3file request type links, so
-// the key is in the builds that have both types and in no other
-// (httpsigv4.go, httpsigv4_none.go); its keys are every build's, so the
-// schema is one.
+// s3file collector: a role for the service account, EKS Pod Identity, the
+// instance's role or the environment. access_key_id_file and
+// secret_access_key_file can instead name a static access key. The SDK's
+// signer and credential providers are the modules the s3file request type
+// links. So the key exists only in builds that have both types
+// (httpsigv4.go, httpsigv4_none.go). Its keys are in every build, so the
+// schema is the same for all.
 
 // SigV4Config is request.aws_sigv4.
 type SigV4Config struct {

@@ -31,22 +31,23 @@ import (
 var namePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Validate checks a configuration and fills in its defaults. It reports
-// every mistake it finds, one per line and in the order of the collectors and
-// their rules (model.Problems), so a configuration with several is fixed in
-// one pass. Within one collector the checks that the later ones build on —
-// the request, limits, formats and error policies — stop that collector at
-// the first mistake; its metric rules are then each checked in full.
+// every mistake it finds, one per line, in the order of the collectors and
+// their rules (model.Problems), so a configuration with several mistakes can
+// be fixed in one pass. Within one collector, the checks that later checks
+// build on (the request, limits, formats and error policies) stop that
+// collector at the first mistake. Its metric rules are then each checked in
+// full.
 func Validate(c *model.Config) error {
 	return validate(c, loadOptions{})
 }
 
-// validate is Validate, read with options. namedFilesUnread leaves the files
-// the configuration names unopened (WithoutNamedFiles): the TLS files of
-// otlp.tls, the files of web.basic_auth and the descriptor files of grpc
-// collectors, whose method and messages are then not checked against them.
-// Every other check is made. exporterInstance is the value
-// otlp.exporter_instance takes when it is left out
-// (WithExporterInstanceName).
+// validate is Validate with options. namedFilesUnread (WithoutNamedFiles)
+// leaves unopened the files the configuration names: the TLS files of
+// otlp.tls, the files of web.basic_auth, and the descriptor files of grpc
+// collectors. The method and messages of those collectors are then not
+// checked against the files. Every other check is made. exporterInstance
+// (WithExporterInstanceName) is the value otlp.exporter_instance takes when
+// it is left out.
 func validate(c *model.Config, options loadOptions) error {
 	namedFilesUnread := options.namedFilesUnread
 	if len(c.Collectors) == 0 {
@@ -121,10 +122,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := fetch.ValidateRequest(x); err != nil {
 		return err
 	}
-	// The placeholders of the label values are read before the check that
-	// refuses a placeholder nothing fills, which asks which values are
-	// filled (checkPlaceholdersAreFilled), and are kept with the collector
-	// for its probes.
+	// The label value placeholders are read before checkPlaceholdersAreFilled,
+	// which refuses a placeholder that nothing fills and needs to know which
+	// values are filled. They are kept with the collector for its probes.
 	labels, err := fetch.ParseLabelParams(x, func(index int) string { return transform.RuleName(&x.Metrics[index], index) })
 	if err != nil {
 		return err
@@ -162,10 +162,10 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := normalizeFormats(x); err != nil {
 		return err
 	}
-	// Left unset, and not implied by the transform, the decoder is chosen
-	// for each response. That works, but a response that changes its
-	// Content-Type, or a file its extension, silently changes how it is
-	// read, so the operator is told once on every start and reload.
+	// When the decoder is unset and the transform does not imply one, the
+	// decoder is chosen per response. That works, but a response that changes
+	// its Content-Type, or a file that changes its extension, silently changes
+	// how it is read. So the operator is told once on every start and reload.
 	if decoderUnset && x.Decoder.Type == "auto" && !requestTypeOf(x).Rows {
 		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
@@ -238,8 +238,8 @@ func checkLimitValues(x *model.Collector) error {
 	return nil
 }
 
-// checkCSVColumns requires a csv transform reading rows without a header row
-// to name its columns by number, from 1: with response.csv.header false
+// checkCSVColumns requires a csv transform that reads rows without a header
+// row to name its columns by number, from 1. With response.csv.header false
 // there is no name to find a column by, and a rule naming one would find
 // nothing in any row.
 func checkCSVColumns(x *model.Collector) error {
@@ -264,11 +264,12 @@ func checkCSVColumns(x *model.Collector) error {
 	return model.JoinProblems(errs...)
 }
 
-// applyLimitDefaults gives every limit left unset its default.
-// limits.max_response_bytes is not filled in: left unset, request.max_response_bytes
-// alone decides, and 10 MiB when neither is set (fetch.responseLimit).
-// minScriptMemory is the least limits.max_script_memory: less than an
-// interpreter with its libraries needs to start.
+// applyLimitDefaults gives every unset limit its default.
+// limits.max_response_bytes is not filled in: when it is unset,
+// request.max_response_bytes alone decides, and 10 MiB applies when neither
+// is set (fetch.responseLimit).
+// minScriptMemory is the smallest limits.max_script_memory allowed. Less is
+// not enough for an interpreter with its libraries to start.
 const minScriptMemory = 32 << 20
 
 // minExpressionMemory is the least limits.max_expression_memory: the limit
@@ -309,10 +310,10 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
-// requestTypeOf is the registration of a collector's request type, which
-// says what the configuration holds the collector to beyond its request
-// block: its decoder and transform. A collector whose type is not built,
-// which validating its request refuses first, has an empty one.
+// requestTypeOf returns the registration of a collector's request type. It
+// says what the configuration requires of the collector beyond its request
+// block: its decoder and transform. A collector whose type is not built has
+// an empty one; validating its request refuses that collector first.
 func requestTypeOf(x *model.Collector) *fetch.RequestType {
 	if rt := fetch.RequestTypes[x.Request.Type]; rt != nil {
 		return rt
@@ -322,8 +323,8 @@ func requestTypeOf(x *model.Collector) *fetch.RequestType {
 
 // normalizeFormats refuses a missing or unknown transform and an unknown
 // decoder, and infers the decoder a transform implies. Each is taken as
-// written, in lower case and without blanks around it, the one spelling the
-// schemas take.
+// written: lower case, without surrounding blanks, the only spelling the
+// schemas accept.
 func normalizeFormats(x *model.Collector) error {
 	if err := decode.CheckCharset(x.Response.Charset); err != nil {
 		return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
@@ -424,10 +425,10 @@ func normalizeFormats(x *model.Collector) error {
 	return checkSettingsApply(x)
 }
 
-// checkSQLFormats holds a sql collector to what reads its rows: they are
-// read by the driver, value by value, so no decoder and no response setting
-// applies to them, and only the transforms that read rows by column or a
-// list of objects can map them.
+// checkSQLFormats checks what reads a sql collector's rows. The driver reads
+// them value by value, so no decoder and no response setting applies to
+// them. Only the transforms that read rows by column or a list of objects
+// can map them.
 func checkSQLFormats(x *model.Collector) error {
 	if x.Decoder.Type != "auto" {
 		return fmt.Errorf("collector %q decodes with %s, but a sql collector's rows are read by its driver, with no body to decode; leave decoder.type out", x.Name, x.Decoder.Type)
@@ -447,13 +448,12 @@ func checkSQLFormats(x *model.Collector) error {
 }
 
 // checkProtobufResponse checks response.protobuf and the protobuf decoder,
-// which reads a body as the message it names (fetch/protobufdecoder.go):
-// the decoder needs a message and the files that describe it, a descriptor
-// set or .proto files and not both, the block is for the decoder, chosen by
-// decoder.type, and a build without the grpc request type has neither. The
-// files are read now, so a message that is not in them fails the
-// configuration, unless it was loaded without them
-// (model.Collector.DescriptorFilesUnread).
+// which reads a body as the message it names (fetch/protobufdecoder.go).
+// The decoder needs a message and the files that describe it: a descriptor
+// set or .proto files, not both. The block is for the decoder, chosen by
+// decoder.type. A build without the grpc request type has neither. The files
+// are read now, so a message that is not in them fails the configuration,
+// unless it was loaded without them (model.Collector.DescriptorFilesUnread).
 func checkProtobufResponse(x *model.Collector) error {
 	p := x.Response.Protobuf
 	switch {
@@ -495,14 +495,15 @@ func checkProtobufResponse(x *model.Collector) error {
 }
 
 // checkBinaryResponse checks response.binary and the binary decoder, which
-// reads a body by it alone (decode/binary.go): the decoder needs a layout,
-// a layout is for the decoder, chosen by decoder.type, since no answer is
-// told binary by its content, and its document is JSON-like, which jq, yq
-// and python read. Each field has a type; a field that is in the document
-// has a name no other field has, and a skip, which is in none, has none; a
-// string and a skip have a length of bytes, a cstring may have one, the
-// most bytes it reads, and a number none; count, for a list of numbers, is
-// at most model.MaxBinaryCount, and nothing is negative.
+// reads a body by that layout alone (decode/binary.go). The decoder needs a
+// layout, and a layout is for the decoder, chosen by decoder.type, since no
+// response is recognized as binary by its content. Its document is
+// JSON-like, which jq, yq and python read. Each field has a type. A field
+// that appears in the document has a name no other field has; a skip, which
+// appears in none, has no name. A string and a skip have a length in bytes,
+// a cstring may have one (the most bytes it reads), and a number has none.
+// count, for a list of numbers, is at most model.MaxBinaryCount. Nothing is
+// negative.
 func checkBinaryResponse(x *model.Collector) error {
 	b := x.Response.Binary
 	switch {
@@ -561,11 +562,11 @@ func checkBinaryResponse(x *model.Collector) error {
 	return nil
 }
 
-// checkGraphiteResponse checks response.graphite; value left out is last. It
-// applies to the graphite decoder, which a decoder chosen per response may
-// turn out to be; a collector whose decoder is another refuses it, since it
-// would be ignored. The graphite decoder's document is JSON-like, so only the
-// transforms that read one can map it.
+// checkGraphiteResponse checks response.graphite; value defaults to last. It
+// applies to the graphite decoder, which a per-response decoder choice may
+// turn out to be. A collector with another decoder refuses the block, since
+// it would be ignored. The graphite decoder's document is JSON-like, so only
+// the transforms that read one can map it.
 func checkGraphiteResponse(x *model.Collector) error {
 	g := &x.Response.Graphite
 	set := *g != model.GraphiteConfig{}
@@ -592,15 +593,16 @@ func checkGraphiteResponse(x *model.Collector) error {
 }
 
 // validateMetricRules checks each metric rule and fills in its defaults. It
-// reports the mistakes of every rule: a rule's own settings stop that rule at
-// the first, its expressions are then all checked (CheckMetricRuleAt), and a
-// python rule that passes both is told everything it says that such a rule
-// does not take (checkPythonRule). A prometheus rule that passes them all
-// must still say which metrics it is about (checkPrometheusRuleSelects). The
-// rules that pass all of that are then held against each other: no two of
-// them may be the same rule, and no prometheus rule's expression may match
-// the name another passes on the metric of with the same labels
-// (checkRulesDiffer, checkNoPatternRepeatsAName).
+// reports the mistakes of every rule. A rule's own settings stop that rule at
+// the first mistake, and then all its expressions are checked
+// (CheckMetricRuleAt). A python rule that passes both is told about
+// everything it sets that such a rule does not take (checkPythonRule). A
+// prometheus rule that passes them all must still say which metrics it is
+// about (checkPrometheusRuleSelects). The rules that pass all of that are
+// then compared with each other. No two may be the same rule, and no
+// prometheus rule's expression may match the name of a metric another rule
+// passes on with the same labels (checkRulesDiffer,
+// checkNoPatternRepeatsAName).
 func validateMetricRules(c *model.Config, x *model.Collector) error {
 	// The maps of the files the rules name are part of the rules from here
 	// on (valuemapfiles.go).
@@ -623,14 +625,14 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 }
 
 // checkRulesDiffer refuses two rules of a collector that are the same rule:
-// alike in everything that decides which series a rule makes and of what.
-// Each then makes every series the other makes, of one name and one set of
-// labels, and the scrape fails on the first of them, `validation failed:
-// duplicate metric series "up"`, on every scrape: a mistake of the
-// configuration, a rule pasted twice, reported as a failure of the scrape
-// for as long as it runs.
+// alike in everything that decides which series a rule makes and from what.
+// Each then makes every series the other makes, with one name and one set of
+// labels, and every scrape fails on the first of them with `validation
+// failed: duplicate metric series "up"`. A configuration mistake, such as a
+// rule pasted twice, is then reported as a scrape failure for as long as the
+// exporter runs.
 //
-// Two rules are the same rule when they are alike in
+// Two rules are the same rule when they are alike in:
 //
 //   - name, expression and items, each as written, "" being the key left
 //     out;
@@ -639,37 +641,38 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 //   - value_map and time_format, which say which texts the rule reads a
 //     value from.
 //
-// The last are compared because two rules that differ in them need not make
-// the same series: a rule reads no value from a text its value_map does not
-// hold or its time_format does not fit, so rules alike but for those can
-// each read what the other cannot, a field that is "up" or a number, a time
-// written one way or another, and a scrape gets the one series.
+// The last two are compared because rules that differ in them need not make
+// the same series. A rule reads no value from a text its value_map does not
+// hold or its time_format does not fit. So rules alike except for those can
+// each read what the other cannot (a field that is "up" or a number, a time
+// written one way or another), and a scrape gets the one series.
 //
-// What else a rule says changes the value or the help text of its series, or
-// what is done when it has none, and never which series it is: scale and
-// time_zone, description, required and error_mode, and a label's required
-// and truncate. Two rules that differ only in those are the same rule, as
-// are two that differ in nothing. A label's value_map is found by the
-// rule's name, so rules of one name share it (CheckLabelValueMapsAgree), and
-// a type is one for a name (checkMetricFamilies): neither can tell two such
-// rules apart.
+// Everything else a rule sets changes the value or the help text of its
+// series, or what happens when it has none, but never which series it is:
+// scale and time_zone, description, required and error_mode, and a label's
+// required and truncate. Two rules that differ only in those are the same
+// rule, as are two that differ in nothing. A label's value_map is looked up
+// by the rule's name, so rules of one name share it
+// (CheckLabelValueMapsAgree), and a name has one type (checkMetricFamilies).
+// Neither can tell two such rules apart.
 //
-// A python rule makes no series, the script does: two alike name one of the
-// script's twice, which changes nothing, and load.
+// A python rule makes no series; the script does. Two alike python rules
+// name one of the script's series twice, which changes nothing, so they load.
 //
 // The comparison is of what is written. Two expressions that mean the same
-// and are written differently are two rules to it: they load, and fail the
-// scrape as they did. One pair of rules that select the same in other words
-// is decided by the configuration alone, and is refused after the copies: a
-// prometheus rule without an expression, which matches the metric of its
-// name, and one whose expression matches that name
+// but are written differently count as two rules: they load, and fail the
+// scrape as before. One pair of rules that select the same thing in other
+// words is decided by the configuration alone, and is refused after the
+// copies: a prometheus rule without an expression, which matches the metric
+// of its name, and one whose expression matches that name
 // (checkNoPatternRepeatsAName).
 //
-// Only rules the checks of a rule take, sound, are compared, so a rule those
-// refuse is refused in the words it was, and is told of its copy once it
-// loads that far. Each rule that repeats an earlier one is reported against
-// the first of its kind, both named by their places among the collector's,
-// counted from 1 as CheckLabelValueMapsAgree counts them.
+// Only rules that passed the per-rule checks (sound) are compared. So a rule
+// those checks refuse gets the same message as before, and is told about its
+// copy once it gets that far. Each rule that repeats an earlier one is
+// reported against the first of its kind. Both are named by their places
+// among the collector's rules, counted from 1 as CheckLabelValueMapsAgree
+// counts them.
 func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 	if x.Transform.Type == "python" {
 		return nil
@@ -705,90 +708,87 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 	return append(errs, checkNoPatternRepeatsAName(x, distinct)...)
 }
 
-// checkNoPatternRepeatsAName refuses two rules of a prometheus collector of
-// which one passes on the metric of its name, having no expression, and the
-// other has an expression that matches that very name, where both give the
-// metric's series one name and the same labels:
+// checkNoPatternRepeatsAName refuses a pair of rules of a prometheus
+// collector where one rule has no expression and passes on the metric of its
+// name, the other has an expression that matches that same name, and both
+// give the metric's series one name and the same labels:
 //
 //	metrics:
 //	  - name: up
 //	  - expression: '^up'
 //
-// Every series of the metric is then made by each of them, and a scrape
-// that has a series twice fails, `validation failed: duplicate metric
-// series "up"`, on every scrape of a target that has the metric; of a
-// target that has none the rule of the name makes nothing, and unless it is
-// not required reports the metric missing. So the rule of the name, which
-// is about that metric alone, makes a series of no scrape that passes, and
-// that is told by the configuration alone: the name is written, and whether
-// a regular expression matches a text that is known is decided here as the
-// transform decides it for each series, by the expression compiled as it
-// compiles it and matched anywhere in the name
+// Each of them then makes every series of the metric. A scrape that has a
+// series twice fails with `validation failed: duplicate metric series "up"`,
+// on every scrape of a target that has the metric. For a target without it,
+// the rule of the name makes nothing and, unless it is not required, reports
+// the metric missing. So the rule of the name, which is only about that
+// metric, makes a series in no scrape that passes. The configuration alone
+// shows this: the name is written, and whether a regular expression matches
+// a known text is decided here as the transform decides it for each series,
+// with the expression compiled the same way and matched anywhere in the name
 // (transform.applyPrometheusTransform).
 //
 // The rules give the series one name when the rule with the expression has
-// no name, and so keeps the metric's own, or has that same name, which it
-// exports what it matches under. With another name it exports the metric
-// under that, another family, and the two are not held against each other.
-// Their labels are the same when the rules are alike in them as two rules
-// that are the same rule are (alikeInLabels). A value_map and a time_format,
-// which tell such rules apart, no prometheus rule has
-// (transform.CheckMetricRule).
+// no name, and so keeps the metric's own, or has that same name, under which
+// it exports what it matches. With another name it exports the metric under
+// that name, a different family, and the two rules are not compared. Their
+// labels are the same when the rules are alike in them the way two identical
+// rules are (alikeInLabels). No prometheus rule has a value_map or a
+// time_format, which would tell such rules apart (transform.CheckMetricRule).
 //
-// What else the rule of the name says changes nothing of it: with a type
-// the other has not the scrape fails on a metric of inconsistent types
-// before it comes to the duplicate, and where its scale or its type cannot
-// apply to the metric, a histogram or a summary, or a label it requires is
-// missing, the rule fails on the series instead of making it, and makes
-// none still.
+// Nothing else the rule of the name sets changes this. With a type the other
+// rule lacks, the scrape fails on a metric of inconsistent types before it
+// reaches the duplicate. Where its scale or type cannot apply to the metric
+// (a histogram or a summary), or a label it requires is missing, the rule
+// fails on the series instead of making it, and still makes none.
 //
-// What else the rule with the expression says can change what a scrape
-// does, and with one exception does not change the verdict. That rule can
-// fail on a series of the metric as well: its type or its scale cannot
-// apply to a histogram or a summary, which keeps its own type and takes no
-// scale, a type of histogram or summary applies to nothing else, and a
-// series may not have a label the rule requires (canFailOnASeries). Under
-// error_mode log or ignore it then carries on without that series, and the
-// scrape passes with the one the rule of the name made. So what such a pair
-// does is the target's to say: `{name: lat}` beside `{expression: '.*',
+// Other settings of the rule with the expression can change what a scrape
+// does, but with one exception they do not change the verdict. That rule can
+// also fail on a series of the metric (canFailOnASeries): its type or scale
+// cannot apply to a histogram or a summary, which keeps its own type and
+// takes no scale; a type of histogram or summary applies to nothing else;
+// and a series may lack a label the rule requires. Under error_mode log or
+// ignore it then carries on without that series, and the scrape passes with
+// the series the rule of the name made. So the result of such a pair depends
+// on the target: `{name: lat}` beside `{expression: '.*',
 // scale: 0.001}` passes where lat is a histogram and fails on a duplicate
 // where it is a gauge, and `{name: up}` beside `{expression: '^up$', type:
 // gauge}` fails every scrape of a target whose up is a gauge, a counter or
 // untyped. Such pairs are refused with the others: a setting that fails on
-// some series is no way to keep a rule from a metric, since every series it
-// does not fail on is made twice. The error says that in place of saying
-// that every series is, and names what the rule sets.
+// some series cannot keep a rule away from a metric, since every series it
+// does not fail on is made twice. The error says that, instead of saying that
+// every series is made twice, and names what the rule sets.
 //
-// The exception is a rule with an expression that is about the histograms
-// alone, or the summaries (keepsToItsType): `{name: up}` beside
-// `{expression: '.*', type: histogram, error_mode: ignore}` is the metric
+// The exception is a rule with an expression that is only about histograms,
+// or only about summaries (keepsToItsType): `{name: up}` beside
+// `{expression: '.*', type: histogram, error_mode: ignore}` means the metric
 // up and every histogram, and loads. That type applies to no metric of
-// another, so the rule fails on, and under error_mode log or ignore
-// carries on without, every gauge, counter and untyped metric and every
-// metric of the other of the two types, which leaves an ordinary metric to
-// the rule of its name. The pair makes a series twice only where the
-// target's metric of that name is itself of that type, and the scrape of
-// such a target fails on the duplicate, as that of two rules with
-// expressions that both match a metric does. Whatever else the rule sets,
-// a scale or a required label, is past its type and keeps it from more
-// series, not fewer. The pair stays refused where the rule of the name
-// sets that same type, since it then makes the metric only where the other
-// rule makes it too, and where the error_mode is fail, since the rule then
-// fails the scrape on the first metric of another type.
+// another type. So the rule fails on every gauge, counter and untyped metric
+// and every metric of the other of the two types, and under error_mode log
+// or ignore it carries on without them. That leaves an ordinary metric to the
+// rule of its name. The pair makes a series twice only where the target's
+// metric of that name is itself of that type, and such a target's scrape
+// fails on the duplicate, as it does for two rules whose expressions both
+// match a metric. Anything else the rule sets, a scale or a required label,
+// comes after its type and keeps it from more series, not fewer. The pair is
+// still refused where the rule of the name sets that same type, since it
+// then makes the metric only where the other rule makes it too. It is also
+// refused where the error_mode is fail, since the rule then fails the scrape
+// on the first metric of another type.
 //
-// Nothing else is refused. Two rules that both have an expression —
-// '^node_' and '^node_cpu' — make a series twice only where the target has
-// a metric both match, which no configuration says; so do a rule of a name
-// and one that exports another metric under that name, and rules whose
-// labels differ as written and come to the same on a target. Those load,
-// and fail the scrape that has such a series, as they did.
+// Nothing else is refused. Two rules that both have an expression, such as
+// '^node_' and '^node_cpu', make a series twice only where the target has a
+// metric both match, which no configuration says. The same holds for a rule
+// of a name and one that exports another metric under that name, and for
+// rules whose labels differ as written but come out the same on a target.
+// Those load, and fail the scrape that has such a series, as before.
 //
-// The rules are those that repeat no earlier one, distinct, in their order:
-// a copy is told of as the same rule as the first of its kind
-// (checkRulesDiffer) and of nothing else, so no pair is reported twice and
-// taking the copy out leaves what is said of the first. Each pair is
-// reported once, at the later of its two rules, both named by their places
-// among the collector's, counted from 1.
+// The rules compared are those that repeat no earlier rule (distinct), in
+// their order. A copy is reported as the same rule as the first of its kind
+// (checkRulesDiffer) and for nothing else. So no pair is reported twice, and
+// removing the copy leaves what is reported for the first. Each pair is
+// reported once, at the later of its two rules. Both are named by their
+// places among the collector's rules, counted from 1.
 func checkNoPatternRepeatsAName(x *model.Collector, distinct []int) []error {
 	if x.Transform.Type != "prometheus" {
 		return nil
@@ -828,26 +828,26 @@ func checkNoPatternRepeatsAName(x *model.Collector, distinct []int) []error {
 	return errs
 }
 
-// keepsToItsType says whether a prometheus rule with an expression, its
-// defaults filled in, leaves the metric a rule of a name passes on to that
-// rule by its type: the type is histogram or summary, which applies to a
-// metric of that type and to no other (transform.applyPrometheusTransform),
-// the rule carries on without the series it fails on, its error_mode not
-// being fail, and the rule of the name does not set that type itself, with
-// which it would make the metric only where it is of that type, as the
-// other rule does.
+// keepsToItsType reports whether a prometheus rule with an expression, with
+// its defaults filled in, leaves to a rule of a name the metric that rule
+// passes on, by its type. That holds when the type is histogram or summary,
+// which applies to a metric of that type and no other
+// (transform.applyPrometheusTransform), and the rule carries on without the
+// series it fails on, because its error_mode is not fail. The rule of the
+// name must also not set that type itself: it would then make the metric
+// only where it is of that type, as the other rule does.
 func keepsToItsType(named, matching *model.MetricRule) bool {
 	ofOneShape := matching.Type == model.HistogramMetricType || matching.Type == model.SummaryMetricType
 	return ofOneShape && matching.ErrorMode != model.ErrorModeFail && named.Type != matching.Type
 }
 
 // canFailOnASeries names what a prometheus rule sets that can fail on a
-// series the rule matches (transform.applyPrometheusTransform), as an error
-// names it: the type and the scale, which cannot apply to every metric, a
-// histogram or a summary keeping its own type and taking no scale and
-// nothing else becoming one, and each label the rule requires, which is
-// read from the series, and a series may not have it. Under error_mode log
-// or ignore the rule carries on without such a series.
+// series the rule matches (transform.applyPrometheusTransform), in the words
+// an error uses. These are the type and the scale, which cannot apply to
+// every metric (a histogram or a summary keeps its own type and takes no
+// scale, and nothing else becomes one), and each label the rule requires,
+// which is read from the series and may be missing from it. Under error_mode
+// log or ignore the rule carries on without such a series.
 func canFailOnASeries(r *model.MetricRule) []string {
 	var settings []string
 	if r.Type != "" {
@@ -877,18 +877,18 @@ func alikeInLabels(x *model.Collector, a, b *model.MetricRule) bool {
 	})
 }
 
-// ruleLabels is a rule's labels as alikeInLabels compares them: in the
-// order of their names, since a series has a label by its name wherever the
-// rule writes it, so that two rules whose labels are written in another
-// order are the same rule. Labels of one name stay in the order they are
-// written in, the last of them being the one a series gets.
+// ruleLabels returns a rule's labels as alikeInLabels compares them: in the
+// order of their names, since a series gets a label by its name wherever the
+// rule writes it. So two rules whose labels are written in another order are
+// the same rule. Labels of one name keep their written order, and the last
+// of them is the one a series gets.
 //
 // A prometheus rule's label reads a label of the series the rule passes on,
-// which a label written before it may have set: with labels a, read from
-// b, and b, a constant, a is the target's b when a is written first and the
+// and a label written before it may have set that. With labels a, read from
+// b, and b, a constant, a is the target's b when a is written first, and the
 // constant when b is. Where a label of such a rule reads one the rule sets
 // under another name, the order decides the series, and the labels are
-// compared as they are written.
+// compared in their written order.
 func ruleLabels(x *model.Collector, r *model.MetricRule) []model.LabelRule {
 	if x.Transform.Type == "prometheus" {
 		for _, label := range r.Labels {
@@ -903,25 +903,25 @@ func ruleLabels(x *model.Collector, r *model.MetricRule) []model.LabelRule {
 }
 
 // checkPrometheusRuleSelects refuses the rule at index of a prometheus
-// collector's metrics that has neither a name nor an expression. Such a rule
-// passes on the metrics whose names its expression matches, or, without an
-// expression, the metric its name names; with neither, the pattern it was
+// collector's metrics when it has neither a name nor an expression. Such a
+// rule passes on the metrics whose names its expression matches, or, without
+// an expression, the metric its name names. With neither, the pattern it was
 // matched by came to ^$ (transform.applyPrometheusTransform,
-// decode.prometheusKeeps), which is no metric's name. The rule loaded and
-// selected nothing by construction: being required unless it says
-// otherwise, it was reported as missing on every scrape, `metric "" is not
-// in the response`, a mistake of the configuration told as the target's;
-// with required: false nothing was ever said. Whatever else it set — a
-// type, a description, labels — applied to no series.
+// decode.prometheusKeeps), which is no metric's name. So the rule loaded and
+// selected nothing by construction. Being required unless it says otherwise,
+// it was reported as missing on every scrape, `metric "" is not in the
+// response`: a configuration mistake reported as the target's. With
+// required: false nothing was ever said. Whatever else it set (a type, a
+// description, labels) applied to no series.
 //
-// A key written "" is the key left out, so name: "" and expression: "" are
-// neither. A name or an expression of nothing but blanks is refused before
-// this, as no metric name and as no pattern (transform.CheckMetricRule).
+// A key written "" is the key left out, so name: "" and expression: "" count
+// as neither. A name or an expression of only blanks is refused before this,
+// as no metric name and as no pattern (transform.CheckMetricRule).
 //
-// The rule has no name to be named by, so the error says which rule of the
-// collector it is, counted from 1 as CheckLabelValueMapsAgree counts them.
-// It runs after every check that was there, so a rule those refuse is
-// refused in the words it was.
+// The rule has no name, so the error says which rule of the collector it is,
+// counted from 1 as CheckLabelValueMapsAgree counts them. It runs after every
+// check that existed before it, so a rule those checks refuse keeps the
+// message it had.
 func checkPrometheusRuleSelects(x *model.Collector, index int) error {
 	if r := x.Metrics[index]; x.Transform.Type != "prometheus" || r.Name != "" || r.Expression != "" {
 		return nil
@@ -929,10 +929,10 @@ func checkPrometheusRuleSelects(x *model.Collector, index int) error {
 	return fmt.Errorf("collector %q metrics rule %d has neither a name nor an expression, and a prometheus rule needs one of them to say which of the target's metrics it passes on: an expression, a regular expression matched against a metric's name as the target gives it, anywhere in it, to match metrics by, or a name, to match the metric of that name; with neither it matches no metric, so write one, as in expression: '^node_' or name: up, or expression: '.*' for a rule about every metric, or take the rule out", x.Name, index+1)
 }
 
-// validateMetricRule checks one metric rule, the one at index of the
-// collector's metrics, and fills in its defaults. Its messages name the rule
-// as transform.RuleWhere does: by its metric name, or, when it has no name
-// to be named by, by its place among the collector's rules.
+// validateMetricRule checks the metric rule at index of the collector's
+// metrics and fills in its defaults. Its messages name the rule as
+// transform.RuleWhere does: by its metric name or, when it has no name, by
+// its place among the collector's rules.
 func validateMetricRule(x *model.Collector, index int) error {
 	r, where := &x.Metrics[index], transform.RuleWhere(x, index)
 	// Whether the rule wrote a type and an error_mode is asked before their
@@ -961,10 +961,10 @@ func validateMetricRule(x *model.Collector, index int) error {
 	case model.GaugeMetricType, model.CounterMetricType, model.UntypedMetricType:
 	case "":
 	case model.HistogramMetricType, model.SummaryMetricType:
-		// Only a series that is one already has buckets or quantiles to
-		// expose; a rule reading one number would expose a histogram
-		// with a single plain sample, which no parser accepts. A rule with
-		// a histogram block counts its values in buckets of its own.
+		// Only a series that already is a histogram or a summary has buckets
+		// or quantiles to expose. A rule reading one number would expose a
+		// histogram with a single plain sample, which no parser accepts. A rule
+		// with a histogram block counts its values in buckets of its own.
 		if r.Histogram != nil {
 			break
 		}
@@ -993,9 +993,9 @@ func validateMetricRule(x *model.Collector, index int) error {
 			return fmt.Errorf("%s has two labels named %q; a series has one label of a name, so remove one of them or give it another name", where, label.Name)
 		}
 		names[label.Name] = true
-		// A label's name is held to what a scrape holds it to under the
-		// collector's name_escaping, unless transform.remove_labels or
-		// rename_labels takes it off before the scrape looks at it
+		// A label name must be valid for a scrape under the collector's
+		// name_escaping, unless transform.remove_labels or rename_labels
+		// takes it off before the scrape checks it
 		// (transform.TakesLabelNameBeforeRenames).
 		if !transform.TakesLabelNameBeforeRenames(x, label.Name) {
 			return fmt.Errorf("%s has invalid label name %q%s", where, label.Name, transform.EscapingAdvice(label.Name))
@@ -1003,20 +1003,20 @@ func validateMetricRule(x *model.Collector, index int) error {
 		if err := transform.CheckLabelNameBeforeRenames(x, label.Name); err != nil {
 			return fmt.Errorf("%s: %w", where, err)
 		}
-		// An expression written as nothing but blanks is neither the key left
-		// out, which only "" is, nor anything to read a label with. The label
-		// is not static then (model.LabelRule.Static), so a value beside it
-		// was never exported, while a csv rule read the column of that name
-		// and a prometheus rule the source label of that name.
+		// An expression of only blanks is not the key left out (only "" is),
+		// and it cannot read a label either. The label is then not static
+		// (model.LabelRule.Static), so a value beside it was never exported,
+		// while a csv rule read the column of that name and a prometheus rule
+		// the source label of that name.
 		if label.Expression != "" && strings.TrimSpace(label.Expression) == "" {
 			return fmt.Errorf("%s label %q expression %q is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant", where, label.Name, label.Expression)
 		}
 		hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
 		// A value that holds a placeholder (fetch.ParseLabelParams) is not
-		// always there, as a constant is: it is what the probe gives. It
-		// cannot be required either, and is told why in its own words. A
-		// python rule's label takes no value at all, placeholder or not,
-		// and is left to the cases that say so.
+		// always present like a constant: it is what the probe gives. So it
+		// cannot be required either, and the error says why. A python rule's
+		// label takes no value at all, placeholder or not, and is left to the
+		// cases that say so.
 		templated := hasValue && fetch.TemplatedRuleLabel(x, index, j)
 		switch {
 		case hasValue && hasExpression:
@@ -1041,9 +1041,10 @@ func validateMetricRule(x *model.Collector, index int) error {
 }
 
 // histogramBlockAdvice ends the refusal of a rule's type histogram, which
-// its transform cannot give, with the histogram block, which makes one of
-// the values the rule reads, where the transform takes the block: every
-// transform but python, whose script makes its series itself.
+// its transform cannot give, by pointing to the histogram block, which makes
+// a histogram of the values the rule reads. It does so where the transform
+// takes the block: every transform but python, whose script makes its
+// series itself.
 func histogramBlockAdvice(t model.MetricType, transform string) string {
 	if t != model.HistogramMetricType || transform == "python" {
 		return ""
@@ -1052,12 +1053,12 @@ func histogramBlockAdvice(t model.MetricType, transform string) string {
 }
 
 // checkPythonRuleLabels refuses a constant on a label of a python rule. The
-// script makes the series and sets their labels itself; a rule makes none,
-// and the one thing its label does is name a label of the script's series
-// to cut with truncate: true (transform.truncateLabels). A value there was
-// accepted and did nothing: the series did not get the constant, with
-// nothing said. A constant for every series is transform.labels. where names
-// the rule.
+// script makes the series and sets their labels itself. A rule makes no
+// series, and the only thing its label does is name a label of the script's
+// series to cut with truncate: true (transform.truncateLabels). A value there
+// used to be accepted and did nothing: the series did not get the constant,
+// and nothing was said. A constant for every series belongs in
+// transform.labels. where names the rule.
 func checkPythonRuleLabels(x *model.Collector, r *model.MetricRule, where string) error {
 	if x.Transform.Type != "python" {
 		return nil
@@ -1070,38 +1071,38 @@ func checkPythonRuleLabels(x *model.Collector, r *model.MetricRule, where string
 	return nil
 }
 
-// checkPythonRule refuses what a rule of a python collector says that such a
-// rule does not take. The script makes the series, and gives each its type
-// and its help text and fails the scrape itself; a rule makes none. It names
-// one of the script's: its name is that series' name, by which a debug
-// probe's report lists the rule when the script made no such series
-// (writeTransform in the exporter) and by which its labels are found,
-// and each of its labels names a label of that series to cut with
-// truncate: true (transform.truncateLabels). Everything else a rule can say
-// was accepted there and did nothing, with nothing said:
+// checkPythonRule refuses settings on a python collector's rule that such a
+// rule does not take. The script makes the series, gives each its type and
+// help text, and fails the scrape itself; a rule makes no series. A rule
+// names one of the script's series. Its name is that series' name: a debug
+// probe's report lists the rule by it when the script made no such series
+// (writeTransform in the exporter), and its labels are found by it. Each of
+// its labels names a label of that series to cut with truncate: true
+// (transform.truncateLabels). Everything else a rule can set was accepted
+// there and did nothing, with nothing said:
 //
-//   - type and description, which are the script's to give: a rule saying
-//     counter left the series the gauge the script made it;
+//   - type and description, which the script gives: a rule saying counter
+//     left the series the gauge the script made;
 //   - required and error_mode, which are about a value the rule fails to
 //     read: {name: up, error_mode: fail} did not fail a scrape whose script
 //     made no up;
-//   - a rule without a name, which names no series, so that its labels cut
+//   - a rule without a name, which names no series, so its labels cut
 //     nothing whatever truncate said;
 //   - a label without truncate: true, which cuts nothing: its expression,
-//     which the check of a label requires, is not read, so an author who
-//     wrote one for a label of the series got no such label.
+//     which the label check requires, is not read, so an author who wrote one
+//     for a label of the series got no such label.
 //
-// Each is refused, saying where the script says it instead, and all of a
-// rule's are reported together, the rule named by where: by its place among
-// the collector's when it is the name that it lacks. wroteType and wroteErrorMode say the rule
-// wrote those keys, which their defaults have since filled in; a text key
-// written "" is the key left out, here as everywhere, and required is
-// written when it is there, true or false, since the rule holds it apart
-// from the key left out.
+// Each is refused with a note on where the script sets it instead. All of a
+// rule's problems are reported together, the rule named by where (by its
+// place among the collector's rules when the name is what it lacks).
+// wroteType and wroteErrorMode say the rule wrote those keys, which their
+// defaults have since filled in. A text key written "" is the key left out,
+// here as everywhere. required counts as written when it is present, true or
+// false, since the rule tells it apart from the key left out.
 //
-// It runs last, after every check that was there before it, so a rule those
-// refuse is refused in the words it was. What is left that a python rule may
-// say and nothing reads is its expression, as the documentation says.
+// It runs last, after every earlier check, so a rule those checks refuse
+// keeps the message it had. The one thing left that a python rule may set
+// and nothing reads is its expression, as the documentation says.
 func checkPythonRule(x *model.Collector, r *model.MetricRule, where string, wroteType, wroteErrorMode bool) error {
 	if x.Transform.Type != "python" {
 		return nil
@@ -1257,23 +1258,23 @@ func validateOTLP(o *model.OTLPConfig, options loadOptions) error {
 // hostname is os.Hostname; a variable for the tests.
 var hostname = os.Hostname
 
-// checkExporterInstance checks otlp.exporter_instance, of an otlp block
-// switched on, and fills in its defaults: the attribute
-// model.DefaultOTLPExporterInstanceAttribute, and the value the name
+// checkExporterInstance checks otlp.exporter_instance of an enabled otlp
+// block and fills in its defaults. The attribute defaults to
+// model.DefaultOTLPExporterInstanceAttribute. The value defaults to the name
 // WithExporterInstanceName gave, the --allocator.member name in allocator
-// mode, or else the host name, read once here, at each load: a pod's host
-// name is its name, and a replica's is what tells it from the others. Without
-// it there is nothing to name the replica with, and the configuration is
-// refused rather than the attribute left out, which would join the replicas'
-// data under one resource without a word. The target allocator reads the
-// configuration it serves without the named files, and is not the replica
-// whose name the value is: it leaves the value as written.
+// mode, or else the host name, read once here at each load. A pod's host name
+// is its name, and a replica's host name is what tells it from the others.
+// Without a value there is nothing to name the replica with, so the
+// configuration is refused instead of leaving the attribute out, which would
+// silently merge the replicas' data under one resource. The target allocator
+// reads the configuration it serves without the named files, and is not the
+// replica whose name the value is, so it leaves the value as written.
 //
-// The attribute is one more of every resource's (exporter/otlp.go), so it
-// may not be service.name, which otlp.service_name sets, or a key of
-// otlp.resource_attributes, written "" or not: the resource would carry the
-// key twice, or one of the two would quietly win. A static target's resource
-// is checked against it where the targets are (checkTargetResourceKeys).
+// The attribute is added to every resource (exporter/otlp.go), so it may not
+// be service.name, which otlp.service_name sets, or a key of
+// otlp.resource_attributes, written "" or not. The resource would carry the
+// key twice, or one of the two would silently win. A static target's
+// resource is checked against it with the targets (checkTargetResourceKeys).
 func checkExporterInstance(e *model.OTLPExporterInstanceConfig, attributes map[string]string, options loadOptions) error {
 	if !e.Enabled {
 		return nil
@@ -1315,10 +1316,9 @@ func checkExporterInstance(e *model.OTLPExporterInstanceConfig, attributes map[s
 	return nil
 }
 
-// checkOTLPScope checks otlp.scope, when it is written: a scope is known by
-// its name, which an empty one would not give it, and the name and the
-// version are sent as written, where a control character is nothing a
-// backend shows.
+// checkOTLPScope checks otlp.scope when it is written. A scope is identified
+// by its name, so the name must not be empty. The name and the version are
+// sent as written, and a backend does not show a control character.
 func checkOTLPScope(scope *model.OTLPScopeConfig) error {
 	if scope == nil {
 		return nil
@@ -1336,11 +1336,11 @@ func checkOTLPScope(scope *model.OTLPScopeConfig) error {
 	return nil
 }
 
-// validateOTLPLogs checks otlp.logs, of a block switched on whose endpoint is
-// metrics, and fills in its defaults. The logs go to the collector the
-// metrics go to, at its standard path for logs, unless the block names
-// another endpoint: an endpoint that does not end in /v1/metrics has no
-// standard path to take it from, so it must.
+// validateOTLPLogs checks otlp.logs of an enabled block whose endpoint is
+// metrics, and fills in its defaults. The logs go to the same collector as
+// the metrics, at its standard path for logs, unless the block names another
+// endpoint. An endpoint that does not end in /v1/metrics has no standard
+// path to derive one from, so the block must then name one.
 func validateOTLPLogs(l *model.OTLPLogsConfig, metrics *url.URL) error {
 	if !l.Enabled {
 		return nil
@@ -1382,11 +1382,11 @@ func validateOTLPLogs(l *model.OTLPLogsConfig, metrics *url.URL) error {
 	return nil
 }
 
-// validateOTLPTraces checks otlp.traces, of a block switched on whose
-// endpoint is metrics, and fills in its defaults. The traces go where the
-// logs do: to the collector the metrics go to, at its standard path for
-// traces, unless the block names another endpoint, which it must where
-// otlp.endpoint does not end in /v1/metrics.
+// validateOTLPTraces checks otlp.traces of an enabled block whose endpoint
+// is metrics, and fills in its defaults. Like the logs, the traces go to the
+// same collector as the metrics, at its standard path for traces, unless the
+// block names another endpoint. It must name one where otlp.endpoint does
+// not end in /v1/metrics.
 func validateOTLPTraces(t *model.OTLPTracesConfig, metrics *url.URL) error {
 	if !t.Enabled {
 		return nil
@@ -1465,10 +1465,10 @@ type loadOptions struct {
 	exporterInstance string
 }
 
-// Each document has its own flag for expansion: the configuration and its
-// collector files --config.expand-env, the static target file
-// --static-targets.expand-env. The static target file carries the addresses
-// and credentials of what is scraped, which an operator may want from the
+// Each document has its own expansion flag: --config.expand-env for the
+// configuration and its collector files, and --static-targets.expand-env for
+// the static target file. The static target file holds the addresses and
+// credentials of what is scraped. An operator may want those from the
 // environment while the configuration is committed as written, or the other
 // way round.
 const (
@@ -1492,10 +1492,10 @@ func WithStaticTargetsEnvExpansion() LoadOption {
 // WithoutNamedFiles loads the configuration without opening the files it
 // names (namedFiles): the TLS files of otlp.tls, the username and password
 // files of web.basic_auth, and a grpc collector's protoset_file and
-// proto_files with what they import. Every other check is made; a grpc
+// proto_files with their imports. Every other check is made. A grpc
 // collector whose descriptors come from files is not checked against them,
-// and neither are the messages of the static targets that use it. It is how
-// the target allocator checks the configuration it serves: those files are
+// and neither are the messages of the static targets that use it. The target
+// allocator uses this to check the configuration it serves: those files are
 // mounted on the replicas, which check them when they load it, and not on
 // the allocator. The configuration and its collector files are read as
 // always.
@@ -1503,10 +1503,10 @@ func WithoutNamedFiles() LoadOption {
 	return func(o *loadOptions) { o.namedFilesUnread = true }
 }
 
-// WithExporterInstanceName is the value otlp.exporter_instance takes when
-// it is left out, in place of the host name: the --allocator.member name of
-// an exporter in allocator mode, which is the name the allocator knows the
-// replica by. "" is the host name.
+// WithExporterInstanceName sets the value otlp.exporter_instance takes when
+// it is left out, in place of the host name. It is the --allocator.member
+// name of an exporter in allocator mode, the name the allocator knows the
+// replica by. "" means the host name.
 func WithExporterInstanceName(name string) LoadOption {
 	return func(o *loadOptions) { o.exporterInstance = name }
 }
@@ -1542,12 +1542,13 @@ func readDocumentSource(path string, opts []LoadOption) (document, raw []byte, e
 // running the tests may be able to read whatever its permissions.
 var readFile = os.ReadFile
 
-// readError is the error of a file readDocument could not read: missing,
-// unreadable for its permissions or a directory's, or a directory itself. Its
-// text is the error's. A file whose reload is refused for it may become
-// readable without its stamp changing — its owner, an ACL or a directory's
-// permissions changed — so the watch reads it again at every tick while it
-// is refused for it, which a reload refused for what a file says is not.
+// readError is the error for a file readDocument could not read: missing,
+// unreadable because of its own or a directory's permissions, or itself a
+// directory. Its text is that of the wrapped error. Such a file may become
+// readable without its stamp changing (its owner, an ACL or a directory's
+// permissions changed). So while a reload is refused for this error, the
+// watch reads the file again at every tick. It does not do so for a reload
+// refused for what a file says.
 type readError struct{ err error }
 
 func (e *readError) Error() string { return e.err.Error() }
@@ -1567,9 +1568,9 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 }
 
 // load is Load. decoded, when given, is called with the configuration as its
-// files write it, once they could be read and before it is validated: the
-// validation is what opens the files the configuration names (namedFiles),
-// so a reload that stamps them stamps them before they are read.
+// files write it, once they could be read and before validation. Validation
+// opens the files the configuration names (namedFiles), so a reload that
+// stamps them stamps them before they are read.
 func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.Config, error) {
 	b, raw, err := readDocumentSource(path, opts)
 	if err != nil {
@@ -1603,11 +1604,11 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 		apply(&options)
 	}
 	// The collectors that were read are checked even when a collector file
-	// could not be, so one run reports the mistakes of every file. Those of
-	// a file whose defaults were refused are not: checked without the
-	// values they would have taken, they would be refused for what the
-	// block was to give them; a collector file's are left out with it
-	// (loadCollectorFile), and the configuration's own here.
+	// could not be read, so one run reports the mistakes of every file. The
+	// exception is a file whose defaults were refused: checked without the
+	// values they would have taken, its collectors would be refused for what
+	// the defaults block was to give them. A collector file's collectors are
+	// left out with it (loadCollectorFile), and the configuration's own here.
 	if err != nil {
 		if ownDefaultsErr != nil {
 			c.Collectors = slices.DeleteFunc(c.Collectors, func(x model.Collector) bool { return c.CollectorSources[x.Name] == path })
@@ -1634,35 +1635,36 @@ type Manager struct {
 	path    string
 	logger  *slog.Logger
 	// lastMod, lastSize and lastMode are the configuration file's
-	// modification time, size and mode when it was last read: a change to
-	// any is a change, so a file replaced by one with an older time, as cp -p
-	// and rsync -t leave it, is read too, and so is a file whose permissions
-	// were changed, which may have made it readable again, or unreadable.
+	// modification time, size and mode when it was last read. A change to any
+	// of them counts as a change. So a file replaced by one with an older time
+	// (as cp -p and rsync -t leave it) is read too, and so is a file whose
+	// permissions changed, which may have made it readable again, or
+	// unreadable.
 	lastMod  time.Time
 	lastSize int64
 	lastMode fs.FileMode
 	// collectorFiles is the stamp of the collector files the configuration
-	// read when last loaded (collectorFilesStamp), and watchedFiles the
-	// collector_files entries it was taken from: those of the file last
-	// read, even when it was refused, so fixing a collector file it added
-	// is a change the watch sees.
+	// read when last loaded (collectorFilesStamp). watchedFiles are the
+	// collector_files entries the stamp was taken from: those of the file
+	// last read, even when it was refused, so the watch sees a fix to a
+	// collector file it added.
 	collectorFiles string
 	watchedFiles   []string
-	// retryFiles are the files the configuration last read names and loading
-	// it opens (namedFiles), with those of the configuration in force, and
-	// retryStamp how they were just before they were read (filesStamp). They
-	// are kept while that configuration is refused: one of them changing is
-	// then a change the watch sees, so a reload refused because a
-	// certificate was being replaced is tried again when it is in place,
-	// although the configuration itself is as it was. When it is refused,
-	// the files that its .proto files import are watched too: retryConfigs
-	// are the configurations the files were taken from, the one in force and
-	// then the one read, and retryImports says there are such files. With
-	// the watch on, those of the configuration read were stamped before it
-	// was validated (loading), and those of the one in force join retryFiles
-	// (retryImported); without it, when nothing compares a stamp, those of
-	// both do, as they did before the descriptor files in force were
-	// watched.
+	// retryFiles are the files that the last read configuration names and
+	// that loading it opens (namedFiles), together with those of the
+	// configuration in force. retryStamp is their state just before they were
+	// read (filesStamp). They are kept while that configuration is refused, so
+	// a change to one of them is a change the watch sees. A reload refused
+	// because a certificate was being replaced is then retried once it is in
+	// place, although the configuration itself is unchanged. While it is
+	// refused, the files its .proto files import are watched too.
+	// retryConfigs are the configurations the files were taken from: the one
+	// in force, then the one read. retryImports says there are such files.
+	// With the watch on, those of the configuration read were stamped before
+	// it was validated (loading), and those of the one in force join
+	// retryFiles (retryImported). Without the watch, when nothing compares a
+	// stamp, those of both join, as they did before the descriptor files in
+	// force were watched.
 	retryFiles     []string
 	retryStamp     string
 	retryConfigs   []*model.Config
@@ -1682,49 +1684,49 @@ type Manager struct {
 	// for otlp.exporter_instance (WithExporterInstanceName).
 	exporterInstance string
 	// targetsRetryFiles and targetsRetryStamp are retryFiles and retryStamp
-	// for the static target file: the files that checking the file last
-	// read against the configuration opens (targetsNamedFiles) and, with
+	// for the static target file. They hold the files opened by checking the
+	// last read file against the configuration (targetsNamedFiles) and, with
 	// the watch on, the files those import, each as it was before the check
-	// read it, kept while that file is refused; targetsRetryChecked are the
-	// collectors they were taken from (targetsChecked). Without the watch
-	// the imported files join them when the file is refused.
+	// read it. They are kept while that file is refused. targetsRetryChecked
+	// are the collectors they were taken from (targetsChecked). Without the
+	// watch, the imported files join them when the file is refused.
 	targetsRetryFiles   []string
 	targetsRetryStamp   string
 	targetsRetryChecked *model.Config
-	// descriptors are the descriptor files of the configuration in force,
+	// descriptors are the descriptor files of the configuration in force:
 	// the request.protoset_file and request.proto_files of its grpc
-	// collectors and the files those .proto files import, and how they were
-	// just before the load that last read the configuration read them
-	// (stampDescriptors). Unlike retryFiles they are kept while the
-	// configuration is in force: the configuration is checked against them,
-	// so one of them changing is a change the watch reloads for, which finds
-	// at the tick, and not at the probes that then fail, a descriptor that
-	// no longer has the collector's method or takes its message. loading are
-	// those of the configuration loadConfig last read, stamped before it was
-	// validated: they become descriptors when it is put in force, and while
-	// it is refused they stay watched as they are, so that a file the
-	// refused load read, and that changed at any moment since, reads the
-	// configuration again. Both are empty without the watch: nothing would
-	// compare the stamps, so none is taken, and no descriptor file is read
-	// to learn what it imports. descriptorsStamped says descriptors were
-	// taken for the configuration in force, by the startup (UseStamp) or
-	// when the watch was turned on (SetWatchInterval).
+	// collectors and the files those .proto files import. Their state is the
+	// one just before the load that last read the configuration read them
+	// (stampDescriptors). Unlike retryFiles, they are kept while the
+	// configuration is in force. The configuration is checked against them,
+	// so a change to one is a change the watch reloads for. The reload then
+	// finds, at the tick and not at the probes that then fail, a descriptor
+	// that no longer has the collector's method or takes its message.
+	// loading are the descriptor files of the configuration loadConfig last
+	// read, stamped before it was validated. They become descriptors when it
+	// is put in force. While it is refused they stay watched as they are, so
+	// a file that the refused load read, and that changed at any time since,
+	// makes the configuration be read again. Both are empty without the
+	// watch: nothing would compare the stamps, so none is taken, and no
+	// descriptor file is read to learn what it imports. descriptorsStamped
+	// says descriptors were taken for the configuration in force, at startup
+	// (UseStamp) or when the watch was turned on (SetWatchInterval).
 	descriptors, loading stampedFiles
 	descriptorsStamped   bool
 	// configWaits and targetsWaits say that file's last reload was refused
 	// only because the other file, as in force, disagrees with it, so a
 	// change to the other file reads it again (apply).
 	configWaits, targetsWaits bool
-	// configUnread and targetsUnread say that file's last reload was
-	// refused because a file it reads could not be read (readError). The
-	// watch reads it again at every tick while it is: the file may have
-	// become readable without anything its stamps hold changing, through
-	// its owner, an ACL or a directory's permissions (reloadChanged).
-	// configRefusal and targetsRefusal are the text the last refusal of
-	// that file is recognised by (model.SameFailureText), "" once it is in
-	// force; and configQuiet and targetsQuiet say the reload under way reads
-	// that file only to try it again, so a refusal it gets with the text of
-	// the last is neither logged nor counted again (rejectConfig).
+	// configUnread and targetsUnread say that file's last reload was refused
+	// because a file it reads could not be read (readError). While so, the
+	// watch reads it again at every tick: the file may have become readable
+	// without any change its stamps hold, through its owner, an ACL or a
+	// directory's permissions (reloadChanged). configRefusal and
+	// targetsRefusal are the text by which the last refusal of that file is
+	// recognised (model.SameFailureText), "" once the file is in force.
+	// configQuiet and targetsQuiet say the current reload reads that file
+	// only to retry it, so a refusal with the same text as the last is
+	// neither logged nor counted again (rejectConfig).
 	configUnread, targetsUnread   bool
 	configRefusal, targetsRefusal string
 	configQuiet, targetsQuiet     bool
@@ -1747,10 +1749,10 @@ type Manager struct {
 	// without targets rather than a file that cannot be read
 	// (AllowAbsentTargets).
 	absentTargets bool
-	// generation is the generation of the allocator's bundle the files at
-	// the manager's paths are, "" outside allocator mode or for none: what a
-	// reload puts in force carries it (install). It changes with the files,
-	// under reloadMu (ReloadReplacing, SetGeneration).
+	// generation is the generation of the allocator's bundle that the files
+	// at the manager's paths are. It is "" outside allocator mode or for no
+	// bundle. What a reload puts in force carries it (install). It changes
+	// with the files, under reloadMu (ReloadReplacing, SetGeneration).
 	generation string
 	// lastReload is what the last reload that put something in force
 	// changed (reloadchanges.go), nil until one has.
@@ -1761,19 +1763,19 @@ type Manager struct {
 }
 
 // inForce is the configuration and the static target file in force. The two
-// are checked against each other — a target names a collector and fills its
-// placeholders — so they are published as one value, never changed once
-// stored: a reader that needs both takes them in one read (Manager.InForce)
-// and so never sees the configuration of one reload with the targets of
-// another, as it could when each was stored on its own. targets is nil
-// without a static target file.
+// are checked against each other (a target names a collector and fills its
+// placeholders), so they are published as one value that is never changed
+// once stored. A reader that needs both takes them in one read
+// (Manager.InForce). So it never sees the configuration of one reload with
+// the targets of another, as it could when each was stored separately.
+// targets is nil without a static target file.
 type inForce struct {
 	config  *model.Config
 	targets *model.StaticTargetFile
 	// generation is the generation of the allocator's bundle the two were
-	// read from, "" for none (Manager.Generation). It is stored with them,
-	// so what reports the generation in force never names one whose
-	// configuration is not, or is no longer, in force.
+	// read from, "" for none (Manager.Generation). It is stored with them, so
+	// the reported generation in force never names one whose configuration is
+	// not, or no longer, in force.
 	generation string
 }
 
@@ -1803,11 +1805,11 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	return m
 }
 
-// Stamp is what the watch compares files against to see a change: their
+// Stamp is what the watch compares files against to detect a change: their
 // modification times, sizes and modes, and the collector files a
-// configuration lists. Taken before the files are read, it makes a change
-// written while they were being read a change the next watch tick sees,
-// rather than part of what was read.
+// configuration lists. It is taken before the files are read, so a change
+// written while they were being read is seen by the next watch tick instead
+// of becoming part of what was read.
 type Stamp struct {
 	mod            time.Time
 	size           int64
@@ -1836,14 +1838,14 @@ func TakeStamp(path string, listsCollectorFiles bool, opts ...LoadOption) Stamp 
 	return s
 }
 
-// LoadStamped is Load for the configuration an exporter with the watch on
-// starts with: it adds to s, taken before the file was read (TakeStamp), how
-// the descriptor files of the configuration were before the validation read
-// them (stampDescriptors), which only the file's own collectors and those of
-// its collector files say. A stamp of a file that could not be read has
-// none. An exporter without the watch reads its configuration with Load:
-// stamping the descriptor files reads them to learn what they import, for a
-// stamp that no tick would ever compare.
+// LoadStamped is Load for the configuration an exporter starts with when the
+// watch is on. It adds to s (taken by TakeStamp before the file was read) the
+// state of the configuration's descriptor files before validation read them
+// (stampDescriptors). Only the file's own collectors and those of its
+// collector files say which these are. A stamp of a file that could not be
+// read has none. An exporter without the watch reads its configuration with
+// Load: stamping the descriptor files reads them to learn what they import,
+// for a stamp that no tick would ever compare.
 func LoadStamped(path string, s *Stamp, opts ...LoadOption) (*model.Config, error) {
 	return load(path, opts, func(c *model.Config) {
 		descriptors := stampDescriptors(c)
@@ -1876,40 +1878,39 @@ func (m *Manager) UseTargetsStamp(s Stamp) {
 // Get returns the configuration in force.
 func (m *Manager) Get() *model.Config { return m.current.Load().config }
 
-// InForce returns the configuration and the static target file in force, nil
-// without one, as one reload left them: a caller that uses both, as a static
-// target scrape does, reads them here once rather than each on its own, with
-// a reload possibly between the two reads.
+// InForce returns the configuration and the static target file in force
+// (nil without one), as one reload left them. A caller that uses
+// both, such as a static target scrape, reads them here once instead of
+// separately, where a reload could happen between the two reads.
 func (m *Manager) InForce() (*model.Config, *model.StaticTargetFile) {
 	pair := m.current.Load()
 	return pair.config, pair.targets
 }
 
-// OnInstall asks for told to be called whenever a reload has put a
-// configuration, a static target file or both in force, once they are in
-// force and before the reload returns or another begins: what is kept for a
-// configuration elsewhere follows it then, rather than when it is next used.
-// told must not reload.
+// OnInstall registers told to be called whenever a reload has put a
+// configuration, a static target file or both in force. It is called once
+// they are in force, before the reload returns or another begins, so what is
+// kept elsewhere for a configuration follows it then, not when it is next
+// used. told must not reload.
 func (m *Manager) OnInstall(told func()) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	m.installed = append(m.installed, told)
 }
 
-// OnPrepare asks for prepare to be called whenever a reload is about to put a
-// configuration, a static target file or both in force: once they have been
-// read and checked, and before they are in force. It is given the two as
-// InForce will answer with them, the one the reload leaves as it is among
-// them, and nil without a static target file; while it runs, Get and InForce
-// still answer with what was in force, and wait for nothing. So what is
-// costly to work out for a configuration, and depends on the configuration
-// alone, is worked out before anything can ask for it, on the path that
-// reloads, rather than by the first to use the configuration: the reload
-// puts it in force later by as long as prepare takes. What prepare is given
-// always goes in force when it returns, and those who asked are then told
-// (OnInstall); a reload that is refused prepares nothing. prepare is called
-// under the lock that serializes reloads, as told is: it must not reload,
-// nor ask here or with OnInstall.
+// OnPrepare registers prepare to be called whenever a reload is about to put
+// a configuration, a static target file or both in force: after they have
+// been read and checked, and before they are in force. It gets the two as
+// InForce will return them, including the one the reload leaves unchanged,
+// and nil without a static target file. While it runs, Get and InForce still
+// return what was in force, without waiting. So costly work that depends only
+// on the configuration is done on the reload path, before anything can ask
+// for it, and not by the first user of the configuration. The reload puts it
+// in force later by as long as prepare takes. What prepare is given always
+// goes in force when it returns, and the callbacks registered with OnInstall
+// are then told. A refused reload prepares nothing. prepare is called under
+// the lock that serializes reloads, as told is: it must not reload, nor
+// register here or with OnInstall.
 func (m *Manager) OnPrepare(prepare func(*model.Config, *model.StaticTargetFile)) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
@@ -1922,8 +1923,8 @@ func (m *Manager) OnPrepare(prepare func(*model.Config, *model.StaticTargetFile)
 // effect on restart.
 //
 // Turning the watch on stamps the descriptor files of the configuration in
-// force as they are now, unless the startup stamped them before it read them
-// (UseStamp, as the exporter does): the first tick then reloads nothing that
+// force as they are now, unless startup stamped them before reading them
+// (UseStamp, as the exporter does). The first tick then reloads nothing that
 // has not changed since. A manager whose watch stays off stamps none.
 func (m *Manager) SetWatchInterval(interval time.Duration) {
 	m.watchInterval = interval
@@ -2041,14 +2042,13 @@ func (m *Manager) ReloadLoop(ctx context.Context) {
 // (SetWatchTicked).
 var watchTicked func()
 
-// SetWatchTicked asks for ticked to be called after every tick of the watch
-// of a manager whose loop starts from now on, whatever the tick found, by
-// the loop itself, once the tick has reloaded what it found changed and
-// logged it. It is for tests. A tick that finds nothing changed reads
-// nothing and logs nothing, so a test of an exporter in a child process
-// that must show a tick reloaded nothing has nothing of the exporter's to
-// wait for, and no time it could wait is long enough on a machine busy
-// enough; it waits for the tick itself.
+// SetWatchTicked registers ticked to be called by the watch loop after every
+// tick, whatever the tick found, for managers whose loop starts from now on.
+// It is called once the tick has reloaded what it found changed and logged
+// it. It is for tests. A tick that finds nothing changed reads and logs
+// nothing. So a test of an exporter in a child process that must show a tick
+// reloaded nothing has nothing of the exporter's to wait for, and no fixed
+// wait is long enough on a busy machine. It waits for the tick itself.
 func SetWatchTicked(ticked func()) { watchTicked = ticked }
 
 // The configuration is reloaded when the watch sees a file change
@@ -2063,40 +2063,42 @@ const (
 )
 
 // The configuration and the static target file are checked against each
-// other — a target names a collector, and one exported over OTLP needs OTLP
-// on — so a change that spans both, such as removing a collector and the
+// other: a target names a collector, and one exported over OTLP needs OTLP
+// on. So a change that spans both, such as removing a collector and the
 // target that uses it, is only valid as a whole. apply therefore reads the
 // files it reloads together and installs them together when they agree. A
-// file refused only because the other one, as in force, disagrees with it
-// waits: when the other file changes, the watch reads it again with it,
-// although its own modification time has been seen. Without this a change
-// written to both files, in either order or at once, left the configuration
-// refused until it was touched again.
+// file refused only because the other file, as in force, disagrees with it
+// waits. When the other file changes, the watch reads it again together with
+// that file, although its own modification time has been seen. Without this,
+// a change written to both files, in either order or at once, left the
+// configuration refused until it was touched again.
 
-// reloadChanged reloads what the watch finds changed: the configuration, when
-// the file or one of its collector files changed, or a descriptor file of
-// the configuration in force, or, after a refused reload, a file it names or
-// one of those imports; and the static target file, when it changed, or,
-// after a refused reload, a file its check opens, or with the configuration
-// when a descriptor file in force changed and the target file is checked
-// against descriptor files (targetsFollowDescriptors); and with either, the
-// other when it waits for it. It is one tick of the watch: whatever changed
-// since the last, there is one reload.
+// reloadChanged reloads what the watch finds changed. It is one tick of the
+// watch: whatever changed since the last tick, there is one reload. It
+// reloads:
+//   - the configuration, when the file or one of its collector files
+//     changed, or a descriptor file of the configuration in force, or, after
+//     a refused reload, a file it names or one of those imports;
+//   - the static target file, when it changed, or, after a refused reload, a
+//     file its check opens, or together with the configuration when a
+//     descriptor file in force changed and the target file is checked
+//     against descriptor files (targetsFollowDescriptors);
+//   - with either, the other file when it waits for it.
 //
 // A target file that waits for the configuration is read again when the
 // configuration changes (configChanged), not when a descriptor file of the
-// configuration in force does: the configuration read for that file is the
-// one the target file was refused by, and a descriptor file that its own
-// check opened is among the files it is tried again for (targetsChanged).
+// configuration in force does. The configuration read for that file is the
+// one that refused it, and a descriptor file opened by the target file's own
+// check is among the files it is retried for (targetsChanged).
 func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	configChanged, descriptorsChanged, targetsChanged := m.configChanged(), m.descriptors.changed(), m.targetsChanged()
 	doConfig := configChanged || descriptorsChanged || targetsChanged && m.configWaits
 	doTargets := targetsChanged || configChanged && m.targetsWaits || descriptorsChanged && m.targetsFollowDescriptors()
-	// A file refused because a file it reads could not be read is read
-	// again at every tick, although nothing changed, and so is the other
-	// file when it waits for that one. Read for that alone, it is quiet: the
+	// A file refused because a file it reads could not be read is read again
+	// at every tick, even if nothing changed. So is the other file when it
+	// waits for that one. When read only for that reason, it is quiet: the
 	// same refusal again is neither logged nor counted.
 	m.configQuiet = !doConfig && (m.configUnread || m.configWaits && m.targetsUnread && !doTargets)
 	m.targetsQuiet = !doTargets && (m.targetsUnread || m.targetsWaits && m.configUnread && !doConfig)
@@ -2109,40 +2111,40 @@ func (m *Manager) reloadChanged() {
 }
 
 // configChanged reports whether the configuration changed since it was last
-// read: the file, one of its collector files, or, while the configuration
-// last read is refused, a file it names or one of those imports. The
-// descriptor files of the configuration in force, which the watch reloads
-// for as well, are asked for apart (descriptors): unlike these, they do not
-// read a target file again that waits for the configuration
+// read: the file, one of its collector files, or, while the last read
+// configuration is refused, a file it names or one of those imports. The
+// descriptor files of the configuration in force, which the watch also
+// reloads for, are checked separately (descriptors). Unlike these, they do
+// not make a target file that waits for the configuration be read again
 // (reloadChanged).
 func (m *Manager) configChanged() bool {
 	st, err := os.Stat(m.path)
 	if err != nil {
 		return false
 	}
-	// A collector file edited, added or removed is a change too, although the
-	// configuration file itself is untouched; and so, while the configuration
-	// last read is refused, is a file it names (retryFiles) or a descriptor
-	// file it was checked against, as that was before the refused load read
-	// it (loading). The files are only stamped: nothing is read, and nothing
-	// logged, for a tick that finds them as they were.
+	// A collector file edited, added or removed is a change too, even if the
+	// configuration file itself is untouched. So, while the last read
+	// configuration is refused, is a file it names (retryFiles) or a
+	// descriptor file it was checked against, as that file was before the
+	// refused load read it (loading). The files are only stamped: a tick that
+	// finds them unchanged reads and logs nothing.
 	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || st.Mode() != m.lastMode || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles ||
 		len(m.retryFiles) > 0 && filesStamp(m.retryFiles) != m.retryStamp || m.loading.changed()
 }
 
 // targetsFollowDescriptors reports whether the static target file in force
-// is read again with the configuration when a descriptor file of the
-// configuration in force changed, whichever of them it is: one of its
-// targets sets a request.message for a collector that names descriptor
-// files, which the message is checked against (targetsChecked). The tick
-// then reads the target file with the configuration, so a message the new
-// descriptors refuse is reported for the target file, on its own line,
-// rather than only as what the configuration disagrees with. Which of the
-// descriptor files changed is not asked: the stamp is one for all of them,
-// so a target file with such a target is read also for a file of a
-// collector none of its targets uses, and is then found as it was. A target
-// file whose last reload was refused is not the one in force, and is read
-// again only for what it was refused for (targetsChanged, targetsWaits).
+// is read again with the configuration when any descriptor file of the
+// configuration in force changed. That is so when one of its targets sets a
+// request.message for a collector that names descriptor files, which the
+// message is checked against (targetsChecked). The tick then reads the
+// target file with the configuration, so a message the new descriptors
+// refuse is reported for the target file, on its own line, and not only as
+// what the configuration disagrees with. Which descriptor file changed is not
+// checked: there is one stamp for all of them, so a target file with such a
+// target is also read for a file of a collector none of its targets uses, and
+// is then found unchanged. A target file whose last reload was refused is not
+// the one in force, and is read again only for what it was refused for
+// (targetsChanged, targetsWaits).
 func (m *Manager) targetsFollowDescriptors() bool {
 	c, f := m.InForce()
 	return m.targetPath != "" && f != nil &&
@@ -2150,9 +2152,9 @@ func (m *Manager) targetsFollowDescriptors() bool {
 }
 
 // targetsChanged reports whether the static target file changed since it was
-// last read, or, while the file last read is refused, a file its check
-// opened (targetsRetryFiles): as for the configuration, nothing is logged for
-// a tick that finds them as they were.
+// last read or, while the last read file is refused, whether a file its check
+// opened changed (targetsRetryFiles). As for the configuration, a tick that
+// finds them unchanged logs nothing.
 func (m *Manager) targetsChanged() bool {
 	if m.targetPath == "" {
 		return false
@@ -2202,13 +2204,12 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 	}
 	if targets != nil {
 		pairTargets = targets
-		// The files the checks below open for the file just read are
-		// stamped before they are read, as the configuration's are, and kept
-		// if it is refused: one of them back in place is then a change. With
-		// the watch on, so are the files those import, read here to learn
-		// which they are (stampDescriptors): one that changes after the
-		// checks read it, and before the file is refused, is then a change
-		// too.
+		// The files the checks below open for the file just read are stamped
+		// before they are read, as the configuration's are, and kept if it is
+		// refused. One of them back in place is then a change. With the watch
+		// on, the same goes for the files those import, read here to learn
+		// which they are (stampDescriptors). One that changes after the checks
+		// read it, and before the file is refused, is then a change too.
 		// The configuration in force is the one read with it when no other
 		// was read, and is then looked through once.
 		inForce := m.Get()
@@ -2249,14 +2250,14 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 }
 
 // pairVerdicts are the verdicts of the checks one reload made, each of a
-// static target file against a configuration, told by the two themselves.
-// A reload asks about up to three pairs, some of them up to three times —
-// the pair it read, then a file it read with the other in force, which is
-// the pair it read again once the other went in force alone, and then the
-// pair a refused file is refused for, to say why — and each check costs
-// microseconds a target, under the reload lock. A pair asked about again
-// gets the error it got, the very one. They are kept for one reload only:
-// the next reads new files, and checks what is in force again.
+// static target file against a configuration, identified by the two values
+// themselves. A reload asks about up to three pairs, some up to three times:
+// the pair it read; a file it read with the other in force, which is the
+// pair it read again once the other went in force alone; and the pair a
+// refused file is refused for, to say why. Each check costs microseconds per
+// target, under the reload lock. A pair asked about again gets the very same
+// error it got. They are kept for one reload only: the next reads new files
+// and checks what is in force again.
 type pairVerdicts []pairVerdict
 
 type pairVerdict struct {
@@ -2323,13 +2324,13 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 	m.watchCollectorFiles(entries)
 	// The files the configuration names are stamped before the load opens
 	// them, as the configuration file is, so one replaced while it was read
-	// is a change for the next tick: those of the configuration in force,
-	// and with them those of the one being read as soon as it says which.
-	// The descriptor files of the configuration in force are stamped again
-	// with them: if this load is refused they stay the ones watched, and a
-	// tick reloads for them when they change once more, not at every tick
-	// for the change that was just read. Those of the configuration being
-	// read are stamped with the watch on alone (loading): without it no tick
+	// is a change for the next tick. These are the files of the configuration
+	// in force, and with them those of the one being read as soon as it says
+	// which. The descriptor files of the configuration in force are stamped
+	// again with them. If this load is refused they stay the watched ones, and
+	// a tick reloads for them when they change again, not at every tick for
+	// the change just read. The descriptor files of the configuration being
+	// read are stamped only with the watch on (loading): without it no tick
 	// compares them, and no file is read to learn what it imports.
 	inForce := namedFiles(m.Get())
 	m.retryFiles, m.retryStamp = inForce, filesStamp(inForce)
@@ -2374,13 +2375,13 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	return f, nil
 }
 
-// install puts c and f in force, either of which may be nil to keep the one
-// in force, in one step: no reader sees the configuration of this reload
-// with the targets of the last, or the reverse, which could name a collector
-// the other no longer has. Those who asked to prepare what goes in force
-// (OnPrepare) do so first, and nothing comes between their preparing it and
-// its being in force. What follows from each is done once both are in
-// force, and then those who asked are told (OnInstall). reloadMu is held.
+// install puts c and f in force in one step; either may be nil to keep the
+// one in force. No reader sees this reload's configuration with the last
+// reload's targets, or the reverse, which could name a collector the other
+// no longer has. The callbacks registered with OnPrepare run first, and
+// nothing comes between their preparing and the values going in force. What
+// follows from each is done once both are in force, and then the callbacks
+// registered with OnInstall are told. reloadMu is held.
 func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTargetFile) {
 	before := *m.current.Load()
 	pair := before
@@ -2432,10 +2433,11 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 // configuration follow it. reloadMu is held.
 func (m *Manager) installedConfig(trigger string, c *model.Config, changes string) {
 	m.configWaits, m.configUnread, m.configRefusal = false, false, ""
-	// In force, the configuration is not read again for a certificate or a
-	// credential file it names: what uses one reads it again itself. It is
-	// for its descriptor files, which it is checked against: they are
-	// watched from now as they were before this load read them.
+	// Once in force, the configuration is not read again for a certificate
+	// or credential file it names: whatever uses one reads it again itself.
+	// It is read again for its descriptor files, which it is checked
+	// against: they are watched from now on as they were before this load
+	// read them.
 	m.retryFiles, m.retryStamp, m.retryConfigs, m.retryImports = nil, "", nil, false
 	m.descriptors, m.loading = m.loading, stampedFiles{}
 	m.Reloads.record(reloadFileConfig, true)
@@ -2462,13 +2464,13 @@ func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile, ch
 }
 
 // rejectConfig refuses a configuration, which stays as it was. waits says it
-// was refused only by the static target file in force, and is read again when
-// that changes. A refusal because a file could not be read is tried again
-// at every tick (configUnread); one that such a try gets with the text of
+// was refused only by the static target file in force, and is read again
+// when that file changes. A refusal because a file could not be read is
+// retried at every tick (configUnread). A retry that gets the same text as
 // the last refusal (configQuiet) is not a new refusal, and is neither logged
-// nor counted: the line and the count of failed reloads say each distinct
-// refusal once, as they do when a tick finds nothing changed and reads
-// nothing. reloadMu is held.
+// nor counted. So the log line and the failed-reload count report each
+// distinct refusal once, as they do when a tick finds nothing changed and
+// reads nothing. reloadMu is held.
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
 	same := model.SameFailureText(err)
@@ -2476,9 +2478,9 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configUnread, m.configRefusal = !waits && unreadable(err), same
 	// With the watch on, the descriptor files of the configuration that was
 	// read, named and imported, were stamped before it was validated, and
-	// stay watched as they were then (loading): were they looked at again
-	// now, a file mended since the load read it would be stamped as mended,
-	// and the refused configuration never read again. Only the imports of
+	// stay watched in that state (loading). If they were stamped again now, a
+	// file fixed since the load read it would be stamped as fixed, and the
+	// refused configuration would never be read again. Only the imports of
 	// the configuration in force, which this load need not have read, are
 	// looked at here.
 	configs := m.retryConfigs
@@ -2532,12 +2534,12 @@ func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 }
 
 // retryImported adds to the files stamped for a refused file, and to their
-// stamp, the files that the .proto files among them import, as the load or
-// the check that refused it found them (importedFiles): one refused because
-// an imported file was missing or did not compile is tried again when that
-// file appears or changes. imports says there are such files. When one of
-// them changed after it was read, the stamp is one no files have, and the
-// next tick reads the refused file again.
+// stamp, the files that the .proto files among them import, as found by the
+// load or check that refused it (importedFiles). So a file refused because
+// an imported file was missing or did not compile is retried when that file
+// appears or changes. imports says there are such files. When one of them
+// changed after it was read, the stamp matches no files, and the next tick
+// reads the refused file again.
 func retryImported(files []string, stamp string, configs ...*model.Config) (all []string, stamped string, imports bool) {
 	imported, importedStamp, settled := importedFiles(files, configs...)
 	if len(imported) == 0 {
@@ -2550,17 +2552,17 @@ func retryImported(files []string, stamp string, configs ...*model.Config) (all 
 	return all, stamp + importedStamp, true
 }
 
-// retriedWhen adds to a refused file's line what the watch reads the file
-// again for, as retried_when: the file itself changing, which for the
-// configuration counts its collector files; each kind of file stamped for it
-// while it is refused (retryFiles, targetsRetryFiles), when there are such;
-// and the other file, when this one waits for it. Each is named only when it
-// holds, so the line never reads as if one change alone helped, nor promises
-// a retry for a file nothing looks at. A file refused because a file it
-// reads could not be read, unread, is also read again at every tick until
-// it can be, which the line then says after the changes. Without the watch
-// nothing is read again until a reload is asked for, and the line says
-// nothing.
+// retriedWhen adds retried_when to a refused file's log line: what makes the
+// watch read the file again. That is the file itself changing (for the
+// configuration, including its collector files), each kind of file stamped
+// for it while it is refused (retryFiles, targetsRetryFiles) when there are
+// any, and the other file when this one waits for it. Each is named only
+// when it applies, so the line never suggests that one change alone helps,
+// nor promises a retry for a file nothing watches. A file refused because a
+// file it reads could not be read (unread) is also read again at every tick
+// until it can be, and the line says so after the changes. Without the
+// watch nothing is read again until a reload is requested, and the line
+// says nothing.
 func (m *Manager) retriedWhen(attrs []any, file string, stamped []string, other string, waits, unread bool) []any {
 	if !m.WatchEnabled() {
 		return attrs
@@ -2617,9 +2619,9 @@ func undecidedDecoderWarning(x *model.Collector) string {
 }
 
 // checkErrorPolicy refuses a policy that is not fail, log or ignore as
-// written: in lower case and without blanks around it, the one spelling
-// the schemas take, so that a file an editor marks is one the exporter
-// refuses, and the other way round.
+// written: lower case, without surrounding blanks, the only spelling the
+// schemas accept. So a file an editor flags is one the exporter refuses, and
+// the other way round.
 func checkErrorPolicy(collector, key, value string) error {
 	switch value {
 	case model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore:
@@ -2629,13 +2631,13 @@ func checkErrorPolicy(collector, key, value string) error {
 }
 
 // validateFailureBackoff checks failure_backoff and fills in its defaults:
-// after 3, initial 30s, max 10m or initial when that is longer, so a block
-// that sets only initial past 10m is not refused for a max it did not
-// write, and min_budget 1s. A block that says enabled: false is checked
-// alike, as a schema checks it, and then removed: the collector backs off
-// from nothing, and is compared on a reload and keyed in the cache as one
-// without the block, which it scrapes as. One on is kept without
-// enabled, the same written either way.
+// after 3, initial 30s, max 10m (or initial when that is longer, so a block
+// that sets only initial above 10m is not refused for a max it did not
+// write), and min_budget 1s. A block with enabled: false is checked the same
+// way, as a schema checks it, and then removed. The collector then backs off
+// from nothing, and on a reload and in the cache key it compares as one
+// without the block, which is how it scrapes. An enabled block is kept
+// without enabled, since both spellings are the same.
 func validateFailureBackoff(c *model.Collector) error {
 	b := c.FailureBackoff
 	if b == nil {

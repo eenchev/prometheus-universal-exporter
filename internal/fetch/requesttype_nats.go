@@ -21,12 +21,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The nats request type asks a NATS server whether it answers, how fast,
-// and, with JetStream, how its streams and consumers stand, over the
-// client protocol, so a server whose monitoring port is closed can still
-// be watched by a client that may connect. Its target is the server, host
-// or host:port, port 4222, or tls://host for a connection that must be
-// TLS.
+// The nats request type uses the client protocol to ask a NATS server
+// whether it answers, how fast, and, with JetStream, the state of its
+// streams and consumers. So a server whose monitoring port is closed can
+// still be watched by a client allowed to connect. Its target is the
+// server: host or host:port (port 4222), or tls://host for a connection
+// that must use TLS.
 //
 //	request:
 //	  type: nats
@@ -34,17 +34,17 @@ import (
 //	  streams: [ORDERS]
 //	  consumers: [ORDERS/billing]
 //
-// A scrape connects and reads the server's INFO, turns the connection to
-// TLS when the server requires it or the target says tls://, logs in with
-// CONNECT, and times a PING to its PONG. With jetstream it asks the
-// account's JetStream state, and each stream and consumer named, with the
-// JetStream API's requests, which read and change nothing. The answer is
-// one JSON document: the server's INFO, the round trip, and what JetStream
-// answered. A stream or a consumer the server does not have is not a
-// failure: its entry says found: false, so a rule decides.
+// A scrape connects and reads the server's INFO. It switches the
+// connection to TLS when the server requires it or the target says
+// tls://, logs in with CONNECT, and times a PING until its PONG. With
+// jetstream it asks for the account's JetStream state and for each named
+// stream and consumer, using JetStream API requests that read and change
+// nothing. The answer is one JSON document: the server's INFO, the round
+// trip, and the JetStream answers. A stream or consumer the server does not
+// have is not a failure. Its entry says found: false, and a rule decides.
 //
 // The account logs in with a user and a password or with a token. NKeys,
-// credentials files and account JWTs are not spoken.
+// credentials files and account JWTs are not supported.
 
 // NATSConfig is a nats collector's own request keys.
 type NATSConfig struct {
@@ -108,7 +108,19 @@ func init() {
 }
 
 // natsRequester is the nats request type's Requester.
-type natsRequester struct{}
+type natsRequester struct{ parsedTarget[natsTarget] }
+
+// natsTarget reads a nats target: label returns the url label of a
+// request of it.
+type natsTarget struct{}
+
+func (natsTarget) label(target string) (string, error) {
+	address, err := parseNetTarget("nats", target, natsPorts, false)
+	if err != nil {
+		return "", err
+	}
+	return natsLabel(address), nil
+}
 
 // Validate checks a nats collector's request: streams and consumers that
 // are names, which need jetstream, and one way of logging in.
@@ -165,12 +177,6 @@ func (natsRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	return fetchNATS(ctx, target, c, overrides)
 }
 
-// CheckTarget checks a nats collector's target.
-func (natsRequester) CheckTarget(_ *model.Collector, target string, _ bool) error {
-	_, err := parseNetTarget("nats", target, natsPorts, false)
-	return err
-}
-
 // natsLabel is the url label of a request to address: nats:// and the
 // server, tls:// for a target written so.
 func natsLabel(address netAddress) string {
@@ -180,26 +186,8 @@ func natsLabel(address netAddress) string {
 	return "nats://" + address.hostPort
 }
 
-// Label is the url label of a nats request.
-func (natsRequester) Label(target string, _ *model.Collector, _ RequestOverrides) (string, error) {
-	address, err := parseNetTarget("nats", target, natsPorts, false)
-	if err != nil {
-		return "", err
-	}
-	return natsLabel(address), nil
-}
-
 // Method is the http_method label of a nats request: what a scrape times.
 func (natsRequester) Method(*model.Collector, RequestOverrides) string { return natsMethod }
-
-// Display renders a nats target for logs and labels: as written, since it
-// holds no credentials, when it is one at all.
-func (natsRequester) Display(target string) string {
-	if _, err := parseNetTarget("nats", target, natsPorts, false); err != nil {
-		return "<invalid target>"
-	}
-	return strings.TrimSpace(target)
-}
 
 // natsToken reads request.bearer_token_file, "" when the collector names
 // none; an empty file is a failure.
@@ -282,19 +270,7 @@ func fetchNATS(ctx context.Context, target string, c *model.Collector, overrides
 	doc.Host = address.host
 	doc.Port, _ = strconv.Atoi(port)
 	doc.DurationSeconds = time.Since(start).Seconds()
-	body, err := json.Marshal(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonAnswer(doc, target, c, start)
 }
 
 // natsConn is a connection of a scrape, read line by line.
@@ -349,9 +325,9 @@ type natsMessage struct {
 	payload []byte
 }
 
-// next reads what the server sends until one of want comes, answering its
-// PINGs and passing over its +OK and INFO; an -ERR fails the scrape with
-// what it said. It returns the line that came, and, of a message, the
+// next reads what the server sends until one of want arrives. It answers
+// the server's PINGs and skips its +OK and INFO. An -ERR fails the scrape
+// with its text. It returns the line that arrived and, for a message, the
 // message.
 func (c *natsConn) next(want ...string) (string, *natsMessage, error) {
 	for {

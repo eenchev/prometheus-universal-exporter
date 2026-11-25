@@ -19,31 +19,31 @@ func jqFamily(transformType string) bool {
 
 // CheckMetricRule validates one rule's name and compiles its expressions. It
 // reports every mistake it finds in the rule, not just the first
-// (model.JoinProblems), each naming the rule and, where there is one, the
-// expression. The rule is named by its metric name, whatever that is: the
-// loader, which knows the rule's place among its collector's, checks it with
-// CheckMetricRuleAt.
+// (model.JoinProblems). Each one names the rule and, if there is one, the
+// expression. The rule is named by its metric name, whatever that is. The
+// loader knows the rule's position among its collector's rules and checks
+// it with CheckMetricRuleAt instead.
 func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 	return checkMetricRule(x, r, fmt.Sprintf("collector %q metric %q", x.Name, r.Name))
 }
 
-// CheckMetricRuleAt is CheckMetricRule of the rule at index of the
-// collector's metrics, named in each message as RuleWhere names it: a rule
-// that has a name reads as it does from CheckMetricRule, and one that has
-// none is told of by its place.
+// CheckMetricRuleAt is CheckMetricRule for the rule at index of the
+// collector's metrics, named in each message as RuleWhere names it. A rule
+// with a name reads as it does from CheckMetricRule. A rule without one is
+// named by its position.
 func CheckMetricRuleAt(x *model.Collector, index int) error {
 	return checkMetricRule(x, &x.Metrics[index], RuleWhere(x, index))
 }
 
-// RuleWhere is how a message of the load names the rule at index of a
-// collector's metrics: the collector and the rule's metric name, `collector
-// "node" metric "up"`, or, for a rule that has no name to be named by, the
-// collector and the rule's place among its rules, counted from 1 as
-// CheckLabelValueMapsAgree counts them, `collector "node" metrics rule 2`.
-// A rule has no name when name is left out or "", which a prometheus rule
-// may be, or is nothing but blanks, which is no rule's name: `metric ""`
-// said which rule of thirty it was to nobody. A name that is no metric's
-// for another reason is quoted as it is written, and finds its rule.
+// RuleWhere returns how a load message names the rule at index of a
+// collector's metrics. Usually that is the collector and the rule's metric
+// name: `collector "node" metric "up"`. A rule without a name is named by
+// the collector and the rule's position among its rules, counted from 1 as
+// CheckLabelValueMapsAgree counts them: `collector "node" metrics rule 2`.
+// A rule has no name when name is omitted or "" (allowed for a prometheus
+// rule), or is only blanks, which is never a valid rule name. `metric ""`
+// did not tell anyone which of thirty rules it was. A name that is invalid
+// for another reason is quoted as written, and identifies its rule.
 func RuleWhere(x *model.Collector, index int) string {
 	return fmt.Sprintf("collector %q %s", x.Name, RuleName(&x.Metrics[index], index))
 }
@@ -179,17 +179,18 @@ func checkMetricRule(x *model.Collector, r *model.MetricRule, where string) erro
 }
 
 // xpathLabelReadByName reports whether a label of an xpath collector is an
-// attribute read by its name as written rather than by the XPath engine, in
-// a document of the collector's decoder: HTML, XML, or, for a decoder left
-// to each response, either, since the one that reads it by name may be the
-// one that arrives.
+// attribute read by its name as written rather than by the XPath engine,
+// in a document of the collector's decoder. The decoder is HTML, XML, or,
+// when chosen per response, either, since the one that reads it by name
+// may be the one that arrives.
 //
-// With response.namespaces set, a decoder left to each response is taken to
-// read XML, the one kind of document namespaces mean anything in: its labels
-// are checked as those of an xml decoder are. Checked as either kind's, a
-// label with a prefix the namespaces do not map — @x:unit, ../@x:kind — was
-// accepted as the name of an HTML attribute, and then left off every series
-// of an XML answer without a word, where the load had refused it before.
+// With response.namespaces set, a decoder chosen per response is assumed to
+// read XML, the only document kind where namespaces mean anything. Its
+// labels are checked like those of an xml decoder. When checked as either
+// kind, a label with a prefix the namespaces do not map (@x:unit,
+// ../@x:kind) was accepted as an HTML attribute name. It was then silently
+// dropped from every series of an XML answer, where the load had refused it
+// before.
 func xpathLabelReadByName(expression, decoder string, namespaces map[string]string) bool {
 	if decoder == "html" || (decoder != "xml" && len(namespaces) == 0) {
 		if _, own := ownAttributeLabel(expression, true, namespaces); own {
@@ -208,12 +209,12 @@ func xpathLabelReadByName(expression, decoder string, namespaces map[string]stri
 }
 
 // CheckTransformSettings checks the collector-wide transform settings.
-// include, exclude and rename pick and rename the metrics a prometheus
-// transform passes through, so they apply only to one without metrics rules,
-// where the rules would do both; anywhere else they are refused rather than
-// ignored. The label settings apply to every transform: their label names are
-// checked, and two renames to one label are refused, since which value it
-// would get has no right answer.
+// include, exclude and rename select and rename the metrics a prometheus
+// transform passes through. So they apply only to one without metrics
+// rules, where the rules would do both. Anywhere else they are refused
+// rather than ignored. The label settings apply to every transform. Their
+// label names are checked, and two renames to the same label are refused,
+// since there is no right answer for which value it would get.
 func CheckTransformSettings(x *model.Collector) error {
 	t := x.Transform
 	var errs []error
@@ -273,19 +274,19 @@ func CheckTransformSettings(x *model.Collector) error {
 	return model.JoinProblems(errs...)
 }
 
-// checkFilterEntry refuses an entry of transform.include or transform.exclude,
-// key, that is the empty string or nothing but blanks. Each compiles, and
-// neither can be meant. The empty regular expression matches every name, so
-// exclude: [""] dropped every series and include: [""] kept every one. An
-// entry of blanks matches only the names that hold those blanks, which a
-// UTF-8 name may, so it has a meaning, but written bare it is a slip — an
-// empty string that picked up spaces, a template that filled in nothing —
-// after which a pass-through exported nothing, with no error. An entry of a
-// list is not an optional key: written "" it is not the key left out.
+// checkFilterEntry refuses an entry, key, of transform.include or
+// transform.exclude that is the empty string or only blanks. Both compile,
+// and neither can be intended. The empty regular expression matches every
+// name, so exclude: [""] dropped every series and include: [""] kept them
+// all. An entry of blanks matches only names that contain those blanks,
+// which a UTF-8 name may, so it has a meaning. But written bare it is a
+// slip: an empty string that picked up spaces, or a template that filled in
+// nothing. A pass-through then exported nothing, with no error. A list
+// entry is not an optional key: "" there does not mean the key is omitted.
 //
 // The entries are matched as applyPrometheusTransform matches them: against
-// the name a series has in the target's answer, before transform.rename and
-// metrics_prefix, and anywhere in it.
+// the series name in the target's answer, before transform.rename and
+// metrics_prefix, anywhere in the name.
 func checkFilterEntry(collector, key, entry string) error {
 	const entryIs = "an entry is a regular expression matched against a metric's name as the target gives it, anywhere in it"
 	switch {
@@ -297,18 +298,17 @@ func checkFilterEntry(collector, key, entry string) error {
 	return nil
 }
 
-// checkRulePattern refuses the expression of a prometheus rule, the rule
-// being named by where, that is nothing but blanks. A prometheus rule's
-// expression is a regular expression matched against the names of the
-// target's metrics, anywhere in a name (applyPrometheusTransform,
-// decode.prometheusKeeps), and one of blanks compiles: it matches only the
-// names that hold those blanks, so the rule passed nothing on, which with
-// required: false it did without a word. It is the slip checkFilterEntry
-// refuses of an entry of transform.include, and is refused with the same
-// advice. An expression written "" is the key left out, as an optional key
-// is everywhere: the rule then matches the metric of its name. Under the
-// other transforms the loader refuses an expression of blanks before this
-// check, as a rule that has no expression.
+// checkRulePattern refuses the expression of a prometheus rule (named by
+// where) that is only blanks. A prometheus rule's expression is a regular
+// expression matched anywhere in the names of the target's metrics
+// (applyPrometheusTransform, decode.prometheusKeeps). An expression of
+// blanks compiles but matches only names that contain those blanks. So the
+// rule passed nothing on, and with required: false it did so silently.
+// This is the same slip checkFilterEntry refuses in transform.include, and
+// it gets the same advice. An expression written "" means the key is
+// omitted, as for any optional key: the rule then matches the metric of its
+// name. Under the other transforms the loader refuses an expression of
+// blanks before this check, as a rule with no expression.
 func checkRulePattern(where, pattern string) error {
 	if strings.TrimSpace(pattern) != "" {
 		return nil
@@ -316,41 +316,43 @@ func checkRulePattern(where, pattern string) error {
 	return fmt.Errorf("%s expression %q is nothing but blanks; a prometheus rule's expression is a regular expression matched against a metric's name as the target gives it, anywhere in it, so this one matches only the names that hold these blanks: write the pattern that was meant, or, for one that does mean a blank, '[ ]' or '\\x20' in single quotes, or leave expression out for the rule to pass on the metric its name names", where, pattern)
 }
 
-// A name written in a collector's configuration — a rule's name and its
-// labels' names, the keys of transform.labels and what transform.rename and
-// transform.rename_labels rename to — is held at the load to what the same
-// name is held to at a scrape, where it leaves the transform beside the
-// names the response gave and is escaped with them, in the one place
+// A name written in a collector's configuration is held at load to the same
+// rules as at a scrape. This covers a rule's name and its labels' names,
+// the keys of transform.labels, and the targets of transform.rename and
+// transform.rename_labels. At a scrape these names leave the transform next
+// to the names from the response and are escaped with them, in one place
 // (escapeNames). Under name_escaping fail, the default, a name that is not
-// classic could only fail every scrape, so the load refuses it, and says, as
-// the scrape does, that underscores or values would export it escaped. Under
-// those two it loads, whatever characters it has, and is exported as each
+// classic would fail every scrape. So the load refuses it and says, as the
+// scrape does, that underscores or values would export it escaped. Under
+// those two it loads with any characters and is exported the way each
 // exports a response's name: a rule named http.server.duration makes
 // http_server_duration, or U__http_2e_server_2e_duration.
 //
-// Two things the load holds a written name to that a scrape does not hold a
-// response's. A name of nothing but blanks is no name under any of the
-// three, as an expression of blanks is none: neither the key left out, which
-// only "" is, nor a name anyone meant. And a metric name is not exported
-// beginning with "__", which Prometheus reserves: not as it is written, and
-// not as underscores escapes it, where a leading digit or dot becomes "_".
-// A label's name is held to that by the scrape as well.
+// The load holds a written name to two rules that a scrape does not apply
+// to a response's names:
+//   - A name of only blanks is not a name under any of the three, just as an
+//     expression of blanks is not an expression. It is neither the omitted
+//     key (only "" is) nor a name anyone meant.
+//   - A metric name is not exported starting with "__", which Prometheus
+//     reserves. This applies to the name as written and as underscores
+//     escapes it, where a leading digit or dot becomes "_". The scrape also
+//     holds a label's name to this rule.
 
-// escapes reports whether the collector exports a name that is not classic
-// escaped, its name_escaping being underscores or values, where under fail,
-// or with the key left out, such a name fails the scrape.
+// escapes reports whether the collector exports a non-classic name escaped,
+// because its name_escaping is underscores or values. Under fail, or with
+// the key omitted, such a name fails the scrape.
 //
-// Under metric_name_validation_scheme utf8 such a name is exported too, as
-// it is, and each answer escapes it as its scraper asks.
+// Under metric_name_validation_scheme utf8 such a name is also exported,
+// unchanged, and each answer escapes it as its scraper requests.
 func escapes(x *model.Collector) bool {
 	return UTF8Names(x) || x.NameEscaping == NameEscapingUnderscores || x.NameEscaping == NameEscapingValues
 }
 
-// EscapingAdvice is what the load adds to its refusal of a name that is not
-// classic, in the words the scrape's refusal of such a name has
-// (model.MetricSet.Validate), and for the names it has them for: one that is
-// valid UTF-8, which escaping exports. A name of blanks is refused under
-// every name_escaping, and is told nothing of it.
+// EscapingAdvice is the text the load adds when it refuses a non-classic
+// name. It uses the words of the scrape's refusal of such a name
+// (model.MetricSet.Validate), and only for names they apply to: valid
+// UTF-8, which escaping exports. A name of blanks is refused under every
+// name_escaping and gets no advice.
 func EscapingAdvice(name string) string {
 	if strings.TrimSpace(name) == "" || !utf8.ValidString(name) {
 		return ""
@@ -359,22 +361,22 @@ func EscapingAdvice(name string) string {
 }
 
 // TakesLabelName reports whether a label name written in the collector's
-// configuration is one a scrape of the collector exports: a classic name,
-// or, under name_escaping underscores or values, any that is not blanks
-// alone. A name it takes may still be one Prometheus reserves
+// configuration is one that a scrape of the collector exports: a classic
+// name, or, under name_escaping underscores or values, any name that is not
+// only blanks. An accepted name may still be one Prometheus reserves
 // (CheckExportedLabelName).
 func TakesLabelName(x *model.Collector, name string) bool {
 	return model.ValidLabelName(name) || escapes(x) && strings.TrimSpace(name) != ""
 }
 
-// CheckExportedLabelName refuses a label name the collector takes
-// (TakesLabelName) that is exported as one Prometheus reserves, beginning
-// with "__": a classic name written so, in the words it always was, and a
-// name underscores escapes to one, which the scrape would refuse of every
-// series that has the label. It refuses as well a name exported longer than
+// CheckExportedLabelName refuses a label name the collector accepts
+// (TakesLabelName) that is exported as a name Prometheus reserves, starting
+// with "__". That is a classic name written that way, refused in the usual
+// words, or a name that underscores escapes to one. The scrape would refuse
+// every series with that label. It also refuses a name exported longer than
 // the collector's limits.max_label_name_length, which the scrape would
-// refuse of every such series too: the name as escaped, which is what the
-// scrape measures.
+// refuse for every such series too. The length is that of the escaped
+// name, which is what the scrape measures.
 func CheckExportedLabelName(x *model.Collector, name string) error {
 	exported := escapeName(name, x.NameEscaping, false)
 	switch {
@@ -393,17 +395,17 @@ func CheckExportedLabelName(x *model.Collector, name string) error {
 }
 
 // A label name a series has before the collector's transform.remove_labels
-// and rename_labels apply (applyCollectorLabels) — a rule's label, a key of
-// transform.labels — is exported under that name only if neither takes it
-// off. The scrape escapes the names and validates the series after both
-// (Transform), so a name one of them takes off is neither escaped nor
-// validated: its characters, the "__" Prometheus reserves and its length are
-// nothing to the scrape, which holds the rename's target to all three, as the
-// load does (CheckTransformSettings). The renames do not chain, and a
-// transform.labels key is added before the removals, so a key remove_labels
-// names is gone as a rule's label is. A name of nothing but blanks is
-// refused all the same, as the load refuses one everywhere: it is no name
-// anyone meant.
+// and rename_labels apply (applyCollectorLabels), such as a rule's label or
+// a transform.labels key, is exported under that name only if neither
+// removes it. The scrape escapes the names and validates the series after
+// both (Transform). So a name that one of them removes is neither escaped
+// nor validated. Its characters, the reserved "__" prefix and its length do
+// not matter to the scrape. The scrape holds the rename's target to all
+// three, and so does the load (CheckTransformSettings). The renames do not
+// chain. A transform.labels key is added before the removals, so a key
+// named in remove_labels is removed like a rule's label. A name of only
+// blanks is still refused, as the load refuses it everywhere: nobody meant
+// it as a name.
 
 // TakesLabelNameBeforeRenames is TakesLabelName of a label name a series has
 // before remove_labels and rename_labels: one either takes off is taken
@@ -463,17 +465,17 @@ func checkMetricName(x *model.Collector, name string) error {
 	return nil
 }
 
-// checkMetricNameLength refuses a rule's name, the rule being named by
-// where, that the collector exports longer than limits.max_metric_name_length:
-// every series of that name would fail the scrape's validation, which
-// measures the name as exported, escaped under the collector's name_escaping,
-// and only that name, a histogram's or a summary's family name and not the
-// _bucket, _sum and _count its samples are written under. A rule's name is
-// what its series are exported under by every transform: transform.rename
-// applies only to a pass-through without rules, and a python rule's name is
-// the name of the script's series it is about, exported so. A collector with
-// a metrics_prefix has the prefixed name checked by ValidateMetricsPrefix, in
-// its own words, before the rules.
+// checkMetricNameLength refuses a rule's name (the rule named by where)
+// that the collector exports longer than limits.max_metric_name_length.
+// Every series with that name would fail the scrape's validation. That
+// validation measures the exported name, escaped under the collector's
+// name_escaping. It measures only that name: a histogram's or summary's
+// family name, not the _bucket, _sum and _count names of its samples. Every
+// transform exports a rule's series under the rule's name.
+// transform.rename applies only to a pass-through without rules, and a
+// python rule's name is the name of the script's series it covers. For a
+// collector with a metrics_prefix, ValidateMetricsPrefix checks the
+// prefixed name, in its own words, before the rules.
 func checkMetricNameLength(x *model.Collector, name, where string) error {
 	limit := x.Limits.MaxMetricNameLength
 	if x.MetricsPrefix != "" || limit <= 0 {
@@ -491,25 +493,26 @@ func checkMetricNameLength(x *model.Collector, name, where string) error {
 	}
 }
 
-// patternForAName is what the load adds to its refusal of a prometheus
-// rule's name that is no metric name and holds a character a regular
-// expression gives a meaning: . * + ? ^ $ | ( ) [ ] { } and the backslash.
-// Under prometheus, where a rule picks the target's metrics by a pattern,
-// name: 'node_.*' or name: '^up$' is almost surely one, written under the
-// wrong key, and "use letters, digits, underscores and colons" sends its
-// author to spoil it. A name that is one, and so holds none of them, a name
-// refused for anything else — a dash, a blank, a leading digit, the "__"
-// Prometheus reserves — and a name of any other transform's rule, which has
-// no pattern to be mistaken for, add nothing.
+// patternForAName is the text the load adds when it refuses a prometheus
+// rule's name that is not a metric name and contains a character with a
+// meaning in regular expressions: . * + ? ^ $ | ( ) [ ] { } and the
+// backslash. Under prometheus a rule selects the target's metrics by a
+// pattern. So name: 'node_.*' or name: '^up$' is almost surely a pattern
+// under the wrong key, and "use letters, digits, underscores and colons"
+// would lead its author to break it. Nothing is added for:
+//   - a valid metric name, which contains none of these characters;
+//   - a name refused for another reason: a dash, a blank, a leading digit,
+//     or the "__" Prometheus reserves;
+//   - a rule of any other transform, which has no pattern to confuse.
 //
-// The advice is of a name the load refuses, which under name_escaping
-// underscores or values a name with such a character is not, unless
-// underscores would export it as a name Prometheus reserves: a dot is as
-// much a character of http.server.duration as of a pattern, and there the
-// rule passes on the metric of that very name, as a rule of a classic name
-// does (applyPrometheusTransform quotes the name it matches by). Under fail
-// the name is refused and told both things: what would export it, and where
-// a pattern belongs.
+// The advice applies only to a name the load refuses. Under name_escaping
+// underscores or values, a name with such a character is not refused,
+// unless underscores would export it as a name Prometheus reserves. A dot
+// belongs to http.server.duration as much as to a pattern, and there the
+// rule passes on the metric of exactly that name, as a rule with a classic
+// name does (applyPrometheusTransform quotes the name it matches by). Under
+// fail the name is refused and gets both pieces of advice: what would
+// export it, and where a pattern belongs.
 func patternForAName(x *model.Collector, name string) string {
 	if x.Transform.Type != "prometheus" || model.ValidMetricName(name) || !strings.ContainsAny(name, `.*+?^$|()[]{}\`) {
 		return ""

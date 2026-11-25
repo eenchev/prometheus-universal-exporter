@@ -10,21 +10,21 @@ import (
 	"github.com/itchyny/gojq"
 )
 
-// The value-parsing helpers read the human forms of sizes, durations, times
-// and percentages that targets write in place of a plain number — Redis's
-// used_memory_human "1.00M", an API's "1h2m" or "55.12%", a page's "Sat, 03
-// Oct 2026 09:00:00 GMT" — so a rule does not take them apart with a regular
-// expression of its own. They are jq functions here and plain functions of
-// the Python transform (pythonworker.go), and the two must give the same
-// number, and the same error, for every input: both are tested against the
-// vectors of testdata/values/helpers.json.
+// The value-parsing helpers read the human-readable forms of sizes,
+// durations, times and percentages that targets write instead of a plain
+// number (Redis's used_memory_human "1.00M", an API's "1h2m" or "55.12%", a
+// page's "Sat, 03 Oct 2026 09:00:00 GMT"), so a rule does not have to take
+// them apart with a regular expression of its own. They are jq functions
+// here and plain functions of the Python transform (pythonworker.go), and
+// the two must give the same number, and the same error, for every input:
+// both are tested against the vectors in testdata/values/helpers.json.
 //
 // Each reads its number exactly, as a fraction of whole numbers, and rounds
 // it to a float once, at the end: 1.1GB is 1100000000 and 0.1s0.2s is 0.3,
-// where multiplying and adding floats on the way gives 1100000000.0000002
-// and 0.30000000000000004. Python's division of two integers rounds the same
-// way big.Rat does, to the nearest float, so the two cannot differ by the
-// order of their operations.
+// where multiplying and adding floats along the way gives
+// 1100000000.0000002 and 0.30000000000000004. Python's division of two
+// integers rounds the same way as big.Rat does, to the nearest float, so the
+// two cannot differ because of the order of their operations.
 
 // ValueHelpers are the names of the helpers, each a jq function of no
 // arguments that reads its input.
@@ -42,9 +42,9 @@ var valueFunctions = []gojq.CompilerOption{
 	gojq.WithFunction("parse_quantity", 0, 0, func(v any, _ []any) any { return parseValue("parse_quantity", v, true, ParseQuantity) }),
 }
 
-// parseValue runs a helper on a jq value: text is read by parse, and a
-// number, where numbers is set, is taken as already being bytes or seconds,
-// as an API that writes "1.5K" for one value may write 1536 for another.
+// parseValue runs a helper on a jq value. Text is read by parse, and a
+// number, when numbers is set, is taken as already being bytes or seconds,
+// since an API that writes "1.5K" for one value may write 1536 for another.
 // Anything else is an error saying what the helper reads. The error is the
 // value of the jq program, which fails the rule as any jq error does.
 func parseValue(helper string, v any, numbers bool, parse func(string) (float64, error)) any {
@@ -288,10 +288,10 @@ var (
 )
 
 // ParseTime reads a moment as Unix seconds, with the fraction of a second
-// the text has: RFC 3339 and its ISO 8601 forms, with Z or an offset, and
-// the HTTP date of RFC 1123, with GMT, UTC or an offset. A time without a
-// zone is refused rather than taken as UTC or the exporter's own zone: it
-// names no one moment.
+// that the text has: RFC 3339 and its ISO 8601 forms, with Z or an offset,
+// and the HTTP date of RFC 1123, with GMT, UTC or an offset. A time without
+// a zone is refused instead of being taken as UTC or the exporter's own
+// zone, because it names no single moment.
 func ParseTime(text string) (float64, error) {
 	s := trimValue(text)
 	bad := func(why string) (float64, error) { return 0, valueError("parse_time", text, "a time", why) }
@@ -458,12 +458,12 @@ var quantitySuffixes = map[string]*big.Rat{
 	"Ki": rat(1024, 1), "Mi": rat(1024, 2), "Gi": rat(1024, 3), "Ti": rat(1024, 4), "Pi": rat(1024, 5), "Ei": rat(1024, 6),
 }
 
-// ParseQuantity reads a Kubernetes quantity, as an object's resources write
-// a CPU, a size or a count: a number with a sign or none, then a suffix,
-// in its case, or none: 100m is 0.1 (cores), 2Gi is 2147483648 and 500M
-// 500000000 (bytes), 1e3 1000. It is in the base unit, cores or bytes.
-// Blanks are trimmed around it, and none is taken inside it, as Kubernetes
-// takes none.
+// ParseQuantity reads a Kubernetes quantity, as an object's resources write a
+// CPU, a size or a count: a number with an optional sign, then an optional
+// case-sensitive suffix. 100m is 0.1 (cores), 2Gi is 2147483648 and 500M is
+// 500000000 (bytes), and 1e3 is 1000. The result is in the base unit, cores
+// or bytes. Blanks are trimmed around it, and none are allowed inside it, as
+// in Kubernetes.
 func ParseQuantity(text string) (float64, error) {
 	m := quantitySyntax.FindStringSubmatch(trimValue(text))
 	if m == nil {

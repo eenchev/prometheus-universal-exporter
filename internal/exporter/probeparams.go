@@ -13,29 +13,29 @@ import (
 
 // What a probe's query may be, before any of it is read.
 //
-// A parameter the probe reads one value of — target, collector and every
+// Some parameters are read as a single value: target, collector, and every
 // parameter that changes the request for this probe (method, timeout, path
-// and the rest of the request type's RequestType.Overrides) — is refused when
-// it is given twice, as a param_<name> given twice always was. The probe would
-// use one value and ignore the other, and which of two targets or timeouts a
-// scrape was meant for is not something to guess. header_<name> is the one
-// that may repeat: every value is forwarded.
+// and the rest of the request type's RequestType.Overrides). Such a
+// parameter is refused when given twice, as a param_<name> given twice
+// always was. The probe would use one value and ignore the other, and it
+// should not guess which of two targets or timeouts a scrape was meant for.
+// Only header_<name> may repeat: every value is forwarded.
 //
-// A value is also bounded in length. What a probe names lives on after it has
-// been answered: the failure log remembers a failing probe by its target for
-// up to an hour (failurelog.go), and the verbose self-metrics keep a series
-// per request URL (requeststats.go). Neither bounds what it is given, so a
-// caller sending targets as long as the HTTP server lets a request be would
-// have each failing probe leave that much behind, ten thousand times over.
+// A value is also bounded in length, because what a probe names outlives
+// its answer. The failure log remembers a failing probe by its target for up
+// to an hour (failurelog.go), and the verbose self-metrics keep a series per
+// request URL (requeststats.go). Neither bounds its input. A caller sending
+// targets as long as the HTTP server allows a request to be would make each
+// failing probe leave that much behind, ten thousand times over.
 
 // MaxProbeParameterBytes is the longest value target, collector and every
 // other parameter a probe reads may have.
 const MaxProbeParameterBytes = 8 << 10
 
-// checkProbeParams refuses a parameter of query that reads is true for when
+// checkProbeParams refuses a parameter of query for which reads is true when
 // its value is longer than MaxProbeParameterBytes, or when it is given more
-// than once and is not a header_<name> parameter. The parameters are looked
-// at in order of name, so the same query is always refused for the same one.
+// than once and is not a header_<name> parameter. Parameters are checked in
+// name order, so the same query is always refused for the same parameter.
 func checkProbeParams(query url.Values, reads func(key string) bool) error {
 	keys := make([]string, 0, len(query))
 	for key := range query {
@@ -59,15 +59,16 @@ func checkProbeParams(query url.Values, reads func(key string) bool) error {
 }
 
 // checkForwardedHeaderParams refuses a header_<name> parameter for a header
-// request forwards whose value holds a control character other than tab,
-// naming the parameter. Go refuses to send such a value, so the probe would
-// otherwise fail at the target, be retried and be logged as the target's
-// failure, although the mistake is the caller's. A header_<name> for a header
-// not forwarded is ignored, as forwardedHeaders ignores it, and so is an
-// empty value, which is not forwarded. A forwarded request header, the
-// Authorization one among them, needs no such check: the HTTP server answers
-// 400 to a request whose header value holds a control character before the
-// probe sees it, and a header line cannot hold a CR or an LF at all.
+// that request forwards when its value holds a control character other than
+// tab. The error names the parameter. Go refuses to send such a value, so
+// otherwise the probe would fail at the target, be retried, and be logged as
+// the target's failure, although the mistake is the caller's. A
+// header_<name> for a header that is not forwarded is ignored, as
+// forwardedHeaders ignores it. So is an empty value, which is not forwarded.
+// A forwarded request header, including Authorization, needs no such check.
+// The HTTP server answers 400 to a request whose header value holds a
+// control character before the probe sees it, and a header line cannot hold
+// a CR or an LF at all.
 func checkForwardedHeaderParams(query url.Values, request model.RequestConfig) error {
 	forwarded := forwardableHeaders(request)
 	if len(forwarded) == 0 {

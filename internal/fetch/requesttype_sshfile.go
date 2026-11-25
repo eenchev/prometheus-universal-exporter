@@ -14,9 +14,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The sshfile request type is localfile for another machine: it reads a
+// The sshfile request type is localfile for another machine. It reads a
 // file, or a directory of files, from a remote host over SFTP, and decodes,
-// transforms and checks it exactly as localfile does a file of its own.
+// transforms and checks it exactly as localfile does a local file.
 //
 //	request:
 //	  type: sshfile
@@ -26,28 +26,29 @@ import (
 //	  private_key_file: /etc/exporter/ssh/id_ed25519   # and/or password_file
 //	  known_hosts_file: /etc/exporter/ssh/known_hosts  # required
 //
-// The probe's target is the host, host:port or ssh://host:port, port 22 when
-// it is left out. Everything the read shares with localfile — the path
-// rules, regular files only, a file read again when it changes under the
-// read, max_age, the response limit, the directory rules — is the same code
-// (filereads.go, localfile_directory.go), over an SFTP session instead of
-// an os.Root (sshsource.go).
+// The probe's target is the host, host:port or ssh://host:port, with port
+// 22 when it is left out. Everything the read shares with localfile is the
+// same code (filereads.go, localfile_directory.go), over an SFTP session
+// instead of an os.Root (sshsource.go). That covers the path rules, regular
+// files only, a file read again when it changes during the read, max_age,
+// the response limit and the directory rules.
 //
-//   - The host's key is always verified, against known_hosts_file: there is
+//   - The host's key is always verified against known_hosts_file. There is
 //     no option to skip it.
 //   - The connection to a host is kept and shared by every scrape that
-//     reaches it with the same account and settings, with keepalives that
-//     find a dead one, and closed when nothing has used it for idle_timeout
+//     reaches it with the same account and settings. Keepalives find a dead
+//     one, and it is closed when nothing has used it for idle_timeout
 //     (sshconn.go).
-//   - A read is confined to root twice: lexically, as localfile's names are,
-//     and on the server, where every symbolic link on the way is followed by
-//     the exporter and a path it leads outside root refused. The server
-//     resolves the path again when the file is opened, so a link swapped in
-//     between the check and the open is the server's to resolve: the account
-//     the exporter reads as should be one that can read nothing it must not.
+//   - A read is confined to root twice. First lexically, as localfile's
+//     names are. Then on the server: the exporter follows every symbolic
+//     link on the way and refuses a path that leads outside root. The
+//     server resolves the path again when the file is opened, so a link
+//     swapped in between the check and the open is resolved by the server.
+//     The account the exporter reads as should therefore be unable to read
+//     anything it must not.
 //
-// This file and the sshconn.go and sshsource.go files are the only ones that
-// import golang.org/x/crypto and github.com/pkg/sftp, all behind this type's
+// This file, sshconn.go and sshsource.go are the only files that import
+// golang.org/x/crypto and github.com/pkg/sftp. All are behind this type's
 // build constraint, so a build without the type does not link them.
 
 func init() {
@@ -144,10 +145,10 @@ func validateSSHFileRequest(x *model.Collector) error {
 	return validateSSHConnection(x, "the file is read as")
 }
 
-// checkSSHPath refuses a backslash in request.root, or in a path under it:
-// the lexical check of a path is the exporter's, for which \ is a character
-// of a name, and a Windows SFTP server would take it as a separator, so that
-// ..\.. would leave root. what names the key or the probe parameter.
+// checkSSHPath refuses a backslash in request.root, or in a path under it.
+// The exporter does the lexical check of a path, and for it \ is a
+// character of a name. A Windows SFTP server would take it as a separator,
+// so ..\.. would leave root. what names the key or the probe parameter.
 func checkSSHPath(what, name string) error {
 	if strings.Contains(name, `\`) {
 		return fmt.Errorf("%s %q has a backslash; a path on the host is written with / alone, and a backslash, which a Windows SFTP server reads as a separator, is refused", what, name)
@@ -279,9 +280,10 @@ func sshDirectory(root string) string {
 }
 
 // sshFileSchemaRule is what an sshfile collector's request requires, as the
-// exporter does (validateSSHFileRequest): root, username and
-// known_hosts_file, each written with something other than ""; a private key
-// or a password, or both; and a passphrase only beside a private key.
+// exporter does (validateSSHFileRequest):
+//   - root, username and known_hosts_file, each set to something other than "";
+//   - a private key or a password, or both;
+//   - a passphrase only together with a private key.
 func sshFileSchemaRule() map[string]any {
 	keys := []string{"root", "username", "known_hosts_file"}
 	properties := map[string]any{}

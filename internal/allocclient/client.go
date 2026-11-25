@@ -1,12 +1,12 @@
 // Package allocclient is the exporter's side of the target allocator
-// (internal/allocapi): in allocator mode (--allocator.url) it heartbeats to
-// every instance of the allocator, long-polls the allocator for its bundle,
-// writes a new bundle into the cache directory where the configuration
-// manager loads it, and has the manager reload it.
+// (internal/allocapi). In allocator mode (--allocator.url) it heartbeats to
+// every allocator instance, long-polls the allocator for its bundle, writes a
+// new bundle into the cache directory where the configuration manager loads
+// it, and has the manager reload it.
 //
 // A bundle is written beside the one in force and put in place by swapping
 // one symbolic link, so whatever reads the cache directory finds one bundle
-// or the other, never part of each (cache.go). It is checked before, as the
+// or the other, never a mix of both (cache.go). It is checked first, as the
 // reload would check it: a bundle that does not load is refused, the files
 // in force stay, and the refusal is reported in the next heartbeat.
 package allocclient
@@ -49,20 +49,20 @@ const ReloadTrigger = "allocator"
 // has the generation it would answer, the wait parameter of BundlePath.
 const DefaultWait = 30 * time.Second
 
-// The bounds of the wait between two tries after an error: the first try
-// again after DefaultMinBackoff, each next after twice as long, up to
-// DefaultMaxBackoff. A bundle request answered at once without a change
-// waits DefaultMinBackoff too, so an allocator that does not hold requests
-// is not asked as fast as it answers.
+// The bounds of the wait between two attempts after an error: the first
+// retry after DefaultMinBackoff, each next one after twice as long, up to
+// DefaultMaxBackoff. A bundle request answered at once without a change also
+// waits DefaultMinBackoff, so an allocator that does not hold requests is not
+// asked as fast as it answers.
 const (
 	DefaultMinBackoff = time.Second
 	DefaultMaxBackoff = 30 * time.Second
 )
 
-// heartbeatTimeout bounds one heartbeat to one instance of the allocator, and a
+// heartbeatTimeout bounds one heartbeat to one allocator instance, and one
 // lookup of the allocator's addresses, when the heartbeat interval is not
-// shorter (heartbeatBound); bundleGrace bounds how much longer than its
-// wait a bundle request may take.
+// shorter (heartbeatBound). bundleGrace bounds how much longer than its wait
+// a bundle request may take.
 const (
 	heartbeatTimeout = 5 * time.Second
 	bundleGrace      = 15 * time.Second
@@ -80,15 +80,15 @@ type Reloader interface {
 	// CheckReplacement checks the files at the two paths as a reload
 	// would, without putting them in force.
 	CheckReplacement(configPath, targetsPath string) error
-	// ReloadReplacing runs replace and reloads under the reload lock, and
-	// when the reload is refused runs restore and reloads again. generation
-	// is that of the files replace puts in place, which the configuration
-	// put in force from them carries.
+	// ReloadReplacing runs replace and reloads under the reload lock, and,
+	// when the reload is refused, runs restore and reloads again. generation
+	// is that of the files that replace puts in place, which the
+	// configuration put in force from them carries.
 	ReloadReplacing(trigger, generation string, replace func() (restore func() error, err error)) error
 	// Generation is the generation of the bundle whose configuration is in
-	// force, "" before the first: the one ReloadReplacing was given, from
-	// the moment the configuration it put in force answers probes, and
-	// never one of a bundle refused.
+	// force, or "" before the first. It is the one ReloadReplacing was
+	// given, from the moment the configuration that it put in force answers
+	// probes, and never that of a refused bundle.
 	Generation() string
 }
 
@@ -170,10 +170,10 @@ const (
 )
 
 // Status is how the client is keeping up with the allocator, for the
-// self-metrics. Generation is the bundle the client last saw put in force,
-// which it learns once the reload has returned: the self-metric that names
-// the generation in force reads it from the manager instead
-// (config.Manager.Generation), stored with the configuration.
+// self-metrics. Generation is the bundle that the client last saw put in
+// force, which it learns once the reload has returned. The self-metric that
+// names the generation in force reads it from the manager instead
+// (config.Manager.Generation), where it is stored with the configuration.
 type Status struct {
 	Generation string
 	// InForceAt is when Generation was put in force: when the reload that
@@ -195,9 +195,9 @@ type Client struct {
 	// answer without a change, and beat the heartbeat loop to heartbeat now.
 	wake, beat chan struct{}
 	// instance names this process in its heartbeats, and sequence is the
-	// last heartbeat's number (allocapi.Heartbeat): a heartbeat given up
-	// on may still reach the allocator after the next, which then knows
-	// it for an old one.
+	// last heartbeat's number (allocapi.Heartbeat). A heartbeat given up on
+	// may still reach the allocator after the next one, which then
+	// recognises it as old.
 	instance string
 	sequence uint64
 	// newTimer starts the wait between two bundle requests; a test makes
@@ -208,46 +208,46 @@ type Client struct {
 	now func() time.Time
 
 	mu sync.Mutex
-	// inForce is the generation of the bundle in force, seen that of the
-	// last bundle fetched, put in force or refused: the bundle request
-	// says it, so a refused bundle is not fetched again until the
+	// inForce is the generation of the bundle in force, and seen that of
+	// the last bundle fetched, put in force or refused. The bundle request
+	// states seen, so a refused bundle is not fetched again until the
 	// allocator has another. inForce is set once the reload that put the
-	// bundle in force has returned, so a heartbeat built while it runs
-	// still names the bundle before, for as long as the reload's end
+	// bundle in force has returned, so a heartbeat built while the reload
+	// runs still names the previous bundle, for as long as the reload's end
 	// takes; the next heartbeat, sent at once, names the new one.
 	inForce, seen string
 	// inForceAt is when inForce was put in force (Status.InForceAt).
 	inForceAt time.Time
-	// interval is the heartbeat interval in force: Options' at the start,
-	// then the shortest of those announced holds, while one does.
+	// interval is the heartbeat interval in force: Options' value at
+	// startup, then the shortest of those announced, while one is.
 	// intervalChanged is closed, and made anew, when it changes, so each
-	// address's schedule takes it at once.
+	// address's schedule picks it up at once.
 	interval        time.Duration
 	intervalChanged chan struct{}
-	// reported is the interval the heartbeats say (allocapi.Heartbeat's
-	// IntervalSeconds): the longest of those the instances said (says),
-	// where interval is the shortest, and 0 until an instance of the
-	// allocator has announced one, a heartbeat leaving it out until then.
-	// Options' default is no instance's interval, and would tell an
-	// instance that has just started nothing of how long the replicas take
-	// to reach it. The longest, not the interval in force, is what such an
-	// instance needs: while an instance before it still announces a longer
-	// interval, the replicas it has not reached yet may still be on that
-	// one, and find the new instance only at their next lookup on it.
-	// highest is the longest reported has been, and earlyBeat when a change
-	// of it last heartbeated every instance at once (takeAnnounced).
+	// reported is the interval that the heartbeats state
+	// (allocapi.Heartbeat's IntervalSeconds): the longest of those the
+	// instances said (says), where interval is the shortest. It is 0, and
+	// left out of the heartbeats, until an allocator instance has announced
+	// one. Options' default belongs to no instance, and would tell a newly
+	// started instance nothing about how long the replicas take to reach it.
+	// Such an instance needs the longest, not the interval in force: while
+	// an earlier instance still announces a longer interval, the replicas
+	// that it has not reached yet may still be on that one, and find the new
+	// instance only at their next lookup on it. highest is the longest that
+	// reported has been, and earlyBeat is when a change of it last
+	// heartbeated every instance at once (takeAnnounced).
 	reported, highest time.Duration
 	earlyBeat         time.Time
-	// says is what each instance of the allocator said in its last answer,
-	// keyed by the instance's name (allocapi.HeartbeatReply's Instance), or
-	// by the address it answered at when its answer names none: one address
+	// says is what each allocator instance said in its last answer, keyed by
+	// the instance's name (allocapi.HeartbeatReply's Instance), or by the
+	// address that it answered at when its answer names none: one address
 	// may be answered by several instances in turn.
 	says map[string]*said
 	// sending holds, for each allocator address, the slot of the heartbeat
-	// on its way there, one at a time: an instance of the allocator keeps the
-	// last heartbeat it hears, so the one ShuttingDown sends must not be
+	// on its way there, one at a time. An allocator instance keeps the last
+	// heartbeat that it hears, so the one that ShuttingDown sends must not be
 	// overtaken by one built before it. A slot is kept once made, for an
-	// address that comes back; there are as many as addresses ever seen.
+	// address that comes back, so there are as many as addresses ever seen.
 	sending map[string]chan struct{}
 	// known are the addresses the allocator's host resolved to last, which
 	// a failed lookup keeps heartbeating.
@@ -266,16 +266,17 @@ type Client struct {
 	sameNameAt time.Time
 }
 
-// said is what an instance of the allocator said in its last answer: the
-// interval, 0 for none, the address the answer came from, and when. answered
-// is false once a heartbeat to that address failed after it: the instance
-// then has no say in the interval in force until it answers again, as
-// whichever instance the address leads to did not answer. It keeps its say
-// in the interval reported, the longest, while its address resolves and
-// it is not older than the member TTL of the longest interval said: an
-// instance that is slow or restarting still has replicas on the interval it
-// said, and one behind an address that several instances answer is not
-// heard at every heartbeat.
+// said is what an allocator instance said in its last answer: the interval
+// (0 for none), the address the answer came from, and when.
+//
+// answered is false once a heartbeat to that address failed afterwards. The
+// instance then has no say in the interval in force until it answers again,
+// because whichever instance the address leads to did not answer. It keeps
+// its say in the reported interval, the longest, while its address resolves
+// and it is not older than the member TTL of the longest interval said. An
+// instance that is slow or restarting still has replicas on the interval
+// that it said, and one behind an address that several instances answer is
+// not heard at every heartbeat.
 type said struct {
 	interval time.Duration
 	address  string
@@ -355,13 +356,14 @@ func (c *Client) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// ShuttingDown makes every heartbeat from now on say the replica is shutting
-// down, and sends one at once, within ctx, so the allocator takes the
-// replica out of the member list now rather than when its heartbeats stop.
-// A heartbeat already on its way, built before and so not saying it, is
-// waited for first: the allocator keeps the last heartbeat it hears, and
-// that one arriving after would put the replica back. When ctx ends before
-// it is back, the heartbeat loop sends the one saying so as soon as it is.
+// ShuttingDown makes every heartbeat from now on say that the replica is
+// shutting down, and sends one at once, within ctx, so that the allocator
+// takes the replica out of the member list now instead of when its
+// heartbeats stop. A heartbeat already on its way, built earlier and so not
+// saying it, is waited for first: the allocator keeps the last heartbeat
+// that it hears, and that one arriving later would put the replica back.
+// When ctx ends before it is back, the heartbeat loop sends the shutdown
+// heartbeat as soon as it is.
 func (c *Client) ShuttingDown(ctx context.Context) {
 	c.mu.Lock()
 	c.shuttingDown = true
@@ -435,10 +437,10 @@ func (c *Client) logAttrs(key logKey, more ...any) []any {
 	return append(attrs, more...)
 }
 
-// forgetAddresses drops what was logged for heartbeats to addresses the
-// allocator's host no longer resolves to, and the intervals they said: a
-// instance of the allocator that is gone neither recovers nor fails again, and
-// has no say in the interval.
+// forgetAddresses drops what was logged for heartbeats to addresses that the
+// allocator's host no longer resolves to, and the intervals they said: an
+// allocator instance that is gone neither recovers nor fails again, and has
+// no say in the interval.
 func (c *Client) forgetAddresses(addrs []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -473,23 +475,23 @@ func (c *Client) authorize(req *http.Request) error {
 }
 
 // heartbeatLoop looks up the allocator's addresses at once, then every
-// heartbeat interval, counted from when the lookup before ended, and at once
-// after a bundle was put in force or refused, and runs a heartbeat schedule
-// of its own for each address (heartbeatAddress) until ctx ends. An instance
-// of the allocator that is slow to answer, or hangs, so delays only the
-// heartbeats to itself: every other instance goes on hearing the replica each
-// interval, where one round waiting for every instance would let a hung one
-// make the replica late to all of them. An address the host no longer
-// resolves to has its schedule stopped; a lookup that fails keeps those of
-// the addresses it resolved to last.
+// heartbeat interval (counted from the end of the previous lookup), and at
+// once after a bundle was put in force or refused. It runs a heartbeat
+// schedule of its own for each address (heartbeatAddress) until ctx ends.
+// An allocator instance that is slow to answer, or hangs, therefore delays
+// only the heartbeats to itself: every other instance keeps hearing the
+// replica every interval, where one round waiting for every instance would
+// let a hung one make the replica late to all of them. An address that the
+// host no longer resolves to has its schedule stopped; a lookup that fails
+// keeps the schedules of the addresses that it resolved to last.
 //
-// An interval that changes takes effect at once here too, as it does for
-// the heartbeats: the next lookup follows the new interval after the last,
-// at once when that is past. A replica told a shorter interval looks up,
-// and so finds an instance of the allocator that has just started, within
-// it; an instance that has just started waits for the longest interval the
-// replicas it hears say (the allocator's firstSettle), which covers those
-// still on an older, longer one (reported).
+// A changed interval takes effect at once here too, as for the heartbeats:
+// the next lookup follows the new interval after the last one, or comes at
+// once when that is past. A replica told a shorter interval therefore looks
+// up, and so finds a newly started allocator instance, within it. A newly
+// started instance waits for the longest interval that the replicas it hears
+// state (the allocator's firstSettle), which covers those still on an older,
+// longer one (reported).
 func (c *Client) heartbeatLoop(ctx context.Context) {
 	type schedule struct {
 		now  chan struct{}
@@ -545,8 +547,8 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 }
 
 // heartbeatAddress heartbeats the allocator instance at addr at once, then
-// every heartbeat interval, counted from when the heartbeat before was sent,
-// and at once on now, until ctx ends. An interval that changes takes effect
+// every heartbeat interval (counted from when the previous heartbeat was
+// sent), and at once on now, until ctx ends. A changed interval takes effect
 // at once: the next heartbeat follows the new interval after the last.
 func (c *Client) heartbeatAddress(ctx context.Context, addr string, now <-chan struct{}) {
 	for {
@@ -589,10 +591,10 @@ func (c *Client) heartbeatBound() time.Duration {
 	return min(heartbeatTimeout, c.heartbeatInterval())
 }
 
-// heartbeat sends one heartbeat to every address the allocator URL's host
-// resolves to, at once, and waits for them: ShuttingDown's, and a test's.
-// sent is false when there was no address to send to, or ctx ended before
-// the turn of one of them came (heartbeatOne).
+// heartbeat sends one heartbeat to every address that the allocator URL's
+// host resolves to, at once, and waits for them; ShuttingDown and tests use
+// it. sent is false when there was no address to send to, or when ctx ended
+// before the turn of one of them came (heartbeatOne).
 func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 	addrs := c.lookup(ctx)
 	results := make([]bool, len(addrs))
@@ -605,20 +607,25 @@ func (c *Client) heartbeat(ctx context.Context) (sent bool) {
 }
 
 // heartbeatOne sends a heartbeat to the allocator instance at addr, built
-// once the one before to addr is back, and takes its reply. A reply naming a
-// generation other than the last the bundle loop has seen, by the time the
-// reply is in, wakes the bundle loop from its wait. The interval the reply
-// says, kept within allocapi's bounds, or none, becomes the say of the
-// instance that answered (said) in the interval in force, which is the
-// shortest any instance whose last heartbeat was answered says
-// (takeAnnounced): every instance then hears the replica within its own
-// interval, which a longer one would not ensure. The instances last heard at
-// an address that fails lose their say, and when no instance says one the
-// interval stays as it is, so an instance that cannot be reached for a while
-// does not take back what the others said. Their say in the interval the
-// heartbeats say, the longest, is kept until the address no longer resolves
-// or the member TTL of the longest interval has passed. sent is false when
-// ctx ended before this heartbeat's turn came, and nothing was sent.
+// once the previous one to addr is back, and takes its reply.
+//   - A reply naming a generation other than the last one that the bundle
+//     loop has seen, by the time the reply is in, wakes the bundle loop from
+//     its wait.
+//   - The interval that the reply states, kept within allocapi's bounds, or
+//     none, becomes the say of the instance that answered (said). The
+//     interval in force is the shortest that any instance whose last
+//     heartbeat was answered states (takeAnnounced), so every instance hears
+//     the replica within its own interval, which a longer one would not
+//     ensure.
+//   - The instances last heard at an address that fails lose their say, and
+//     when no instance states an interval it stays as it is, so an instance
+//     that cannot be reached for a while does not undo what the others said.
+//     Their say in the reported interval, the longest, is kept until the
+//     address no longer resolves or the member TTL of the longest interval
+//     has passed.
+//
+// sent is false when ctx ended before this heartbeat's turn came, and
+// nothing was sent.
 func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	c.mu.Lock()
 	slot := c.sending[addr]
@@ -633,12 +640,12 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 		return false
 	}
 	defer func() { <-slot }()
-	// The generation is the one the manager has in force, which it has
+	// The generation is the one that the manager has in force, which it has
 	// from the moment the bundle's configuration answers probes. The
-	// client's own note of it is made when the reload has returned, a
-	// while after on a busy machine: a heartbeat built between the two,
-	// as the one a shutdown sends at once may be, said no generation, or
-	// the one before, for an exporter that was answering with the new one.
+	// client's own record of it is made when the reload has returned, a
+	// while later on a busy machine. A heartbeat built in between, as the
+	// one that a shutdown sends at once may be, used to state no generation,
+	// or the previous one, for an exporter already answering with the new one.
 	generation := c.o.Manager.Generation()
 	c.mu.Lock()
 	if generation == "" {
@@ -701,20 +708,22 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	return true
 }
 
-// takeAnnounced makes the shortest interval announced by the instances
-// whose last heartbeat was answered the interval in force, and the longest
-// any instance said the one the heartbeats say (reported), when any is,
-// first dropping what an instance said that is older than the member TTL of
-// the longest said. When the one they say grows, the replica's first being
-// told one among those changes, every instance is heartbeated at once
-// (beat), not at its next turn on the interval: the heartbeats a new replica
-// sent before it heard any instance said none, and an instance that has just
-// started would otherwise form its first member list of the replicas that
-// came first before it hears from them how long the others may take. That is
-// done for a value longer than any said before at once, and for one said
-// before, which comes back once an instance that was not heard for a while
-// is again, at most once an interval; a value that shrinks waits for the
-// next turn, as it makes no instance wait longer. Called under mu.
+// takeAnnounced makes the shortest interval announced by the instances whose
+// last heartbeat was answered the interval in force, and the longest that any
+// instance said the one that the heartbeats state (reported), when there is
+// one. It first drops what an instance said that is older than the member TTL
+// of the longest said.
+//
+// When the reported interval grows (including when the replica is first told
+// one), every instance is heartbeated at once (beat) instead of at its next
+// turn. The heartbeats that a new replica sent before it heard any instance
+// stated none, and a newly started instance would otherwise form its first
+// member list from the replicas that came first, before it hears from them
+// how long the others may take. This happens at once for a value longer than
+// any said before, and at most once an interval for a value said before (one
+// that comes back once an instance that was not heard for a while answers
+// again). A value that shrinks waits for the next turn, since it makes no
+// instance wait longer. Called under mu.
 func (c *Client) takeAnnounced() {
 	now := c.now()
 	var longest time.Duration
@@ -752,10 +761,11 @@ func (c *Client) takeAnnounced() {
 	c.intervalChanged = make(chan struct{})
 }
 
-// lookup is the addresses the allocator URL's host resolves to, or the host
-// itself when it is an IP address. A lookup is bounded as a heartbeat is
-// (heartbeatBound); one that fails is counted and logged as a heartbeat
-// failure, and gives the addresses resolved last, none before the first.
+// lookup returns the addresses that the allocator URL's host resolves to, or
+// the host itself when it is an IP address. A lookup is bounded as a
+// heartbeat is (heartbeatBound). One that fails is counted and logged as a
+// heartbeat failure, and returns the addresses resolved last (none before
+// the first).
 func (c *Client) lookup(ctx context.Context) []string {
 	host := c.base.Hostname()
 	if net.ParseIP(host) != nil {
@@ -845,14 +855,14 @@ func firstLine(b []byte) string {
 
 // bundleLoop asks the allocator for this replica's bundle, and puts each new
 // one in force, until ctx ends. Each request names the last generation seen,
-// which the allocator holds for up to Wait while it has no other. A failure
-// is tried again after a backoff that doubles up to MaxBackoff; an answer
-// without a change that came at once waits MinBackoff, so the loop never
-// asks as fast as an allocator can answer. A heartbeat reply naming a new
-// generation cuts short the wait for Retry-After and the wait after an
-// answer without a change, but not a backoff: a failure that persists, such
-// as a cache directory that cannot be written, would otherwise fetch the
-// whole bundle again at every heartbeat.
+// and the allocator holds the request for up to Wait while it has no other.
+//   - A failure is retried after a backoff that doubles up to MaxBackoff.
+//   - An answer without a change that came at once waits MinBackoff, so the
+//     loop never asks as fast as an allocator can answer.
+//   - A heartbeat reply naming a new generation cuts short the wait for
+//     Retry-After and the wait after an answer without a change, but not a
+//     backoff. A failure that persists, such as a cache directory that cannot
+//     be written, would otherwise fetch the whole bundle at every heartbeat.
 func (c *Client) bundleLoop(ctx context.Context) {
 	backoff := time.Duration(0)
 	for ctx.Err() == nil {
@@ -893,10 +903,10 @@ func (c *Client) bundleLoop(ctx context.Context) {
 	}
 }
 
-// syncOnce makes one bundle request and acts on its answer. ok is false
-// when the bundle could not be fetched or written, and unchanged says the
+// syncOnce makes one bundle request and acts on its answer. ok is false when
+// the bundle could not be fetched or written, and unchanged says that the
 // answer brought no new bundle. retryAfter is set when the allocator has no
-// member list yet: it is the allocator's Retry-After, and no failure.
+// member list yet; it is the allocator's Retry-After, and not a failure.
 func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter time.Duration) {
 	b, err := c.fetch(ctx)
 	var notSettled *notSettledError
@@ -917,9 +927,9 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 	c.lastSync = time.Now()
 	same := b == nil || b.Generation == c.seen || b.Generation == c.inForce
 	// The allocator is back at the bundle in force after one that was
-	// refused: there is nothing left to report, and the next request names
+	// refused. There is nothing left to report, and the next request names
 	// the bundle in force, so the allocator holds it until it has another
-	// rather than answering with the whole bundle each time.
+	// instead of answering with the whole bundle each time.
 	back := b != nil && b.Generation == c.inForce && c.seen != c.inForce
 	if back {
 		c.seen, c.refused = c.inForce, nil
@@ -961,10 +971,10 @@ func (c *Client) syncOnce(ctx context.Context) (unchanged, ok bool, retryAfter t
 	return false, true, 0
 }
 
-// notSettledError is the allocator's 503 answer with Retry-After: it has
-// no member list yet, so it cannot tell this replica's share, and says when
-// to ask again. An instance of the allocator that has just started answers so
-// for its settle time, while the replica keeps the bundle it has.
+// notSettledError is the allocator's 503 answer with Retry-After. It has no
+// member list yet, so it cannot tell this replica's share, and says when to
+// ask again. A newly started allocator instance answers this way during its
+// settle time, while the replica keeps the bundle that it has.
 type notSettledError struct {
 	after time.Duration
 	text  string

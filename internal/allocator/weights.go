@@ -12,13 +12,13 @@ import (
 )
 
 // A target's weight says how much of a member it takes, against the other
-// targets: 1 unless its file says otherwise. The allocator reads the
-// weights of the static target file, weight on a target and on a
-// discovered_targets entry and default_weight at the top, and takes them
-// out of the file before the exporter's loader reads it, so a member's
-// share is a static target file the exporter takes as it is. A discovered
-// target may take its weight from a label of its source (weight_label), and
-// its entry's or job's weight when the label does not give one.
+// targets; it is 1 unless its file says otherwise. The allocator reads the
+// weights of the static target file: weight on a target and on a
+// discovered_targets entry, and default_weight at the top. It takes them out
+// of the file before the exporter's loader reads it, so a member's share is
+// a static target file the exporter takes as it is. A discovered target may
+// take its weight from a label of its source (weight_label). It takes its
+// entry's or job's weight when the label does not give one.
 
 // weightRule is what a weight must be, for the messages that refuse one.
 const weightRule = "a weight is a number above 0 and at most 1000, with at most three decimals, such as 2 or 0.5"
@@ -97,14 +97,13 @@ type staticWeights struct {
 }
 
 // stripStaticWeights takes default_weight and every target's weight out of
-// a static target file's text, discovered_targets already taken out
-// (splitDiscovered), and checks them. Text that has neither is given back
-// as it is, so the exporter's loader reads the file as written and says
-// what it says of it; otherwise the targets, and the top level, are
-// written with every alias and merge key replaced (resolved), so a weight
-// merged in is taken out too. Text that is not a mapping, or whose targets
-// are not a list of mappings, is given back as it is, for the loader to
-// refuse.
+// a static target file's text, with discovered_targets already taken out
+// (splitDiscovered), and checks them. Text that has neither is given back as
+// it is, so the exporter's loader reads the file as written and says what it
+// says of it. Otherwise the targets and the top level are written with every
+// alias and merge key replaced (resolved), so a weight merged in is taken
+// out too. Text that is not a mapping, or whose targets are not a list of
+// mappings, is given back as it is, for the loader to refuse.
 func stripStaticWeights(raw []byte) ([]byte, staticWeights, error) {
 	w := staticWeights{defaultWeight: milli}
 	var doc yaml.Node
@@ -191,10 +190,10 @@ func withoutKey(content []*yaml.Node, key string) []*yaml.Node {
 // fallbackKey is a series of pue_allocator_weight_label_fallbacks_total.
 type fallbackKey struct{ kind, owner, reason string }
 
-// noteFallbacks takes the discovered targets that fall back on their
-// owner's weight now: it logs each source and reason once while any of its
-// targets falls back for it, and returns, by series, the targets that have
-// begun to since the last expansion. Called under reloadMu.
+// noteFallbacks takes the discovered targets that fall back on their owner's
+// weight now. It logs each source and reason once while any of its targets
+// falls back for it. It returns, by series, the targets that have begun to
+// fall back since the last expansion. Called under reloadMu.
 func (a *Allocator) noteFallbacks(list []weightFallback) map[fallbackKey]uint64 {
 	now := make(map[weightFallback]bool, len(list))
 	logged := map[string]bool{}
@@ -239,13 +238,13 @@ func (a *Allocator) noteFallbacks(list []weightFallback) map[fallbackKey]uint64 
 // wavers a little moves no target, and changes no bundle.
 const weightHysteresis = 0.2
 
-// holdWeights is found, a source's new answer, with the weight label of
-// each target whose weight moved less than weightHysteresis from the one
-// in force, its value in before, the answer taken last, put back to that
-// value: what the source holds, which a follower takes from the leader's
-// snapshot, carries the weights in force, so every instance expands it
-// alike. A value that gives no weight, before or now, is taken as it is.
-// before is not changed, nor are the label maps of found.
+// holdWeights is found, a source's new answer, with some weight labels put
+// back. For each target whose weight moved less than weightHysteresis from
+// the one in force, the weight label is put back to its value in before,
+// the answer taken last. So what the source holds, which a follower takes
+// from the leader's snapshot, carries the weights in force, and every
+// instance expands it alike. A value that gives no weight, before or now, is
+// taken as it is. before is not changed, nor are the label maps of found.
 func holdWeights(before, found []discovered, label string) []discovered {
 	if label == "" || len(before) == 0 {
 		return found

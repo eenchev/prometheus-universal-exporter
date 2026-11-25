@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_http
+//go:build !select_request_types || (request_type_http && request_type_s3file && request_type_sql)
 
 package repository
 
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -17,30 +16,6 @@ import (
 // its collectors loads as the exporter loads it, one it shows without them
 // says it is part of one, and the chart README's Exporter authentication
 // values render and give the exporter a configuration that loads.
-
-// yamlBlocks returns the fenced YAML blocks of text.
-func yamlBlocks(text string) []string {
-	var blocks []string
-	for _, part := range strings.Split(text, "```yaml\n")[1:] {
-		block, _, _ := strings.Cut(part, "```")
-		blocks = append(blocks, block)
-	}
-	return blocks
-}
-
-// loadExample loads conf as the exporter's configuration file, credential
-// files included, and returns why it does not load.
-func loadExample(t *testing.T, conf string) error {
-	t.Helper()
-	cfg, err := config.Load(testutil.WriteIn(t, t.TempDir(), "config.yaml", conf))
-	if err != nil {
-		return err
-	}
-	if cfg.Web.BasicAuth != nil && cfg.Web.BasicAuth.Enabled {
-		_, _, err = config.WebAuthCredentials(cfg.Web.BasicAuth)
-	}
-	return err
-}
 
 func TestAuthenticationPageExamplesLoad(t *testing.T) {
 	loaded := 0

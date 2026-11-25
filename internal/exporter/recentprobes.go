@@ -12,28 +12,31 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The status page (statictargetstatus.go) also shows the recent probes: in
+// The status page (statictargetstatus.go) also shows the recent probes. In
 // most setups Prometheus does all the probing through /probe, and the
 // static targets section alone would show nothing of it. Each probe the
 // exporter answers is recorded under its collector, its target as the log
-// shows it and its probe parameters, with when it began, how long it took,
-// its result, the HTTP status it was answered with, the series it gave and
-// its error, shown as the static targets' errors are. A debug probe is not
-// recorded: it is counted nowhere and is the debug page's to show. Nor is a
-// probe refused before its collector and target were found good (a 400:
-// the caller's mistake, and anything at all could be its key), nor one whose
-// caller went away before it was answered.
+// shows it, and its probe parameters. The record holds when it began, how
+// long it took, its result, the HTTP status of its answer, the series it
+// gave, and its error, shown as the static targets' errors are. These
+// probes are not recorded:
 //
-// The targets come from whoever may call /probe, so what is kept is bounded:
-// the last recentProbesPerKey probes of each key, and no more than
-// recentProbeKeys keys, the key probed least recently forgotten to make room
-// for a new one. A key's target is cut to recentProbeTargetBytes and its
+//   - a debug probe: it is counted nowhere, and the debug page shows it;
+//   - a probe refused before its collector and target were found good (a
+//     400: the caller's mistake, and its key could be anything);
+//   - a probe whose caller went away before it was answered.
+//
+// The targets come from whoever may call /probe, so what is kept is
+// bounded: the last recentProbesPerKey probes of each key, and at most
+// recentProbeKeys keys. The key probed least recently is forgotten to make
+// room for a new one. A key's target is cut to recentProbeTargetBytes, its
 // parameters to recentProbeParamsBytes, and an error to
-// model.MaxFailureBytes, so the page holds at most about
+// model.MaxFailureBytes. So the page holds at most about
 // recentProbeKeys × recentProbesPerKey × model.MaxFailureBytes, 10 MB, of
-// errors, and far less in practice: a key failing the same way again keeps
-// the one text. A reload forgets the keys of every collector it removes or
-// changes, as the rest of the per-collector state (reconcile.go).
+// errors, and far less in practice: a key that fails the same way again
+// keeps the one text. A reload forgets the keys of every collector it
+// removes or changes, like the rest of the per-collector state
+// (reconcile.go).
 //
 // These are constants rather than flags: the exporter has no flag for any
 // page's size, and the bound is there to protect the exporter, not to be
@@ -66,20 +69,20 @@ const (
 	probeBackoff  = "backing off"
 )
 
-// recentProbeKey is what the probes are kept by: the collector, the target
-// as the log shows it and the probe parameters as the page shows them, each
-// cut to its bound. Two probes whose differences the cut or the redaction
-// hides share a key.
+// recentProbeKey is what probes are kept by: the collector, the target as
+// the log shows it, and the probe parameters as the page shows them, each
+// cut to its bound. Two probes that differ only in what the cut or the
+// redaction hides share a key.
 type recentProbeKey struct {
 	collector, target, params string
-	// replay is, when the target and every parameter are shown as they
-	// were sent, neither withheld, masked nor cut, the probe's query
-	// (collector, target and parameters, encoded), which the page links
-	// with debug=true at --web.debug=full; and empty when anything is
-	// shown otherwise, since the page has nothing to send the probe again
-	// with but what it shows. It is made of the values shown, so it adds
-	// nothing to the key's identity but in the probe whose sent values
-	// read as redacted ones do.
+	// replay is the probe's query (collector, target and parameters,
+	// encoded), which the page links with debug=true at --web.debug=full.
+	// It is set only when the target and every parameter are shown as they
+	// were sent, not withheld, masked or cut. It is empty when anything is
+	// shown otherwise, since the page can only resend the probe with what
+	// it shows. It is made of the shown values, so it adds nothing to the
+	// key's identity, except for a probe whose sent values read as redacted
+	// ones do.
 	replay string
 }
 
@@ -112,20 +115,20 @@ type recentProbes struct {
 	// order has the keys, the one probed most recently at the front.
 	order *list.List
 
-	// shown remembers the key each probe key (probeCacheKey) is recorded
-	// under, so that a probe like one before it, as nearly every probe is,
-	// is recorded at the cost of a lookup: making the key sorts the
-	// parameters and runs the redaction's patterns over each value, some
-	// microseconds and two dozen allocations on every probe, a cache hit
+	// shown remembers the key that each probe key (probeCacheKey) is
+	// recorded under. A probe like an earlier one, as nearly every probe
+	// is, is then recorded at the cost of a lookup. Making the key sorts the
+	// parameters and runs the redaction's patterns over each value: some
+	// microseconds and two dozen allocations on every probe, cache hits
 	// included. The key cannot be made later, when the page is shown, from
-	// the parameters as they came: the redaction is what makes probes whose
+	// the parameters as they came. The redaction is what makes probes whose
 	// values differ only in a credential one key, one row, and one of the
 	// recentProbeKeys. A probe key fixes the collector, the target and the
-	// parameters, so what it is remembered with is never wrong; it holds at
-	// most recentProbeKeysShown keys, each bounded as a key is, and is
-	// emptied when full rather than kept in order, since remembering it
-	// again costs only the work it saves. It has a lock of its own, read
-	// for a lookup, so that probes do not wait on each other for it.
+	// parameters, so the key remembered for it is never wrong. shown holds
+	// at most recentProbeKeysShown keys, each bounded like a key. It is
+	// emptied when full rather than kept in order, since remembering a key
+	// again costs only the work it saves. It has its own lock, taken for
+	// reading on a lookup, so probes do not wait on each other for it.
 	shownMu sync.RWMutex
 	shown   map[string]recentProbeKey
 }
@@ -134,10 +137,10 @@ func newRecentProbes() *recentProbes {
 	return &recentProbes{entries: map[recentProbeKey]*recentProbeEntry{}, order: list.New(), shown: map[string]recentProbeKey{}}
 }
 
-// keyOf is the key a probe of collector c of target, shown as logTarget,
-// with the probe key probeKey made of query (probeKeyQuery), is recorded
-// under. An empty probeKey, of a collector that could not be fingerprinted,
-// is no identity to remember the key by.
+// keyOf returns the key a probe is recorded under. The probe is of
+// collector c, of target shown as logTarget, with the probe key probeKey
+// made of query (probeKeyQuery). An empty probeKey, from a collector that
+// could not be fingerprinted, is no identity to remember the key by.
 func (r *recentProbes) keyOf(probeKey string, c *model.Collector, logTarget string, query url.Values) recentProbeKey {
 	if probeKey != "" {
 		r.shownMu.RLock()
@@ -160,11 +163,11 @@ func (r *recentProbes) keyOf(probeKey string, c *model.Collector, logTarget stri
 }
 
 // record keeps p as the latest probe of key, for a probe that read its
-// collector as read says. It records nothing once a reload has removed or
-// changed that collector: it asks under the lock the reload forgets the
-// collector's keys under (forgetLocked), so a probe of the old definition is
-// either recorded before they are forgotten, and forgotten with them, or
-// not at all.
+// collector as read says. Once a reload has removed or changed that
+// collector, it records nothing. It checks under the same lock the reload
+// uses to forget the collector's keys (forgetLocked). So a probe of the old
+// definition is either recorded before the keys are forgotten, and
+// forgotten with them, or not recorded at all.
 func (r *recentProbes) record(read configRead, key recentProbeKey, p recentProbe) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -264,16 +267,16 @@ func replayable(key recentProbeKey, query url.Values) bool {
 	return length <= recentProbeParamsBytes
 }
 
-// shownProbeParams is the parameters of a probe that change its request,
-// as the page shows them: name=value, in order of name. They are part of
-// the key, since they make other requests: tenants, paths. A value is no
-// secret by contract (it may fill a label value, § 42.10c), but one may
-// still have been sent as one: the value of a parameter whose name reads as
-// a credential is withheld, anything in a value that reads as one masked
-// (fetch.RedactText, which withholds a URL's userinfo too),
-// and each value cut to recentProbeParamBytes. Forwarded headers are not
-// shown: they are the caller's, and may carry credentials. query is the
-// probe's key's (probeKeyQuery), which is read, not changed.
+// shownProbeParams returns the parameters of a probe that change its
+// request, as the page shows them: name=value, ordered by name. They are
+// part of the key, since they make other requests: tenants, paths. By
+// contract a value is no secret (it may fill a label value, § 42.10c), but
+// it may still have been sent as one. So the value of a parameter whose
+// name reads as a credential is withheld, anything in a value that reads as
+// one is masked (fetch.RedactText, which also withholds a URL's userinfo),
+// and each value is cut to recentProbeParamBytes. Forwarded headers are not
+// shown: they are the caller's and may carry credentials. query is the
+// probe's key's (probeKeyQuery); it is read, not changed.
 func shownProbeParams(query url.Values) string {
 	names := make([]string, 0, len(query))
 	for name := range query {

@@ -82,10 +82,10 @@ func checkGroups(groups []TargetGroup) error {
 }
 
 // flatten is the targets of groups, each with its group's labels and the
-// labels mapping applied, refused when there are more than limit. The
-// targets of a group share one map of labels, which nothing changes: a
-// group of many targets and many labels, as a file_sd file's can be, is
-// held once rather than once for each target.
+// labels mapping applied. It is refused when there are more than limit. The
+// targets of a group share one map of labels, which nothing changes. So a
+// group of many targets and many labels, as a file_sd file's can be, is held
+// once rather than once for each target.
 func flatten(groups []TargetGroup, mapping map[string]string, limit int) ([]discovered, error) {
 	n := 0
 	for i := range groups {
@@ -104,12 +104,12 @@ func flatten(groups []TargetGroup, mapping map[string]string, limit int) ([]disc
 	return out, nil
 }
 
-// groupsOf is found as target groups: each run of targets with the same
-// labels one group, as flatten made them of a source's groups, so the
-// groups of a file_sd or http_sd answer come back as it gave them and
+// groupsOf is found as target groups. Each run of targets with the same
+// labels is one group, as flatten made them of a source's groups. So the
+// groups of a file_sd or http_sd answer come back as it gave them, and
 // flatten gives found back. What a source found is written, in a snapshot
-// and a digest, as its groups, not target by target with every label of
-// its group.
+// and a digest, as its groups, not target by target with every label of its
+// group.
 func groupsOf(found []discovered) []TargetGroup {
 	var out []TargetGroup
 	for _, d := range found {
@@ -230,12 +230,12 @@ func refreshHTTPSD(ctx context.Context, h *HTTPSDConfig, refresh string, timeout
 	return parseGroupsJSON(raw)
 }
 
-// redactSDError is err with the URL of each *url.Error in its chain shown
-// as a log line shows a target, the values of query parameters whose names
-// read as credentials masked: an http_sd URL may carry a token in its
-// query (http_sd.url refuses userinfo, not a query), and a failure's text
-// is logged and shown on the status page and in /v1/status. The URL of the
-// *url.Error is masked as it stands, the one the request was made to.
+// redactSDError is err with the URL of each *url.Error in its chain shown as
+// a log line shows a target: the values of query parameters whose names read
+// as credentials are masked. An http_sd URL may carry a token in its query
+// (http_sd.url refuses userinfo, not a query), and a failure's text is logged
+// and shown on the status page and in /v1/status. The URL of the *url.Error
+// is masked as it stands: the one the request was made to.
 func redactSDError(err error) error {
 	var urlErr *url.Error
 	if !errors.As(err, &urlErr) {

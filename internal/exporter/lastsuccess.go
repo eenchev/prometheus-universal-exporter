@@ -12,12 +12,12 @@ import (
 
 // A clock placeholder with ~last_success starts from the time of the last
 // successful trip of the same collector, target and parameters
-// (fetch/clockplaceholders.go). The exporter keeps that time, the clock the
-// trip's placeholders were filled from, for each of them in memory: a
-// start forgets them all, and each placeholder then starts from its
-// fallback. A trip that fails, or carries on past a failed stage, keeps the
-// last success it started from, so that the next asks for its time again;
-// a debug run reads the time and keeps nothing.
+// (fetch/clockplaceholders.go). The exporter keeps that time (the clock the
+// trip's placeholders were filled from) for each of them in memory. A start
+// forgets them all, and each placeholder then starts from its fallback. A
+// trip that fails, or carries on past a failed stage, keeps the last success
+// it started from, so the next trip asks for that time again. A debug run
+// reads the time and keeps nothing.
 
 // maxLastSuccesses bounds what is kept: past it, the success kept longest
 // ago is forgotten, its next trip starting from its fallback.
@@ -65,11 +65,11 @@ func (l *lastSuccesses) record(key string, now time.Time) {
 	l.at[key] = now
 }
 
-// lastSuccessKey is what a last success is kept under: the collector, the
-// static target, "" for a probe, the target, the path a probe or target
-// sets, and the parameters, so that two targets, or two tenants of one,
-// each start from their own. It is "" for a trip whose placeholders, and
-// whose transform, read no last success.
+// lastSuccessKey is the key a last success is kept under: the collector,
+// the static target ("" for a probe), the target, the path a probe or
+// target sets, and the parameters. So two targets, or two tenants of one,
+// each start from their own. It is "" for a trip whose placeholders and
+// transform read no last success.
 func lastSuccessKey(c *model.Collector, static *model.StaticTarget, target string, overrides fetch.RequestOverrides) string {
 	since := c.Clock.Since || c.TransformClock.Since
 	name := ""

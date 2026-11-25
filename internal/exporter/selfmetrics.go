@@ -89,10 +89,10 @@ type serverStats struct {
 	// keep them.
 	probeDurations, staticDurations durationHistogram
 	// retired is set when a reload removed the collector these statistics
-	// were of (reconcile.go): what a trip that began before then still
-	// counts in them is no longer shown, and starts no request being tracked
-	// (requestTracker.adopt). The statistics given to a probe or scrape whose
-	// collector was removed before it took any are retired from the start
+	// were of (reconcile.go). What a trip begun before then still counts in
+	// them is no longer shown, and starts no tracked request
+	// (requestTracker.adopt). A probe or scrape whose collector was removed
+	// before it took any statistics gets statistics retired from the start
 	// (Server.statsSince).
 	retired atomic.Bool
 	// since is the generation of the configuration the collector these
@@ -115,9 +115,9 @@ func (s *serverStats) snapshot() statsValues {
 }
 
 // selfMetricDescriptors are the exporter's per-collector metric families, in
-// the order they are exposed: each one's name, type and help text, and how its
-// value is read from a collector's counters. They are the single source of all
-// three, for the text exposition and for OTLP alike (selfMetricSet), so a
+// the order they are exposed. Each has its name, type and help text, and how
+// its value is read from a collector's counters. They are the single source
+// of all three for both the text exposition and OTLP (selfMetricSet), so a
 // family cannot be declared a gauge in one and a counter in the other. A
 // shared placeholder help would make the endpoint self-documenting in name
 // only: HELP is what a reader sees in Grafana's metric browser or `curl`.
@@ -195,20 +195,20 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_login_refreshes_total", model.CounterMetricType, "Logins of this http or graphite collector, of those counted in http_exporter_logins_total, that a steps login's refresh_steps made with the values kept, in place of its whole steps; 0 without refresh_steps.", nil},
 	// The buckets of request.rate_limit are the collector's, shared by its
 	// requests to an origin, so their waits have no per-request value
-	// either; they are counted by collector, never by target or origin,
-	// which a probe names.
+	// either. They are counted by collector, never by the target or origin
+	// a probe names.
 	{"http_exporter_rate_limit_waits_total", model.CounterMetricType, "Requests of this http or graphite collector, each attempt, page, redirect and login request counted, that waited for their turn under its request.rate_limit, or a static target's, before they were sent; 0 without request.rate_limit.", nil},
 	{"http_exporter_rate_limit_refused_total", model.CounterMetricType, "Requests of this http or graphite collector that its request.rate_limit, or a static target's, refused before they were sent, because their turn would have come at or past their deadline; the scrape failed with them.", nil},
 }
 
-// requestTypeFamilies are the families only the collectors of some request
-// types have, each with what says whether a type's registration
-// (fetch.RequestType) gives it the family: a collector of another type has
-// no series in them, so an exporter without such collectors, or built
-// without the types, does not show the family at all. The families are
-// listed here, whatever types are built, so that one is never shown for
-// every collector of a build that left its types out; which types have
-// them is the types' to say.
+// requestTypeFamilies are the families that only collectors of some request
+// types have. Each has a function that says whether a type's registration
+// (fetch.RequestType) gives it the family. A collector of another type has no
+// series in them, so an exporter without such collectors, or built without
+// the types, does not show the family at all. The families are listed here
+// whatever types are built, so a family is never shown for every collector of
+// a build that left its types out. Which types have them is for the types to
+// say.
 var requestTypeFamilies = map[string]func(rt *fetch.RequestType, family string) bool{
 	"http_exporter_scrape_grpc_status_code": func(rt *fetch.RequestType, _ string) bool { return rt.StatusCodes },
 	// A collector that reads files, or lists what its configuration names,
@@ -389,10 +389,10 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 // (reconcile.go).
 //
 // Every probe takes the statistics lock to find its collector's statistics,
-// so nothing is done under it here but finding each collector's: the names
-// are read from the configuration, by index, a collector being too large to
-// copy for its name, and the slices and the map are made at their size, all
-// before the lock is taken; and the map is filled once it is released
+// so the only work done under it here is finding each collector's. Before the
+// lock is taken, the names are read from the configuration by index (a
+// collector is too large to copy for its name), and the slices and the map
+// are made at their size. The map is filled once the lock is released
 // (BenchmarkCollectorStats reports how long it is held).
 func (s *Server) collectorStats() (names []string, values map[string]statsValues, stats map[string]*serverStats) {
 	followed := s.reconcile()
@@ -583,10 +583,10 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, countingSince(s.loadMetrics(), exporterStart())...)
 	out = append(out, countingSince(s.answerMetrics(), exporterStart())...)
-	// The reload counters are the configuration manager's and the OTLP ones
-	// the server's, neither of which a reload replaces, and the go_ and
-	// process_ ones the runtime's and the kernel's: all count since the
-	// exporter started.
+	// The reload counters are the configuration manager's, and the OTLP ones
+	// are the server's; a reload replaces neither. The go_ and process_ ones
+	// are the runtime's and the kernel's. All count since the exporter
+	// started.
 	started := exporterStart()
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
@@ -618,12 +618,11 @@ var revalidationResults = []struct {
 	{"not_modified", func(v statsValues) uint64 { return v.revalidatedNotModified }},
 }
 
-// cacheRevalidationMetrics is http_exporter_cache_revalidations_total: a
-// series for each result of every http and graphite collector, the types
-// whose responses are revalidated (fetch.Revalidable), from zero, so a rate
-// works from the start. It is by collector only, as
-// http_exporter_rule_failures_total is, with no per-request series in verbose
-// mode.
+// cacheRevalidationMetrics is http_exporter_cache_revalidations_total. It has
+// a series, from zero, for each result of every http and graphite collector
+// (the types whose responses are revalidated, fetch.Revalidable), so a rate
+// works from the start. Like http_exporter_rule_failures_total, it is by
+// collector only, with no per-request series in verbose mode.
 func cacheRevalidationMetrics(names []string, values map[string]statsValues, requestTypes map[string]string) []model.Metric {
 	const name = "http_exporter_cache_revalidations_total"
 	var out []model.Metric
@@ -642,10 +641,10 @@ func cacheRevalidationMetrics(names []string, values map[string]statsValues, req
 	return out
 }
 
-// secretStoreMetrics are the families of secret_stores: a series of each
-// for every store in force, labelled by its name, from zero. A store is the
-// exporter's, read by any collector, so the families have no collector
-// label.
+// secretStoreMetrics are the families of secret_stores: one series of each
+// for every store in force, labelled by its name, from zero. A store belongs
+// to the exporter and is read by any collector, so the families have no
+// collector label.
 func secretStoreMetrics() []model.Metric {
 	var out []model.Metric
 	counts := fetch.SecretStoreCounts()
@@ -672,12 +671,12 @@ func secretStoreMetrics() []model.Metric {
 	return out
 }
 
-// pythonStateMetrics are the families of transform.state: a series of each
-// for every collector whose scripts keep a state, from zero, so a collector
+// pythonStateMetrics are the families of transform.state: one series of each
+// for every collector whose scripts keep a state, from zero. A collector
 // without the key has none. The states are counted where they are kept
-// (transform.PythonStateCounts), and follow a reload as the collector's
-// other counts do (transform.FollowPythonStates): the dropped ones count
-// since the collector's counters began, which values says.
+// (transform.PythonStateCounts), and follow a reload as the collector's other
+// counts do (transform.FollowPythonStates). The dropped ones count since the
+// collector's counters began, which values says.
 func (s *Server) pythonStateMetrics(values map[string]statsValues) []model.Metric {
 	var out []model.Metric
 	collectors := s.manager.Get().Collectors
@@ -744,9 +743,9 @@ func hostRateLimitMetrics() []model.Metric {
 }
 
 // ruleFailureMetrics is http_exporter_rule_failures_total: a series for every
-// metric rule and derived entry of every collector, from zero, so a rate works from the start
-// and a rule that never fails still has its series. Two rules exporting one
-// metric name share it.
+// metric rule and derived entry of every collector, from zero. So a rate works
+// from the start and a rule that never fails still has its series. Two rules
+// exporting one metric name share it.
 func (s *Server) ruleFailureMetrics() []model.Metric {
 	var out []model.Metric
 	collectors := s.manager.Get().Collectors

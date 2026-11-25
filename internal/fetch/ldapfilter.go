@@ -11,24 +11,26 @@ import (
 	"unicode/utf8"
 )
 
-// A search's filter is written as RFC 4515 writes one, (&(objectClass=user)
-// (cn=a*)), and sent as RFC 4511 encodes it, in BER. ldapFilter parses the
-// text and writes the BER at once: and, or, not, equality, substrings, >=,
-// <=, presence, approximate match and extensible match, such as Active
-// Directory's bitwise AND, (userAccountControl:1.2.840.113556.1.4.803:=2).
-// A placeholder may stand in a filter's values alone, filled with its value
-// escaped as RFC 4515 escapes one (ldapEscapeFilterValue), so a probe can
-// add no parenthesis, wildcard or other part to the filter, and in a base
-// DN's attribute values alone, escaped as RFC 4514 escapes one
-// (ldapEscapeDNValue), so it can add no RDN.
+// A search's filter is written in RFC 4515 form, (&(objectClass=user)
+// (cn=a*)), and sent in the RFC 4511 BER encoding. ldapFilter parses the
+// text and writes the BER in one pass. It supports and, or, not, equality,
+// substrings, >=, <=, presence, approximate match and extensible match,
+// such as Active Directory's bitwise AND,
+// (userAccountControl:1.2.840.113556.1.4.803:=2). A placeholder may appear
+// only in two places:
+//   - in a filter's values, filled with its value escaped per RFC 4515
+//     (ldapEscapeFilterValue), so a probe cannot add a parenthesis,
+//     wildcard or any other part to the filter;
+//   - in a base DN's attribute values, escaped per RFC 4514
+//     (ldapEscapeDNValue), so it cannot add an RDN.
 
 // ldapMaxFilterDepth is how deeply &, | and ! may nest in a filter.
 const ldapMaxFilterDepth = 32
 
 // ldapPlaceholderMark stands in for each placeholder of a filter or a base
-// DN when it is checked at load: a character of Unicode's private use area,
-// which may stand in a value and nowhere else, so a placeholder elsewhere
-// is found where it stands.
+// DN when it is checked at load. It is a character from Unicode's private
+// use area, which is allowed in a value and nowhere else, so a placeholder
+// anywhere else is caught at its position.
 const ldapPlaceholderMark = '\uE000'
 
 // ldapAttributeDescription is what a filter's attribute is: a name or an
@@ -209,13 +211,13 @@ func (p *ldapFilterParser) item() ([]byte, error) {
 		substrings = append(substrings, berString(tag, decoded))
 	}
 	if len(substrings) == 0 {
-		// RFC 4511 gives a SubstringFilter at least one substring, and a
-		// server refuses one with none, so (cn=**) would fail every scrape.
-		// As written it is refused at load. Made so by placeholders filled
-		// with empty values, (cn=*{{param_x:}}*), it asks for a value
-		// holding the empty string, which every value does: it is sent as
-		// the presence filter, as (cn={{param_x:}}*) is, which fills in
-		// to (cn=*).
+		// RFC 4511 requires at least one substring in a SubstringFilter,
+		// and a server refuses one with none, so (cn=**) would fail every
+		// scrape. Written literally, it is refused at load. When it comes
+		// from placeholders filled with empty values, (cn=*{{param_x:}}*),
+		// it asks for a value holding the empty string, which every value
+		// does. So it is sent as the presence filter, like
+		// (cn={{param_x:}}*), which fills in to (cn=*).
 		if !p.filled {
 			return nil, fmt.Errorf("the filter's item %q is a substring match with no substring between its wildcards, which RFC 4511 does not allow; write (%s=*) for the entries that have the attribute", item, attribute)
 		}
@@ -313,11 +315,11 @@ func ldapEscapeFilterValue(value string) string {
 	return b.String()
 }
 
-// ldapEscapeDNValue writes a placeholder's value into a DN's attribute value
-// as RFC 4514 escapes one: " + , ; < > \ = with \ before them, NUL as \00,
-// and a # or blank at its start and a blank at its end with \ too, so
-// nothing in it ends the value or the RDN. A value that is not UTF-8 is
-// refused, a DN being text.
+// ldapEscapeDNValue writes a placeholder's value into a DN's attribute
+// value with RFC 4514 escaping: " + , ; < > \ = get a \ before them, NUL
+// becomes \00, and a # or blank at the start and a blank at the end also
+// get a \. So nothing in it ends the value or the RDN. A value that is not
+// UTF-8 is refused, because a DN is text.
 func ldapEscapeDNValue(value string) (string, error) {
 	if !utf8.ValidString(value) {
 		return "", errors.New("the value is not UTF-8 text, which a DN is")

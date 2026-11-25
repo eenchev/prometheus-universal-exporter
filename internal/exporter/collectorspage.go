@@ -9,20 +9,20 @@ import (
 )
 
 // The collectors page at /collectors lists each collector with a form that
-// probes a target through it, taking what the collector takes from a probe:
-// the target, its request parameters, the headers it forwards and, when it
-// forwards the probe's Authorization, a credential for the target.
+// probes a target through it. The form takes what the collector takes from
+// a probe: the target, its request parameters, the headers it forwards and,
+// when it forwards the probe's Authorization, a credential for the target.
 //
-// The form is sent by the page's script, which calls /probe and shows the
-// answer in place. That is how a credential reaches the target without being
-// written into a URL: it travels as the probe's Authorization header, as
-// Prometheus sends a monitor's. Its fields have no name, so without the script
-// the form still probes, as a plain GET of /probe, but leaves the credential
-// out rather than put it in the address bar and the history. Forwarded headers
-// are probe parameters, header_<name>, which is how Prometheus sends them too,
-// and so are not for secrets. A credential the collector's own configuration
-// holds is used by the exporter itself: the page says it is there, never
-// what it is.
+// The page's script sends the form: it calls /probe and shows the answer in
+// place. That way a credential reaches the target without being written
+// into a URL. It travels as the probe's Authorization header, the way
+// Prometheus sends a monitor's. The fields have no name, so without the
+// script the form still probes, as a plain GET of /probe, but leaves the
+// credential out rather than put it in the address bar and the history.
+// Forwarded headers are probe parameters, header_<name>, as Prometheus sends
+// them too, so they are not for secrets. A credential held by the
+// collector's own configuration is used by the exporter itself. The page
+// says it is there, never what it is.
 
 type collectorEntry struct {
 	Name, RequestType, Transform string

@@ -9,9 +9,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// ipFamilyRoute refuses request.ip_family on a collector whose requests are
-// not connected to the target's address by the exporter: one that sends them
-// to a Unix socket, or through a proxy of its own (proxy_url other than
+// ipFamilyRoute refuses request.ip_family on a collector whose requests the
+// exporter does not connect to the target's address. That is one that sends
+// them to a Unix socket, or through a proxy of its own (proxy_url other than
 // direct), which connects to the target itself. The environment's proxy is
 // known only when a request is sent (policyGuard.check).
 func ipFamilyRoute(c *model.Collector) error {

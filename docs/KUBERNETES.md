@@ -76,13 +76,15 @@ collectors:
 | `kubelet` | none | `stats/summary`: ask each node's kubelet for what its pods use, of a listing of `nodes`: see [Kubelet statistics](#kubelet-statistics). |
 | `kubelet_via_api_server`, `kubelet_ca_file` | the kubelets directly, verified against the API server's CA | How the kubelets are asked: see [Kubelet statistics](#kubelet-statistics). |
 
-No other request key applies, and setting one — `path`, `headers`,
-`allowed_targets` — is a startup error. The selectors are sent as written
-and checked by the API server: one it cannot read fails the scrape with its
-message. The decoder is `json`, whether `decoder.type` is left out or set to
-it; any other decoder, and a transform that does not read JSON (`regex`,
-`csv`, `css`, `prometheus`), is refused when the configuration loads. Use
-`jq`, `yq` or `python`.
+No other request key applies, and setting one (`path`, `headers`,
+`allowed_targets`) is a startup error. The selectors are sent as written and
+checked by the API server: one that it cannot read fails the scrape with its
+message.
+
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## No target
 
@@ -96,61 +98,71 @@ of the namespaces it names, all of them at once, four at a time.
 
 ## The API server
 
-The exporter lists the API server of the cluster it runs in, as any pod
-reaches it: at the address in `KUBERNETES_SERVICE_HOST` and
-`KUBERNETES_SERVICE_PORT`, with the token of its service account, and
-verifying the server's certificate against the cluster's CA, both from
-`/var/run/secrets/kubernetes.io/serviceaccount`. The token is read again at
-every scrape, so a rotated one is used. Outside a pod, without `api_server`,
-every scrape fails saying so.
+The exporter lists the API server of the cluster that it runs in, as any
+pod reaches it:
+
+- at the address in `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`;
+- with the token of its service account, read again at every scrape, so a
+  rotated token is used;
+- verifying the server's certificate against the cluster's CA.
+
+The token and the CA come from
+`/var/run/secrets/kubernetes.io/serviceaccount`. Outside a pod, without
+`api_server`, every scrape fails, saying so.
 
 The listing is the API's own: a `GET` of the resource's path,
 `/api/v1/namespaces/<namespace>/pods` for the core group and
 `/apis/<group>/<version>/namespaces/<namespace>/<resource>` for the others,
-without the namespace for `all_namespaces`, asking for pages of 100 objects
-and following each page's `continue` token to the last. A page larger than
-the response limit ([Limits](#limits)) is asked for again, with the same
-`continue` token, with half as many objects, down to one, and the rest of
-the listing keeps the smaller size; the next scrape starts at 100 again.
-The namespaces of a collector are listed at once, four at a time, so a
-collector of many takes about as long as its slowest few rather than as all
-of them added up; the document holds their objects in the order
-`namespaces` names them, and the first listing to fail ends the others and
-fails the scrape. The whole listing, every page of every namespace and
-every page asked for again, and with `kubelet` every kubelet's request,
-takes at most the probe's timeout; a listing with no deadline of its own,
-as a static target's without one, gives up after 30 seconds.
+without the namespace for `all_namespaces`.
+
+- **Pages.** The exporter asks for pages of 100 objects and follows each
+  page's `continue` token to the last. A page larger than the response limit
+  ([Limits](#limits)) is asked for again, with the same `continue` token and
+  half as many objects, down to one, and the rest of the listing keeps the
+  smaller size. The next scrape starts at 100 again.
+- **Namespaces.** A collector's namespaces are listed at the same time, four
+  at once, so a collector of many takes about as long as its slowest few,
+  not as long as all of them added up. The document holds their objects in
+  the order that `namespaces` names them. The first listing to fail ends the
+  others and fails the scrape.
+- **Time.** The whole listing (every page of every namespace, every page
+  asked for again, and with `kubelet` every kubelet's request) takes at most
+  the probe's timeout. A listing with no deadline of its own, such as a
+  static target's without one, gives up after 30 seconds.
 
 Two answers of a busy API server are taken in stride:
 
-- A page refused with `429 Too Many Requests`, which the API server's
+- A page refused with `429 Too Many Requests` is asked for again, at most
+  three times. The API server's
   [priority and fairness](https://kubernetes.io/docs/concepts/cluster-administration/flow-control/)
-  answers when it has no seat for the request, is asked for again after
-  the wait its `Retry-After` asks for, a second without one, at most three
-  times, and not when the wait would end after the scrape's deadline. Then
-  the scrape fails, saying how many times the page was asked for again. A
-  debug probe shows each wait after the request it followed.
-- A page whose `continue` token the API server no longer has, answered
-  `410 Gone` with the reason `Expired` because etcd compacted the version
-  the listing began at, goes on with the token the answer carries for the
-  rest of the listing as it is now; an answer with none starts the
-  listing over, once, each object listed once. A second such answer fails
-  the scrape: the objects change faster than they can be listed.
+  answers that when it has no seat for the request. The exporter waits as
+  long as `Retry-After` asks, or a second without it, and does not ask again
+  when the wait would end after the scrape's deadline. Then the scrape
+  fails, saying how many times the page was asked for again. A debug probe
+  shows each wait after the request that it followed.
+- A page whose `continue` token the API server no longer has is answered
+  `410 Gone` with the reason `Expired`, because etcd compacted the version
+  that the listing began at. The listing goes on with the token that the
+  answer carries, for the rest of the listing as it is now. An answer
+  without a token starts the listing over, once, with each object listed
+  once. A second such answer fails the scrape: the objects change faster
+  than they can be listed.
 
-Every request names the exporter in its `User-Agent`,
-`prometheus-universal-exporter/<version>`, the version `--version` prints,
-so the API server's audit log tells the exporter apart from other clients
-of its service account, and a FlowSchema can match it.
+Every request names the exporter in its `User-Agent`:
+`prometheus-universal-exporter/<version>`, with the version that
+`--version` prints. The API server's audit log can therefore tell the
+exporter apart from other clients of its service account, and a FlowSchema
+can match it.
 
 With [`otlp.traces.propagate`](OTLP.md#propagation-to-the-targets), each
 page's request carries the probe's or the scrape's W3C `traceparent` and
-`tracestate`, as an HTTP target's request does, under a span id of its own,
-which its span then has: an API server traced with `APIServerTracing` makes
-its spans of the listing children of the exporter's. An exported trace
-shows each request's DNS lookup, connection, TLS handshake and time to the
-first byte as spans under its own
-([Traces of slow requests](OTLP.md#traces-of-slow-requests)), each
-request's its own though the namespaces are listed at once.
+`tracestate`, as an HTTP target's request does, under a span id of its own
+that its span then has. An API server traced with `APIServerTracing` makes
+its spans of the listing children of the exporter's. An exported trace shows
+each request's DNS lookup, connection, TLS handshake and time to the first
+byte as spans under the request's own
+([Traces of slow requests](OTLP.md#traces-of-slow-requests)), separately for
+each request even though the namespaces are listed at the same time.
 
 The request goes through the proxy the environment names, as every request
 of the exporter does ([Proxies](REQUESTS.md#proxies)). Where the pod has
@@ -160,12 +172,12 @@ kubelets asked directly, the nodes' addresses, such as their CIDR.
 
 ### Permissions
 
-The exporter's service account needs `list` on what each collector lists,
-in each namespace it lists, or across the cluster for `all_namespaces`; it
-needs nothing else, since a collector only lists, but for a collector of the
-kubelets' statistics, which also needs `get` on `nodes/stats`
-([Kubelet statistics](#kubelet-statistics)). Without the permission
-every scrape fails, saying what the API server refused:
+The exporter's service account needs `list` on what each collector lists, in
+each namespace that it lists, or across the cluster for `all_namespaces`. It
+needs nothing else, because a collector only lists. The exception is a
+collector of the kubelets' statistics, which also needs `get` on
+`nodes/stats` ([Kubelet statistics](#kubelet-statistics)). Without the
+permission, every scrape fails, saying what the API server refused:
 
 ```text
 listing deployments (apps/v1) in the namespace shop answered 403 Forbidden:
@@ -186,11 +198,12 @@ deployments: the request to the API server failed; why is in the
 exporter's log`. See
 [What a failed probe's caller is told](CONFIGURATION.md#what-a-failed-probes-caller-is-told).
 
-The Helm chart grants it with `kubernetesAccess`: the rules name each
-resource's `apiGroups` (`""` for the core group) and `resources`, the verb
-is always `list`, `kubelet` adds `get` on the kubelets' statistics
-([Kubelet statistics](#kubelet-statistics)), and the chart mounts the pods'
-token, which it does not otherwise ([kubernetesAccess](../charts/prometheus-universal-exporter/README.md#kubernetes-collectors)):
+The Helm chart grants it with `kubernetesAccess`. The rules name each
+resource's `apiGroups` (`""` for the core group) and `resources`, and the
+verb is always `list`. `kubelet` adds `get` on the kubelets' statistics
+([Kubelet statistics](#kubelet-statistics)). The chart also mounts the pods'
+token, which it does not do otherwise
+([kubernetesAccess](../charts/prometheus-universal-exporter/README.md#kubernetes-collectors)):
 
 ```yaml
 kubernetesAccess:
@@ -208,9 +221,10 @@ namespace.
 ### Outside the cluster
 
 `api_server` names another API server, or the exporter's own cluster's when
-it runs outside it: an `https` URL, with a path when the server is behind
-one, such as a proxy's, and no user, query or fragment. Its credentials are
-the request's own keys, each file read at every scrape:
+the exporter runs outside it. It is an `https` URL, with a path when the
+server is behind one (such as a proxy's), and with no user, query or
+fragment. Its credentials are the request's own keys, and each file is read
+at every scrape:
 
 ```yaml
     request:
@@ -322,18 +336,18 @@ kubernetesAccess:
   `kubectl.kubernetes.io/last-applied-configuration`, which `kubectl apply`
   writes with the whole object it applied: a Secret's values among them.
 - The pages are asked for with that media type alone. An answer that is not
-  a `PartialObjectMetadataList`, from a proxy before the API server that
-  answers the objects whole, fails the scrape, and nothing of it reaches the
-  transforms; an API server that cannot answer it says `406`.
+  a `PartialObjectMetadataList`, such as one from a proxy in front of the API
+  server that answers the objects whole, fails the scrape, and nothing of it
+  reaches the transforms. An API server that cannot answer it says `406`.
 - It needs the same `list` permission, and cannot be with `kubelet`.
 
 ## Secrets
 
 A collector of the core group's `secrets` is refused when the configuration
-loads, unless it lists their metadata alone, `metadata_only: true`: their
+loads unless it lists only their metadata, with `metadata_only: true`. Their
 values would pass through the transforms, where an error, a debug report or
 a label could show them, and a metrics exporter has no business reading
-them. Of their metadata, a metric of each Secret's existence, labels or
+them. From their metadata, a metric of each Secret's existence, labels or
 age:
 
 ```yaml
@@ -356,9 +370,9 @@ age:
 
 The chart's `kubernetesAccess.rules` still refuse to grant `secrets`: `list`
 on them lets the account's token read their values, whatever the exporter
-asks for, so that grant is yours to make, knowing what it allows: with a
-Role of your own, or with `extraRules` and `allowBroadExtraRules`, which
-grants it as written, here in `shop` alone:
+asks for. That grant is yours to make, knowing what it allows, with a Role of
+your own or with `extraRules` and `allowBroadExtraRules`, which grants it as
+written. Here it is in `shop` alone:
 
 ```yaml
 kubernetesAccess:
@@ -376,12 +390,12 @@ other.
 
 ## Kubelet statistics
 
-What a pod uses of its node — its ephemeral storage, the bytes its
+What a pod uses of its node (its ephemeral storage, the bytes that its
 containers' writable layers, logs and `emptyDir` volumes take, its CPU and
-memory, its volumes' — is in no object of the API. The kubelet of each node
-has it, in its Summary API. `kubelet: stats/summary`, beside
-`resource: nodes` and `all_namespaces: true`, lists the nodes and asks each
-one's kubelet for its summary:
+memory, and its volumes) is in no object of the API. Each node's kubelet has
+it, in its Summary API. `kubelet: stats/summary`, beside `resource: nodes`
+and `all_namespaces: true`, lists the nodes and asks each one's kubelet for
+its summary:
 
 ```yaml
   - name: ephemeral_storage
@@ -478,25 +492,27 @@ The document is the summaries, and the nodes that gave none:
 - `items` are the summaries, each as its kubelet answered it, in the order
   the nodes were listed; `label_selector` and `field_selector` choose the
   nodes, `max_objects` bounds them.
-- `failed` are the nodes whose kubelet answered none, and why, in words that
-  name no address: its status, that the request failed, that its Node has
-  no address, that its answer is not JSON, or that its summary is larger
-  than the response limit. One node down leaves the others' series: a
-  kubelet that does not answer is given up on a tenth of the scrape's time
-  left before its deadline, at most a second before, and its node is among
-  the failed with `the request to the kubelet failed: context deadline
-  exceeded`. When no kubelet answers, the scrape fails as the first one
-  did, saying what to do about it.
+- `failed` lists the nodes whose kubelet answered nothing, and why, in words
+  that name no address: its status, that the request failed, that its Node
+  has no address, that its answer is not JSON, or that its summary is larger
+  than the response limit.
+- One node that is down leaves the others' series. A kubelet that does not
+  answer is given up on when a tenth of the scrape's time is left before the
+  deadline, at most a second before it. Its node is then among the failed
+  with `the request to the kubelet failed: context deadline exceeded`. When
+  no kubelet answers, the scrape fails as the first one did, saying what to
+  do about it.
 - Each summary is held to the response limit, and so are all of them
   together: a large cluster's need a `max_response_bytes` above 10 MiB, or
   a collector of each pool, chosen by `label_selector`.
 
-Each kubelet is asked at its Node's address, `InternalIP` first, then
-`Hostname` and `ExternalIP`, and the port the Node says its kubelet serves
-on, 10250 by default, four at a time, with the token the nodes are listed
-with. The service account needs `list` on `nodes` and `get` on
-`nodes/stats`, which the chart's `kubernetesAccess.kubelet: stats` grants
-beside a rule of `nodes`, with `clusterWide`:
+Each kubelet is asked at its Node's address (`InternalIP` first, then
+`Hostname` and `ExternalIP`) and on the port where the Node says its kubelet
+serves, 10250 by default. Four kubelets are asked at a time, with the token
+that the nodes are listed with. The service account needs `list` on `nodes`
+and `get` on `nodes/stats`, which the chart's
+`kubernetesAccess.kubelet: stats` grants beside a rule of `nodes`, with
+`clusterWide`:
 
 ```yaml
 kubernetesAccess:
@@ -508,19 +524,24 @@ kubernetesAccess:
       resources: [nodes]
 ```
 
-The kubelet's certificate is verified, since the token is sent to it:
-against `kubelet_ca_file`, or the CA the API server is verified against
-without it, the cluster's in its own cluster. That holds where the kubelets'
-serving certificates are signed by the cluster's CA, as with
-`serverTLSBootstrap`, or by a CA you give in `kubelet_ca_file`; where each
-kubelet signs its own, no CA verifies them and every node fails saying so.
-Then `kubelet_via_api_server: true` asks each kubelet through the API
-server's proxy of its node, `/api/v1/nodes/<name>/proxy/stats/summary`,
-which verifies the kubelets itself. That needs `get` on `nodes/proxy`
-(`kubernetesAccess.kubelet: proxy`), which lets its holder do all a kubelet
-does, running commands in containers among it: prefer `nodes/stats` where
-the certificates allow it. With `networkPolicy.egress` rules, the direct
-way needs one for the kubelets' port on the nodes' addresses.
+The kubelet's certificate is verified, because the token is sent to it. It
+is verified against `kubelet_ca_file` or, without it, against the CA that
+the API server is verified against (the cluster's, in its own cluster).
+
+- That works where the kubelets' serving certificates are signed by the
+  cluster's CA, as with `serverTLSBootstrap`, or by a CA that you give in
+  `kubelet_ca_file`.
+- Where each kubelet signs its own certificate, no CA verifies them, and
+  every node fails, saying so. Then `kubelet_via_api_server: true` asks each
+  kubelet through the API server's proxy of its node,
+  `/api/v1/nodes/<name>/proxy/stats/summary`, which verifies the kubelets
+  itself. That needs `get` on `nodes/proxy`
+  (`kubernetesAccess.kubelet: proxy`), which lets its holder do everything
+  that a kubelet does, including running commands in containers. Prefer
+  `nodes/stats` where the certificates allow it.
+
+With `networkPolicy.egress` rules, the direct way needs one for the
+kubelets' port on the nodes' addresses.
 
 ## Limits
 
@@ -529,15 +550,16 @@ way needs one for the kubelets' port on the nodes' addresses.
   listing with `namespaces`, `label_selector` or `field_selector` rather
   than raising it.
 - The collector's response limit, `request.max_response_bytes` or
-  `limits.max_response_bytes`, 10 MiB when neither is set, bounds each page
-  as the API server sends it, managed fields included, and the objects of
-  the whole listing, without them. A page over it is not taken but asked
-  for again with half as many objects, so large objects, such as custom
-  resources with large specs, make smaller pages rather than a failed
-  scrape; only a single object larger than the limit, or objects that come
-  to more than it, fail the scrape as a limit exceeded. A page holds at
-  most 100 objects and never more than the limit, so the limit bounds what
-  a scrape holds in memory whatever the cluster's size.
+  `limits.max_response_bytes`, 10 MiB when neither is set, bounds two
+  things: each page as the API server sends it, managed fields included,
+  and the objects of the whole listing, without them.
+- A page over the limit is not taken but asked for again with half as many
+  objects. Large objects, such as custom resources with large specs,
+  therefore make smaller pages instead of a failed scrape. Only a single
+  object larger than the limit, or objects that add up to more than it,
+  fail the scrape as an exceeded limit.
+- A page holds at most 100 objects and never more than the limit, so the
+  limit bounds what a scrape holds in memory, whatever the cluster's size.
 
 ## Examples
 
@@ -755,11 +777,14 @@ before the path, and `http_method="LIST"`; which namespaces are listed is the
 collector's. A collector has no target to refuse, so no
 `http_exporter_targets_refused_total` series.
 
-A [debug probe](CONFIGURATION.md#debug-probes) shows each page's
-request, `GET` and its URL with the `continue` token masked and the
-`limit` and the selectors shown, the bearer token
-masked, and the status it was answered with, a page over the response
-limit with its size and the limit after the status and followed by the
-same page's request with half the size, a page refused with `429` with the
-wait after it, each kubelet's request of a kubelet collector after the
-pages of the nodes, and then the document.
+A [debug probe](CONFIGURATION.md#debug-probes) shows:
+
+- each page's request: `GET` and its URL, with the `continue` token masked
+  and the `limit` and the selectors shown, and the bearer token masked;
+- the status that each page was answered with. A page over the response
+  limit has its size and the limit after the status, followed by the same
+  page's request with half the size; a page refused with `429` has the wait
+  after it;
+- with a kubelet collector, each kubelet's request after the pages of the
+  nodes;
+- and then the document.

@@ -1,6 +1,25 @@
 # Exporter self-metrics
 
-Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers `GET` and `HEAD`, and any other method `405` with `Allow: GET, HEAD`; and like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)); unlike `/probe`, it answers in Prometheus's protobuf format a scraper that asks for that first (see [Native histograms](#native-histograms)). The Helm chart's self-metrics monitor, `<fullname>-self`, scrapes the exporter itself, apart from the target-probing monitors of `monitors`. It is configured by the `selfMetrics` block: `enabled`, `type: service` (a ServiceMonitor) or `type: pod` (a PodMonitor), `path`, `interval`, `scrapeTimeout`, `labels`, `annotations`, and Prometheus Operator `relabelings` and `metricRelabelings` (see the [chart README](../charts/prometheus-universal-exporter/README.md#4-configure-prometheus)).
+Exporter self-health metrics are served at `/self-metrics` by default, and
+at that one path only.
+
+- Change the path with `--web.self-metrics-path`, for example
+  `--web.self-metrics-path=/metrics` for the conventional path. A path that
+  another endpoint uses, such as `/probe`, is refused at startup.
+- Like `/probe`, it answers `GET` and `HEAD`, and any other method with
+  `405` and `Allow: GET, HEAD`.
+- Like `/probe`, it answers in OpenMetrics when the scraper asks for it, and
+  in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)).
+- Unlike `/probe`, it answers in Prometheus's protobuf format to a scraper
+  that asks for that first (see [Native histograms](#native-histograms)).
+
+The Helm chart's self-metrics monitor, `<fullname>-self`, scrapes the
+exporter itself, separately from the target-probing monitors of `monitors`.
+It is configured by the `selfMetrics` block: `enabled`, `type: service` (a
+ServiceMonitor) or `type: pod` (a PodMonitor), `path`, `interval`,
+`scrapeTimeout`, `labels`, `annotations`, and Prometheus Operator
+`relabelings` and `metricRelabelings` (see the
+[chart README](../charts/prometheus-universal-exporter/README.md#4-configure-prometheus)).
 
 ## Collector metrics
 
@@ -76,16 +95,18 @@ Which of the error counters a failure raises depends on what failed, not on
 the words in its message: a script error that happens to say "missing" is a
 script error, not a missing key.
 
-A collector that a reload removes stops being reported, here and over OTLP, so
-Prometheus marks its series stale; one added again later under the same name
-starts from zero, and a probe or scrape of the removed collector that began
-before the reload, however far it had come by then, is not counted for it.
-The series of its [Python workers](#python-workers) are held to the same. A
-collector a reload changes keeps its counters, but its cached results are
-dropped, since they belong to the old definition. A probe or scrape that
-began before the reload caches nothing under the name of a collector the
-reload removed or changed, so `http_exporter_cache_entries` counts only the
-results of the collector as it is.
+- A collector that a reload removes stops being reported, here and over
+  OTLP, so Prometheus marks its series stale. One added again later under
+  the same name starts from zero. A probe or scrape of the removed collector
+  that began before the reload, however far it had come by then, is not
+  counted for it. The series of its [Python workers](#python-workers)
+  follow the same rule.
+- A collector that a reload changes keeps its counters, but its cached
+  results are dropped, because they belong to the old definition. A probe
+  or scrape that began before the reload caches nothing under the name of a
+  collector that the reload removed or changed, so
+  `http_exporter_cache_entries` counts only the results of the collector as
+  it is now.
 
 Every counter ends in `_total` and nothing else does. The self-metrics path
 and OTLP are built from the same definitions, so a family has the same type,
@@ -107,20 +128,21 @@ http_exporter_probe_duration_seconds_sum{collector="app_json",kind="probe"} 0.61
 http_exporter_probe_duration_seconds_count{collector="app_json",kind="probe"} 42
 ```
 
-A probe is observed as the gauge measures it: from its arrival to its
-answer being ready, before the answer is written, every probe of
-`http_exporter_scrapes_total` that was not a static target's — those
-answered from the response cache, or by
-[sharing another probe's request](#shared-probes), included. A probe of a
-collector with
+A probe is observed as the gauge measures it: from its arrival until its
+answer is ready, before the answer is written. Every probe of
+`http_exporter_scrapes_total` that was not a static target's is observed,
+including those answered from the response cache or by
+[sharing another probe's request](#shared-probes).
+
+A probe of a collector with
 [`report_failures`](CONFIGURATION.md#reporting-failed-probes-as-metrics)
 answers the same duration as `http_exporter_probe_elapsed_seconds`, a gauge
-of its own answer, not of this endpoint; its failure is counted here as any
-probe's is, and so is a probe of it that `error_handling` carried on past a
-failed stage, which is no success in `http_exporter_scrape_success_total`
-while it is one of a collector without the key. So the
-histogram says how long the exporter took to answer, which is what a
-`scrape_timeout` is set against:
+of its own answer, not of this endpoint. Its failure is counted here as any
+probe's is. So is a probe of it that `error_handling` carried on past a
+failed stage, which does not count as a success in
+`http_exporter_scrape_success_total`, although it does for a collector
+without the key. The histogram therefore says how long the exporter took to
+answer, which is what a `scrape_timeout` is set against:
 
 ```promql
 histogram_quantile(0.99,
@@ -128,22 +150,23 @@ histogram_quantile(0.99,
   > 8
 ```
 
-A static target's scrapes are observed apart, under `kind="static"`, from
-the scrape's start to its result being ready: they run on the static target
-file's schedule, not Prometheus', and a quantile of both would describe
-neither. A collector has its `kind="static"` series while a static target
-of the file in force names it, and only then; its `kind="probe"` series it
-has from the moment it is configured, empty until its first probe. The
-histogram is never labelled by target, which a probe names: a series of
+A static target's scrapes are observed separately, under `kind="static"`,
+from the scrape's start until its result is ready. They run on the static
+target file's schedule, not Prometheus', and a quantile of both would
+describe neither. A collector has its `kind="static"` series only while a
+static target of the file in force names it. It has its `kind="probe"`
+series from the moment it is configured, empty until its first probe. The
+histogram is never labelled by target, which a probe names: a series for
 every address asked for would have no bound.
 
-The buckets are those of the [scrape-time
-histogram](#scrape-time-histograms): 5 ms, 10 ms, 25 ms, 50 ms, 100 ms,
-250 ms, 500 ms, 1 s, 2.5 s, 5 s, 10 s, 30 s and 60 s, from a fast local
-endpoint to the longest scrape a Prometheus timeout allows, with the same
-[native buckets](#native-histograms) in the protobuf answer and the same
-[exemplars](#exemplars). A debug run is never observed. Each series counts
-since its collector's counters do ([Created timestamps](#created-timestamps)).
+The buckets are those of the
+[scrape-time histogram](#scrape-time-histograms): 5 ms, 10 ms, 25 ms,
+50 ms, 100 ms, 250 ms, 500 ms, 1 s, 2.5 s, 5 s, 10 s, 30 s and 60 s, from a
+fast local endpoint to the longest scrape that a Prometheus timeout allows.
+The protobuf answer has the same [native buckets](#native-histograms) and
+the same [exemplars](#exemplars). A debug run is never observed. Each series
+counts from the same time as its collector's counters
+([Created timestamps](#created-timestamps)).
 
 ## Build information
 
@@ -154,17 +177,23 @@ http_exporter_build_info{goversion="go1.26.0",request_types="dns,graphite,grpc,h
 <!-- /request-types -->
 
 As every Prometheus exporter does, one series with value `1` carries the
-build as labels: the version, the git revision (`-modified` when built from a
-changed checkout; for a build without git, such as the image's, the one
-`-ldflags "-X main.revision=<commit>"` sets, which the image's `REVISION`
-build argument passes and the release workflow sets to the tag's commit;
-`unknown` otherwise), the Go version, the
-[request types](CONFIGURATION.md#request-types) built in, and the `sql` type's
-[database drivers](SQL.md#building-with-more-drivers), a label left out
-in a build without the type. `--version` prints the same. The version is the one a release build sets with
-`-ldflags "-X main.version=1.4.0"`, otherwise the module version Go stamps,
-`(devel)` for a local build. Join it onto other series to see which build
-produced them:
+build as labels:
+
+- the version;
+- the git revision, with `-modified` when built from a changed checkout. For
+  a build without git, such as the image's, it is the one that
+  `-ldflags "-X main.revision=<commit>"` sets, which the image's `REVISION`
+  build argument passes and the release workflow sets to the tag's commit;
+  otherwise it is `unknown`;
+- the Go version;
+- the [request types](CONFIGURATION.md#request-types) built in;
+- the `sql` type's [database drivers](SQL.md#building-with-more-drivers), a
+  label left out in a build without the type.
+
+`--version` prints the same. The version is the one that a release build
+sets with `-ldflags "-X main.version=1.4.0"`, otherwise the module version
+that Go stamps, or `(devel)` for a local build. Join it onto other series to
+see which build produced them:
 
 ```promql
 up * on (instance) group_left (version) http_exporter_build_info
@@ -237,19 +266,24 @@ http_exporter_config_reloads_total{file="config",result="failure"} 1
 ```
 
 `file="config"` is the configuration with its
-[collector files](CONFIGURATION.md#collector-files); `file="static_targets"` is the
-[static target file](STATIC-TARGETS.md), reported only when there is
-one. Loading at startup counts as a success; the counter counts reloads after
-it, whatever triggered them: the watch, `SIGHUP` or
-[`POST /-/reload`](CONFIGURATION.md#reloading-on-demand). With the watch on,
-a [descriptor file](CONFIGURATION.md#descriptor-files) of a grpc collector
-that changes is a reload too, although no configuration file did: one that
-no longer has the collector's method, or no longer takes its message, turns
-the series to `0` at the next tick. A file rejected because it could not be
-read is tried at every tick until it can be
-([Watching the configuration](CONFIGURATION.md#watching-the-configuration));
-a try that fails as the last one did is not counted again. Alert on a change
-that did not take:
+[collector files](CONFIGURATION.md#collector-files); `file="static_targets"`
+is the [static target file](STATIC-TARGETS.md), reported only when there is
+one.
+
+- Loading at startup counts as a success. The counter counts the reloads
+  after it, whatever triggered them: the watch, `SIGHUP` or
+  [`POST /-/reload`](CONFIGURATION.md#reloading-on-demand).
+- With the watch on, a change to a
+  [descriptor file](CONFIGURATION.md#descriptor-files) of a grpc collector
+  is a reload too, although no configuration file changed. A descriptor file
+  that no longer has the collector's method, or no longer takes its
+  message, turns the series to `0` at the next tick.
+- A file rejected because it could not be read is tried at every tick until
+  it can be
+  ([Watching the configuration](CONFIGURATION.md#watching-the-configuration)).
+  A try that fails in the same way as the last one is not counted again.
+
+Alert on a change that did not take:
 
 ```promql
 http_exporter_config_last_reload_successful == 0
@@ -331,36 +365,37 @@ time() - http_exporter_allocator_last_sync_timestamp_seconds > 120
 
 ## Autoscaling
 
-Two counters say how busy a replica is, for a HorizontalPodAutoscaler to
-scale the exporter on rather than on CPU. Each is one series for the whole
-exporter, with no `collector` or target label, so it costs the same however
-many targets there are, and both are there from the start at `0`, whether or
-not the exporter has static targets or is probed:
+Two counters say how busy a replica is, so that a HorizontalPodAutoscaler
+can scale the exporter on them instead of on CPU. Each is one series for the
+whole exporter, with no `collector` or target label, so it costs the same
+however many targets there are. Both are there from the start at `0`,
+whether or not the exporter has static targets or is probed:
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `http_exporter_static_targets_scrape_seconds_total` | counter | Seconds spent on static target scrapes, each from its start to its end, waiting for a slot under `max_concurrent_probes` or `--probe.max-concurrent` included, a scrape answered from the cache or a reload made another target's too; not one the shutdown cut short. |
 | `http_exporter_probes_seconds_total` | counter | Seconds spent serving probes, each from its start to its answer being ready, the probes counted in `http_exporter_scrapes_total`: a cache hit, a probe that [shared](#shared-probes) another's trip and one a limit turned away too; not a refused request, such as one with no collector, nor a [debug probe](CONFIGURATION.md#debug-probes). |
 
-Each scrape or probe adds the time it took when it ends, the time its
-collector's `http_exporter_scrape_duration_seconds` reports. Their rate is
-seconds of work per second: the average number of static target scrapes and
-probes in progress over the window, which a gauge such as
-`http_exporter_trips_in_flight` only samples at the moment it is scraped.
-Added up, they are the load of one replica:
+Each scrape or probe adds the time that it took when it ends: the time that
+its collector's `http_exporter_scrape_duration_seconds` reports. Their rate
+is seconds of work per second, which is the average number of static target
+scrapes and probes in progress over the window. A gauge such as
+`http_exporter_trips_in_flight` only samples that at the moment it is
+scraped. Added up, they are the load of one replica:
 
 ```promql
 sum by (pod) (rate(http_exporter_static_targets_scrape_seconds_total[2m]))
   + sum by (pod) (rate(http_exporter_probes_seconds_total[2m]))
 ```
 
-A value of 3 is three scrapes or probes in progress on average. Probes spread
-over the replicas through the Service, and with the
+A value of 3 means three scrapes or probes in progress on average. Probes
+spread over the replicas through the Service, and with the
 [target allocator](ALLOCATOR.md) so do static targets, each replica scraping
-its share; so adding replicas brings each one's load down. Without the
-allocator every replica scrapes every static target, and its static target
-load does not fall as replicas are added: scale such a release on its probes,
-or not at all (see the [chart README](../charts/prometheus-universal-exporter/README.md#autoscaling)).
+its share, so adding replicas brings each one's load down. Without the
+allocator, every replica scrapes every static target, and its static target
+load does not fall as replicas are added: scale such a release on its
+probes, or not at all (see the
+[chart README](../charts/prometheus-universal-exporter/README.md#autoscaling)).
 
 In allocator mode `http_exporter_static_targets` is the replica's share of
 the static targets, those it keeps draining included, and the allocator's
@@ -452,7 +487,7 @@ rules:
 ```
 
 Put it under `autoscaling.metrics` with `target.type: AverageValue`, which
-the autoscaler divides by the replica count itself; with several releases in
+the autoscaler divides by the replica count itself. With several releases in
 a namespace, its `selector` picks the release's allocator by its `service`
 label, which the matchers then carry:
 
@@ -516,17 +551,18 @@ answers one series per instance.
 
 ## Shared probes
 
-`http_exporter_probes_coalesced_total{collector="..."}` counts the probes that
-were answered by sharing an identical probe already in flight, instead of going
-to the target themselves (see
+`http_exporter_probes_coalesced_total{collector="..."}` counts the probes
+that were answered by sharing an identical probe already in flight, instead
+of going to the target themselves (see
 [Identical probes share one request](CONFIGURATION.md#identical-probes-share-one-request)).
-With several Prometheus replicas it is normal for it to be roughly
-`(replicas - 1) / replicas` of `http_exporter_scrapes_total`; the trip to the
-target itself — its status, bytes, decode and transform counters — is counted
-once. It belongs to none of the probes sharing it: in the
-[verbose per-request series](#verbose-per-request-self-metrics) it is counted
-on the request whichever probe started it, also when that probe's caller went
-away and the trip answered the others.
+With several Prometheus replicas, it is normal for it to be roughly
+`(replicas - 1) / replicas` of `http_exporter_scrapes_total`.
+
+The trip to the target itself (its status, bytes, decode and transform
+counters) is counted once. It belongs to none of the probes sharing it: in
+the [verbose per-request series](#verbose-per-request-self-metrics), it is
+counted on the request whichever probe started it, even when that probe's
+caller went away and the trip answered the others.
 
 ## Debug runs
 
@@ -560,18 +596,21 @@ http_exporter_answer_sent_bytes_total{endpoint="static_targets"} 0
 
 Every answer is counted, an error or a refusal as much as an exposition, and
 what is counted is what was written: when a client goes away in the middle
-of an answer, the bytes written until then. An answer sent uncompressed —
-at `--web.gzip-level=0`, to a client that does not accept gzip, to a `HEAD`,
-whose body `net/http` then leaves out, or a `204` or `304` — adds the same to
-both. A compressed answer adds gzip's own header and trailer to the bytes
-sent, so one with a status and no body adds a few bytes sent and none
-written. An answer is counted when it is done, so the self-metrics
-show the bytes of their own answers from the next one on. Counting costs an
-answer no allocation: the writer that counts an answer sent uncompressed is
-reused from one answer to the next, and a compressed answer is counted in
-the writer that compresses it. All three series of
-each counter are there from the start, at `0`, also without static targets,
-so a rate can be taken from the first scrape.
+of an answer, the bytes written until then.
+
+- An answer sent uncompressed adds the same to both counters. That is an
+  answer at `--web.gzip-level=0`, to a client that does not accept gzip, to
+  a `HEAD` (whose body `net/http` then leaves out), or with a `204` or
+  `304`.
+- A compressed answer adds gzip's own header and trailer to the bytes sent,
+  so one with a status and no body adds a few bytes sent and none written.
+- An answer is counted when it is done, so the self-metrics show the bytes
+  of their own answers from the next one on.
+- Counting costs an answer no allocation: the writer that counts an
+  uncompressed answer is reused from one answer to the next, and a
+  compressed answer is counted in the writer that compresses it.
+- All three series of each counter are there from the start, at `0`, even
+  without static targets, so a rate can be taken from the first scrape.
 
 What compression saves, by endpoint:
 
@@ -610,16 +649,16 @@ process_open_fds 8
 ```
 
 The names, types and help texts match what `prometheus/client_golang`
-publishes, so an existing dashboard or alert works unchanged — that is the
-entire point of the prefix. The numbers come from the standard library rather
-than from a client library: this exporter renders its own exposition and keeps
-no registry, so pulling one in to gather these would add a dependency and an
-adapter for nothing.
+publishes, so an existing dashboard or alert works unchanged; that is the
+whole point of the prefix. The numbers come from the standard library
+instead of from a client library: this exporter renders its own exposition
+and keeps no registry, so pulling one in to gather these would add a
+dependency and an adapter for nothing.
 
 Reading them never stops the world. The memory statistics come from
 `runtime/metrics`, all in one read per scrape, and the collection pauses from
-`runtime/debug.ReadGCStats`; neither pauses the program the way
-`runtime.ReadMemStats` does, which is what kept these off by default while the
+`runtime/debug.ReadGCStats`. Neither pauses the program the way
+`runtime.ReadMemStats` does, which is why these were off by default while the
 exporter used it.
 
 ### What you get
@@ -661,19 +700,23 @@ exporter used it.
 
 The `go_memstats_*` values are worked out from the `runtime/metrics` memory
 classes the way client_golang's Go collector does for Go 1.17 and later, so
-they agree with what a client_golang program would publish. Mallocs and frees
-both count the tiny allocations, as `runtime.MemStats` does, so that their
-difference stays the number of live objects. `go_memstats_gc_sys_bytes` is the
-garbage collector's metadata other than the span and cache structures, and
-`go_memstats_other_sys_bytes` the runtime's other allocations without the
-profiling buckets: client_golang counts those separately, as
-`go_memstats_mspan_*`, `go_memstats_mcache_*` and
-`go_memstats_buck_hash_sys_bytes`, which this exporter does not publish.
+they agree with what a client_golang program would publish.
 
-The `runtime/metrics` sources are asked for by name. A Go release that renames
-or drops one makes every series built from it disappear rather than publish a
-zero or a sum with a part missing, so what you see is what the runtime the
-binary was built with actually offers.
+- Mallocs and frees both count the tiny allocations, as `runtime.MemStats`
+  does, so that their difference stays the number of live objects.
+- `go_memstats_gc_sys_bytes` is the garbage collector's metadata other than
+  the span and cache structures.
+- `go_memstats_other_sys_bytes` is the runtime's other allocations without
+  the profiling buckets.
+
+client_golang counts those separately, as `go_memstats_mspan_*`,
+`go_memstats_mcache_*` and `go_memstats_buck_hash_sys_bytes`, which this
+exporter does not publish.
+
+The `runtime/metrics` sources are asked for by name. A Go release that
+renames or drops one makes every series built from it disappear, instead of
+publishing a zero or a sum with a part missing, so what you see is what the
+runtime that the binary was built with actually offers.
 
 The `go_` series are published on every platform the exporter builds for. The
 `process_*` series are the operating system's view, read from `/proc`. They
@@ -724,24 +767,30 @@ is the one series that exists only in verbose mode: the per-collector view has
 no timestamp of its own. Status codes carry `0` when the request failed before a
 response arrived, so a transport failure is distinguishable from an HTTP error.
 
-The two views are raised through the same path, so a counter is never raised
-on one and not on the other; a test checks that. A collector's total is the
-sum of its tracked requests' and of what started no tracked request: a probe
-the collector's `allowed_targets` or `denied_targets` refused, a probe whose
-caller went away before it was answered, a trip to the target cancelled
-because every probe waiting for it had gone, and a probe past the limit
-below. A request that has since expired takes its share with it too.
+The two views are raised through the same code path, so a counter is never
+raised on one and not on the other; a test checks that. A collector's total
+is the sum of its tracked requests' counts and of what started no tracked
+request:
 
-A trip that [identical probes share](#shared-probes) is counted on the request
-when it ends, not with the probe that happened to start it. When that probe's
-caller goes away and the trip goes on to answer the others, everything the
-trip counted — the cache miss, the target's status and bytes, the decode,
-transform and error counters, the series emitted, the time of the scrape — is
-on the request those probes are counted on, once. The request's counters then
-differ from the collector's only by the probe that left, in
-`http_exporter_scrapes_total`. A request already tracked when a probe arrives
-counts that probe, and its trip, whatever becomes of them: only a request not
-tracked yet waits for a trip to end with an answer.
+- a probe that the collector's `allowed_targets` or `denied_targets`
+  refused;
+- a probe whose caller went away before it was answered;
+- a trip to the target cancelled because every probe waiting for it had
+  gone;
+- a probe past the limit below.
+
+A request that has since expired also takes its share with it.
+
+A trip that [identical probes share](#shared-probes) is counted on the
+request when it ends, not with the probe that happened to start it. When
+that probe's caller goes away and the trip goes on to answer the others,
+everything that the trip counted (the cache miss, the target's status and
+bytes, the decode, transform and error counters, the series emitted, the
+time of the scrape) is on the request that those probes are counted on,
+once. The request's counters then differ from the collector's only by the
+probe that left, in `http_exporter_scrapes_total`. A request already tracked
+when a probe arrives counts that probe and its trip, whatever becomes of
+them; only a request not tracked yet waits for a trip to end with an answer.
 
 Static targets are recorded the same way, and because their requests are
 fully described by the target file they are listed from startup with zero
@@ -760,18 +809,19 @@ reaches the target, so the last-scrape timestamp and status keep describing the
 scrape that filled the cache. The cache hit itself is counted, on the collector
 and on the request alike.
 
-The `url` label carries only the scheme, host and path. Userinfo credentials and
-the whole query string are dropped, because `request.query` or a probe parameter
-can carry a token or tenant identifier and a metric label is persisted by
-Prometheus and handed to anything federating from it. The label is built from
-the same resolution the real request uses, so it can never describe a different
-URL than the one fetched — with one deliberate exception: a
-[path parameter](REQUESTS.md#path-parameters) appears as its placeholder,
-`/api/{{param_tenant}}/status`, rather than its value, for the same reason the
-query string is dropped, and because one series per tenant would be unbounded.
+The `url` label carries only the scheme, host and path. Userinfo credentials
+and the whole query string are dropped, because `request.query` or a probe
+parameter can carry a token or a tenant identifier, and a metric label is
+stored by Prometheus and handed to anything federating from it. The label is
+built from the same resolution that the real request uses, so it can never
+describe a different URL from the one fetched, with one deliberate
+exception: a [path parameter](REQUESTS.md#path-parameters) appears as its
+placeholder, `/api/{{param_tenant}}/status`, instead of its value. That is
+for the same reason that the query string is dropped, and because one series
+per tenant would be unbounded.
 
 A [`localfile`](LOCALFILE.md#errors-and-self-metrics) collector's reads carry
-the file's `file://` URL, placeholders kept the same way, and
+the file's `file://` URL, with placeholders kept the same way, and
 `http_method="READ"`. The path in it is escaped as a URL's is, as it is for
 the `sshfile`, `s3file` and `sql` URLs below: a space in a file's name is
 `%20`, and a `?` or a `#` in it stays part of the path, as `%3F` and `%23`.
@@ -791,11 +841,11 @@ A [`grpc`](GRPC.md#self-metrics) collector's calls carry
 metadata are left out, as a query string is.
 
 A [`redis`](REDIS.md#errors-and-self-metrics) collector's scrapes carry
-`redis://host:port/db`, `rediss://` over TLS, and `http_method="INFO"` when
+`redis://host:port/db` (`rediss://` over TLS), and `http_method="INFO"` when
 the scrape sends INFO alone, `http_method="COMMANDS"` when it sends the
 collector's commands alone, and `http_method="INFO+COMMANDS"` when it sends
-`info_sections`' INFOs and the commands; the commands and their arguments are left out, as a
-query string is.
+the INFOs of `info_sections` and the commands. The commands and their
+arguments are left out, as a query string is.
 
 A [`tcp`](TCP.md#errors-and-self-metrics) collector's scrapes carry
 `tcp://host:port`, `tls://` over TLS, and `http_method="SEND"` when the
@@ -807,17 +857,22 @@ An [`ldap`](LDAP.md#errors-and-self-metrics) collector's scrapes carry
 `http_method="SEARCH"`; the searches' bases and filters are left out, as a
 query string is.
 
-A request URL is an unbounded label value and each combination now carries a
+A request URL is an unbounded label value, and each combination carries a
 whole metric family, so tracking is capped at 1000 collector/URL/method
-combinations. Requests already tracked keep updating past the limit; only new
-combinations are refused. A probe refused by the collector's `allowed_targets`
-or `denied_targets` does not take a slot, so probing forbidden targets cannot
-crowd out legitimate ones; nor does a probe whose caller went away before it
-was answered, or a trip cancelled because every probe waiting for it had gone:
-neither got the verdict. A combination nothing has probed or scraped for an
-hour is dropped and its slot freed; the configured static targets' stay, and
-leave when a reload removes the target or changes its URL. The truncation is
-visible rather than silent:
+combinations.
+
+- Requests already tracked keep updating past the limit; only new
+  combinations are refused.
+- A probe refused by the collector's `allowed_targets` or `denied_targets`
+  does not take a slot, so probing forbidden targets cannot crowd out
+  legitimate ones. Nor does a probe whose caller went away before it was
+  answered, or a trip cancelled because every probe waiting for it had gone:
+  neither got the verdict.
+- A combination that nothing has probed or scraped for an hour is dropped
+  and its slot freed. The configured static targets' combinations stay, and
+  leave when a reload removes the target or changes its URL.
+
+The truncation is visible, not silent:
 
 ```text
 http_exporter_request_series_capped 1
@@ -881,28 +936,28 @@ histogram_quantile(0.95,
   > 2
 ```
 
-The buckets are fixed: 5 ms, 10 ms, 25 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s,
-2.5 s, 5 s, 10 s, 30 s and 60 s. Only trips to the target are observed: a probe
-answered from the response cache, or by [sharing another probe's
-request](#shared-probes), made no trip and is not counted, so the histogram
-describes the target and the collector's processing, not how quickly the
-exporter could answer, which the probe histogram says. Static targets are
-observed like probes. Every
-configured collector has a histogram, empty until its first trip, and the
-durations are only recorded while verbose mode is on.
+The buckets are fixed: 5 ms, 10 ms, 25 ms, 50 ms, 100 ms, 250 ms, 500 ms,
+1 s, 2.5 s, 5 s, 10 s, 30 s and 60 s. Only trips to the target are observed:
+a probe answered from the response cache, or by
+[sharing another probe's request](#shared-probes), made no trip and is not
+counted. The histogram therefore describes the target and the collector's
+processing, not how quickly the exporter could answer, which the probe
+histogram says. Static targets are observed like probes. Every configured
+collector has a histogram, empty until its first trip, and the durations are
+only recorded while verbose mode is on.
 
 #### Native histograms
 
-This section and the next are of both histograms, the [probe
-histogram](#probe-durations) and the scrape-time one: their fixed buckets can
-only say that a scrape took between 2.5 and 5 seconds. The same durations are
-also kept in exponential buckets, which Prometheus
-calls a native histogram and OpenTelemetry an exponential histogram: buckets
-that are powers of a base, each a few percent wider than the one before,
-placed wherever the durations fall. A collector's histogram starts as finely
-as OpenTelemetry's SDKs start, and halves its resolution whenever it would
-need more than 160 buckets, so durations from 5 ms to a minute settle at
-eight buckets per doubling, each 9% wider than the last.
+This section and the next cover both histograms, the
+[probe histogram](#probe-durations) and the scrape-time one. Their fixed
+buckets can only say that a scrape took between 2.5 and 5 seconds, so the
+same durations are also kept in exponential buckets. Prometheus calls these
+a native histogram and OpenTelemetry an exponential histogram: buckets that
+are powers of a base, each a few percent wider than the one before, placed
+wherever the durations fall. A collector's histogram starts as finely as
+OpenTelemetry's SDKs start, and halves its resolution whenever it would need
+more than 160 buckets, so durations from 5 ms to a minute settle at eight
+buckets per doubling, each 9% wider than the last.
 
 Prometheus can only read a native histogram from its protobuf format: the
 text format has no way to write one, and OpenMetrics 2.0, which will, is
@@ -918,36 +973,39 @@ web:
 ```
 
 Each histogram is then written with both kinds of buckets, as Prometheus' Go
-client writes one with a bucket factor: the classic buckets above, which a
-Prometheus scraping classic histograms too
-(`always_scrape_classic_histograms`) keeps, and the native ones, at schema 3
-— a bucket factor of 1.09 — or coarser while the durations need it, with a
-zero bucket for durations of 0. Prometheus' `native_histogram_min_bucket_factor`
-lowers the resolution further, if you want fewer buckets per series:
+client writes one with a bucket factor:
+
+- the classic buckets above, which a Prometheus that also scrapes classic
+  histograms (`always_scrape_classic_histograms`) keeps;
+- the native ones, at schema 3 (a bucket factor of 1.09) or coarser while
+  the durations need it, with a zero bucket for durations of 0.
+
+Prometheus' `native_histogram_min_bucket_factor` lowers the resolution
+further, if you want fewer buckets per series:
 
 ```promql
 histogram_quantile(0.95, sum by (collector) (rate(http_exporter_probe_duration_seconds{kind="probe"}[5m])))
 ```
 
-Every other family is the same in protobuf as in the text format. Anyone else
-— a scraper that asks for the text format or OpenMetrics, gives it the same
-quality as protobuf, or does not ask — gets the text formats as before, with
-no trace of the native buckets; so does everyone with `native_histograms:
-false`. Only the self-metrics answer protobuf: `/probe` and the static
-targets pass on targets' histograms, which have classic buckets alone. The
-[OTLP export](OTLP.md#exponential-histograms) can send the same buckets as
-exponential histograms.
+Every other family is the same in protobuf as in the text format. Any other
+scraper (one that asks for the text format or OpenMetrics, gives it the same
+quality as protobuf, or does not ask) gets the text formats as before, with
+no trace of the native buckets, and so does everyone with
+`native_histograms: false`. Only the self-metrics answer protobuf: `/probe`
+and the static targets pass on targets' histograms, which have classic
+buckets alone. The [OTLP export](OTLP.md#exponential-histograms) can send the
+same buckets as exponential histograms.
 
 #### Exemplars
 
-With the [trace export](OTLP.md#traces-of-slow-requests) on, each bucket
-of both histograms has an exemplar: the latest probe or scrape observed in
-it, or of the scrape-time histogram the latest trip, whose trace was
-exported, with that trace's id and the probe's or the scrape's own span id,
-the duration and when it was observed. A trace is decided at the end of its
-probe, and an observation is the bucket's exemplar from then on; a bucket
-whose observations' traces were all dropped has none. From a slow bucket, a
-dashboard goes straight to the trace of a slow probe
+With the [trace export](OTLP.md#traces-of-slow-requests) on, each bucket of
+both histograms has an exemplar: the latest probe or scrape observed in it
+(for the scrape-time histogram, the latest trip) whose trace was exported.
+The exemplar has that trace's id and the probe's or the scrape's own span
+id, the duration, and when it was observed. A trace is decided at the end of
+its probe, and an observation is the bucket's exemplar from then on; a
+bucket whose observations' traces were all dropped has none. From a slow
+bucket, a dashboard goes straight to the trace of a slow probe
 ([Linking metrics, logs and traces](OTLP.md#linking-metrics-logs-and-traces)).
 
 Only a format that carries exemplars has them. OpenMetrics writes one after
@@ -981,32 +1039,46 @@ the state of its [Python workers](PYTHON.md#how-scripts-run):
 | `http_exporter_python_worker_stops_total` | `reason` | Workers stopped, and why (below). |
 | `http_exporter_python_runs_total` | `outcome` | Script runs, and how they ended (below). |
 
-A worker stops because of a `timeout` (the script overran `limits.script_timeout`
-and the worker was killed), a `deadline` (the probe's or scrape's deadline
-ended the script before `limits.script_timeout` did, and the worker was
-killed), a `crash` (the interpreter died, during a run or while it sat idle),
-an `output_limit` (it answered with more than `limits.max_output_bytes`),
-`cancelled` (the scrape was abandoned mid-run), `retired` (it reached 1,000
-runs), `surplus` (`--python.max-idle-workers` of its script, one by default,
-were idle already when its run ended), `idle` (unused for longer than
-`--python.idle-timeout`, two minutes by default), `reload` (a reload changed or removed its script, or removed
-its collector) or `evicted`
-(it was idle when another script needed a worker under
-`--python.max-workers`). `retired`, `surplus`, `idle` and `reload` are routine;
-the first five each cost the next scrape a fresh interpreter, and many
-`evicted` say the limit is too low for the scripts in use.
+A worker stops for one of these reasons:
 
-A run ends `ok`, `script_error` (the script raised or called `fail(...)`,
-with a message of any length, or
-left `data` or `metrics` the worker does not write, such as a list that holds
-itself or strings and keys that are longer together than
-`limits.max_output_bytes`; the worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
-(the probe's or scrape's deadline ended it first, or ran out while the
-response was handed to the worker: the time to raise is the probe's, not
-`script_timeout`), `output_limit` (it wrote an answer longer than
-`limits.max_output_bytes`, and the worker was stopped) or `failed` (the worker
-could not be reached or its answer was unreadable). A worker found dead when it was taken from the
-pool is replaced before the run, and is no failed run.
+- `timeout`: the script overran `limits.script_timeout` and the worker was
+  killed;
+- `deadline`: the probe's or scrape's deadline ended the script before
+  `limits.script_timeout` did, and the worker was killed;
+- `crash`: the interpreter died, during a run or while it sat idle;
+- `output_limit`: it answered with more than `limits.max_output_bytes`;
+- `cancelled`: the scrape was abandoned mid-run;
+- `retired`: it reached 1,000 runs;
+- `surplus`: `--python.max-idle-workers` of its script (one by default) were
+  already idle when its run ended;
+- `idle`: unused for longer than `--python.idle-timeout`, two minutes by
+  default;
+- `reload`: a reload changed or removed its script, or removed its
+  collector;
+- `evicted`: it was idle when another script needed a worker under
+  `--python.max-workers`.
+
+`retired`, `surplus`, `idle` and `reload` are routine. The first five each
+cost the next scrape a fresh interpreter, and many `evicted` stops say that
+the limit is too low for the scripts in use.
+
+A run ends with one of these results:
+
+- `ok`;
+- `script_error`: the script raised or called `fail(...)`, with a message of
+  any length, or left `data` or `metrics` that the worker does not write,
+  such as a list that holds itself, or strings and keys that are longer
+  together than `limits.max_output_bytes`. The worker carries on;
+- `timeout`: it overran `limits.script_timeout`;
+- `deadline`: the probe's or scrape's deadline ended it first, or ran out
+  while the response was handed to the worker (the time to raise is the
+  probe's, not `script_timeout`);
+- `output_limit`: it wrote an answer longer than `limits.max_output_bytes`,
+  and the worker was stopped;
+- `failed`: the worker could not be reached, or its answer was unreadable.
+
+A worker found dead when it was taken from the pool is replaced before the
+run, and that does not count as a failed run.
 
 ```promql
 # a collector whose script keeps timing out
@@ -1017,33 +1089,37 @@ increase(http_exporter_python_worker_start_failures_total[5m]) > 0
 
 Every label is from a fixed set, and a collector without Python has none of
 these series. The counters are kept whether or not verbose mode is on, so
-turning it on through a reload shows what was counted before it was on.
-They count what the workers did, whoever asked: the scripts of a
-[debug probe](CONFIGURATION.md#debug-probes) or of a configured
-collector run on the [debug page](CONFIGURATION.md#the-debug-page), which
-are counted in no other self-metric but `http_exporter_debug_runs_total`,
-run in the collector's workers and are counted here.
+turning it on through a reload shows what was counted before. They count
+what the workers did, whoever asked: the scripts of a
+[debug probe](CONFIGURATION.md#debug-probes), or of a configured collector
+run on the [debug page](CONFIGURATION.md#the-debug-page), run in the
+collector's workers and are counted here, although they are counted in no
+other self-metric but `http_exporter_debug_runs_total`.
 
-They are the collector's, and follow a reload as its
-[other counters](#collector-metrics) do. A reload that removes the collector
-drops them: the series are gone, here and over OTLP, and a collector added
-again under the name starts every one of them from zero, with workers of its
-own. A script of the removed collector that is still under way then —
-waiting for a worker, running, or ending — and the stop of its worker, for
-the `reload` or for anything else, are counted under no collector's name,
-whether or not the collector is back by then: they are counted for
-[the pool](#the-python-execution-pool) alone. A worker is the collector's
-that started it for as long as it lives. One of the removed collector is
-stopped for the `reload`, at once when it is idle and when its script ends
-when it is busy, also where the probe began before the reload and its script
-after it, and is never handed to the collector added again, though the
-script is the same; a script of the removed collector that is still to run
-starts a worker of its own rather than take one of the collector that is
-back. So the workers a collector has started, less those stopped under its
-name, are always the ones its `idle` and `busy` series show. A collector
-whose definition a reload changed keeps its counters, the `reload` stop of
-the worker of a script that changed among them, and an unchanged collector
-keeps everything, its idle workers too.
+They belong to the collector, and follow a reload as its
+[other counters](#collector-metrics) do.
+
+- A reload that removes the collector drops them: the series are gone, here
+  and over OTLP, and a collector added again under the name starts every one
+  of them from zero, with workers of its own.
+- A script of the removed collector that is still under way then (waiting
+  for a worker, running, or ending), and the stop of its worker, for the
+  `reload` or for anything else, are counted under no collector's name,
+  whether or not the collector is back by then. They are counted for
+  [the pool](#the-python-execution-pool) alone.
+- A worker belongs to the collector that started it for as long as it lives.
+  A worker of the removed collector is stopped for the `reload`: at once
+  when it is idle, and when its script ends when it is busy, even where the
+  probe began before the reload and its script after it. It is never handed
+  to the collector added again, even though the script is the same. A script
+  of the removed collector that is still to run starts a worker of its own
+  instead of taking one of the collector that is back.
+- The workers that a collector has started, less those stopped under its
+  name, are therefore always the ones that its `idle` and `busy` series
+  show.
+- A collector whose definition a reload changed keeps its counters, the
+  `reload` stop of the worker of a changed script among them. An unchanged
+  collector keeps everything, its idle workers too.
 
 #### The Python execution pool
 
@@ -1062,14 +1138,15 @@ http_exporter_python_pool_runs_total{outcome="ok"} 4381
 ...
 ```
 
-These are always there in verbose mode, even when no collector uses Python, so
-a dashboard or alert on the pool works on every exporter without knowing which
-collectors run scripts; on an exporter without Python collectors they read zero.
-They sum every collector the pool has served, including collectors a reload has
-since removed and what the scripts and workers of such a collector did after
-the reload, so the counters never go backwards. They have their own names,
-rather than being an unlabelled series of the per-collector families, so
-`sum(http_exporter_python_runs_total)` never counts a run twice.
+These are always there in verbose mode, even when no collector uses Python,
+so a dashboard or alert on the pool works on every exporter without knowing
+which collectors run scripts; on an exporter without Python collectors they
+read zero. They sum every collector that the pool has served, including
+collectors that a reload has since removed and what the scripts and workers
+of such a collector did after the reload, so the counters never go
+backwards. They have their own names, instead of being an unlabelled series
+of the per-collector families, so `sum(http_exporter_python_runs_total)`
+never counts a run twice.
 
 ```promql
 # workers are not being reused: more than one start per ten runs
@@ -1081,13 +1158,13 @@ increase(http_exporter_python_pool_worker_start_failures_total[5m]) > 0
 
 ## Created timestamps
 
-A counter says how much, not since when: after a restart, or when a collector
-is removed and added again, a counter starts from zero, and a scraper that
-sees `5` and then `3` knows it started again, while one that sees `5` and then
-`7` cannot tell a counter that grew by 2 from one that started again and
-counted 7. OpenMetrics has a sample for that, `_created`: the Unix time since
-which a counter, a histogram or a summary series has been counting. The
-exporter knows it of its own series, and writes it when asked to:
+A counter says how much, not since when. After a restart, or when a
+collector is removed and added again, a counter starts from zero. A scraper
+that sees `5` and then `3` knows that it started again, but one that sees `5`
+and then `7` cannot tell a counter that grew by 2 from one that started again
+and counted 7. OpenMetrics has a sample for that, `_created`: the Unix time
+since which a counter, a histogram or a summary series has been counting.
+The exporter knows it for its own series, and writes it when asked to:
 
 ```yaml
 web:
@@ -1107,34 +1184,34 @@ http_exporter_collector_scrape_duration_seconds_count{collector="app_json"} 2
 http_exporter_collector_scrape_duration_seconds_created{collector="app_json"} 1759491000.12
 ```
 
-The sample follows its series, in the series' family and with its labels, and
-only in an [OpenMetrics](CONFIGURATION.md#openmetrics) answer of the
-self-metrics endpoint: the text format has no such sample and is unchanged,
+The sample follows its series, in the series' family and with its labels,
+and only in an [OpenMetrics](CONFIGURATION.md#openmetrics) answer of the
+self-metrics endpoint. The text format has no such sample and is unchanged,
 and so are the answers of `/probe` and the static targets endpoint, whose
 series come from targets that do not say when they started. Like the other
-self-metrics settings it is configuration, so a reload turns it on and off.
+self-metrics settings, it is configuration, so a reload turns it on and off.
 
 It is off by default, as it is in Prometheus' own Go client
 (`EnableOpenMetricsTextCreatedSamples`), because of what Prometheus does with
 the samples:
 
 - Without its created-timestamp feature, Prometheus stores every `_created`
-  line as a series of its own, `http_exporter_scrapes_created{...}` with the
-  time as its value: one more series for each counter, histogram and summary
-  series, which with [verbose](#verbose-per-request-self-metrics) self-metrics
-  is some twenty per tracked request.
-- With `--enable-feature=created-timestamp-zero-ingestion`, a Prometheus that
-  reads created timestamps from the OpenMetrics text format takes the time as
-  the start of the series instead: it writes a sample of `0` at that time
-  before the series' first value, so `rate()` and `increase()` count a new
-  series from zero and see one that started again, and stores no `_created`
-  series. Check that your Prometheus version does this for OpenMetrics text
-  before turning the setting on for it; early versions of the feature read
-  created timestamps only from the protobuf format, which the self-metrics
-  endpoint writes for a Prometheus that asks for it
-  ([native histograms](#native-histograms)), with each counter's, histogram's
-  and summary's creation time in its `created_timestamp`, under the same
-  setting.
+  line as a series of its own, `http_exporter_scrapes_created{...}`, with the
+  time as its value. That is one more series for each counter, histogram and
+  summary series, which with [verbose](#verbose-per-request-self-metrics)
+  self-metrics is some twenty per tracked request.
+- With `--enable-feature=created-timestamp-zero-ingestion`, a Prometheus
+  that reads created timestamps from the OpenMetrics text format takes the
+  time as the start of the series instead. It writes a sample of `0` at that
+  time before the series' first value, so `rate()` and `increase()` count a
+  new series from zero and notice one that started again, and it stores no
+  `_created` series. Check that your Prometheus version does this for
+  OpenMetrics text before turning the setting on for it. Early versions of
+  the feature read created timestamps only from the protobuf format, which
+  the self-metrics endpoint writes for a Prometheus that asks for it
+  ([native histograms](#native-histograms)), with each counter's,
+  histogram's and summary's creation time in its `created_timestamp`, under
+  the same setting.
 
 The time is when the series began to count:
 
@@ -1147,15 +1224,15 @@ The time is when the series began to count:
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |
 | `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the counters of the [Python execution pool](#the-python-execution-pool), and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The pool's counters keep what a collector counted when a reload removes it, so they do not start again. |
 
-The exporter's start is the start of its process, the same time
-`process_start_time_seconds` reports — where the platform does not say, the
-moment the exporter was loaded — and the same at every scrape. A series that
-goes on counting across a reload keeps its time, and no series' time changes
-while the series is shown: a slow probe that began before a request's time and
-ends after it adds its counts to the request's series and leaves the time
-alone. When such a probe is the one that brings a dropped request back, the
-request counts since the probe ended, which is later than the time it showed
-before, rather than since the probe began.
+The exporter's start is the start of its process, the same time that
+`process_start_time_seconds` reports (where the platform does not say, the
+moment the exporter was loaded), and it is the same at every scrape. A series
+that goes on counting across a reload keeps its time, and no series' time
+changes while the series is shown. A slow probe that began before a
+request's time and ends after it adds its counts to the request's series and
+leaves the time alone. When such a probe is the one that brings a dropped
+request back, the request counts from when the probe ended, which is later
+than the time that it showed before, not from when the probe began.
 
 One counter has no `_created` sample: `go_memstats_alloc_bytes_total`. Its
 OpenMetrics family would be named `go_memstats_alloc_bytes`, which is the

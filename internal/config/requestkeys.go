@@ -16,12 +16,14 @@ import (
 // (ownRequestKeys).
 var requestConfigType = reflect.TypeOf(model.RequestConfig{})
 
-// ownRequestKeys adds to the properties of the request block at path the
-// keys of every request type's own, as a collector of the type writes them
-// beside the common part's (fetch.RequestType.Config): a built type's as
-// its struct and its KeyRules say, and those of a type the build left out
-// as the catalogue holds them (fetch.UnbuiltRequestKeys), so the schema
-// describes every key of every type of the tree in every build.
+// ownRequestKeys adds each request type's own keys to the properties of the
+// request block at path. These are the keys a collector of the type writes
+// beside the common part's (fetch.RequestType.Config):
+//   - for a built type, as its struct and its KeyRules say;
+//   - for a type the build left out, as the catalogue holds them
+//     (fetch.UnbuiltRequestKeys).
+//
+// So the schema describes every key of every type of the tree in every build.
 func ownRequestKeys(properties map[string]any, path string, rules map[string]map[string]any) {
 	for _, rt := range fetch.OwnKeyTypes() {
 		for key, schema := range ownKeySchemas(rt, path, rules) {

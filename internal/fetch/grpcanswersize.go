@@ -12,28 +12,30 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// An answer is rendered as JSON with every zero value written, which can make
-// the JSON far larger than the message: an empty element of a repeated field
-// is two bytes on the wire, and its every field in the JSON. The JSON's size
-// is therefore counted from the message as it arrived, before the message is
-// decoded, and an answer whose JSON is over the response limit is refused
-// then: neither the decoding nor the rendering of an answer that is refused
-// costs more than reading it. The count is a lower bound of the JSON, made as
-// protojson writes it: braces, field names, separators, every field the
-// answer leaves out at its zero value, integers, strings with their escapes,
-// bytes in base64 and enum names exactly; floating-point numbers and the
-// well-known types at their shortest. An answer the count lets through is
-// rendered and measured as before, so that what the count leaves short is
-// bounded too, and only by a small factor of what was read.
+// An answer is rendered as JSON with every zero value written, which can
+// make the JSON far larger than the message. For example, an empty element
+// of a repeated field is two bytes on the wire but all of its fields in the
+// JSON. So the JSON's size is counted from the message as it arrived,
+// before decoding, and an answer whose JSON is over the response limit is
+// refused at that point. Neither decoding nor rendering a refused answer
+// costs more than reading it. The count is a lower bound of the JSON,
+// following how protojson writes it. These are counted exactly: braces,
+// field names, separators, every field the answer leaves out at its zero
+// value, integers, strings with their escapes, bytes in base64 and enum
+// names. Floating-point numbers and the well-known types are counted at
+// their shortest. An answer the count lets through is rendered and
+// measured as before, so any shortfall in the count is bounded too, by a
+// small factor of what was read.
 //
-// A field the answer carries more than once is counted each time, as is a
-// map key: no encoder writes either, and counting them once would need what
-// the decoder does to them, which costs as much as decoding.
+// A field the answer carries more than once is counted each time, and so
+// is a repeated map key. No encoder writes either, and counting them once
+// would require doing what the decoder does with them, which costs as much
+// as decoding.
 
 // answerCodec is the codec a call's answer is read with: grpc-go's proto
-// codec, with the answer's JSON counted (jsonCount) before it is decoded.
-// Each call has its own, which keeps the refusal for the call to report:
-// grpc-go turns what Unmarshal returns into an INTERNAL status.
+// codec, with the answer's JSON counted (jsonCount) before decoding. Each
+// call has its own, which keeps the refusal for the call to report, because
+// grpc-go turns whatever Unmarshal returns into an INTERNAL status.
 type answerCodec struct {
 	limit    int64
 	resolver anyResolver
@@ -82,16 +84,16 @@ func (c *answerCodec) Unmarshal(data mem.BufferSlice, v any) error {
 	return proto.Unmarshal(raw, m)
 }
 
-// jsonCountDepth is how deep jsonCount follows messages: the decoder's own
-// recursion limit (proto.UnmarshalOptions.RecursionLimit), which counts each
-// map entry as a level as well, so a message too deep to count is too deep
-// to decode.
+// jsonCountDepth is how deep jsonCount follows messages. It equals the
+// decoder's own recursion limit (proto.UnmarshalOptions.RecursionLimit),
+// which also counts each map entry as a level. So a message too deep to
+// count is too deep to decode.
 const jsonCountDepth = 10000
 
 // jsonCount counts the JSON a message becomes (see answerCodec). It stops
-// as soon as the count is over the limit, so the work it does is bounded by
-// the message and the limit: every step adds at least a byte to the count,
-// or reads one of the message's.
+// as soon as the count is over the limit. Every step adds at least a byte
+// to the count or reads a byte of the message, so its work is bounded by
+// the message and the limit.
 type jsonCount struct {
 	n, limit int64
 	resolver anyResolver

@@ -45,14 +45,14 @@ func notAMapping(n *yaml.Node, name string) error {
 	return lineError(n, "cannot unmarshal %s%s into %s", n.ShortTag(), value, name)
 }
 
-// decodeSwitchedBlock decodes a block that does nothing until its enabled
-// key turns it on, such as otlp and web.basic_auth, into out, a pointer to
-// the block's struct without its UnmarshalYAML. Settings without the switch
-// would be ignored without a word — credentials that protect nothing, an
-// endpoint nothing is exported to — so a block that sets any key but enabled
-// is refused: enabled: true turns it on, and enabled: false says the settings
-// are kept on purpose. name is the block's Go type, as the decoder's errors
-// spell it, and block what the file calls it.
+// decodeSwitchedBlock decodes into out a block that does nothing until its
+// enabled key turns it on, such as otlp and web.basic_auth. out is a pointer
+// to the block's struct without its UnmarshalYAML. Settings without the
+// switch would be ignored silently: credentials that protect nothing, an
+// endpoint nothing is exported to. So a block that sets any key but enabled
+// is refused. enabled: true turns it on, and enabled: false says the
+// settings are kept on purpose. name is the block's Go type, as the
+// decoder's errors spell it, and block is what the file calls it.
 func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 	if n.Kind != yaml.MappingNode {
 		return notAMapping(n, name)
@@ -94,15 +94,14 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 }
 
 // decodeBlock decodes n, a mapping, into out, a pointer to the block's
-// struct without its UnmarshalYAML, and returns every problem of the
-// block in the order of the file: unknown, the keys the block refuses,
-// which its own check found, and the decoder's message of each value of
-// the wrong kind. A block that checks its own keys decodes itself all the
-// same, so that an unknown key does not hide the values after it, nor one
-// value the keys and values after it; each value is decoded again on its
-// own, so that a message the decoder gives with its line alone is placed
-// at its key (placeMessages). An error of another kind than the decoder's
-// is returned as it is.
+// struct without its UnmarshalYAML. It returns every problem of the block in
+// file order: unknown, the keys the block refuses (found by its own check),
+// and the decoder's message for each value of the wrong kind. A block that
+// checks its own keys is still decoded whole, so an unknown key does not
+// hide the values after it, and one bad value does not hide the keys and
+// values after it. Each value is also decoded again on its own, so a message
+// the decoder gives with only its line is placed at its key (placeMessages).
+// An error of a kind other than the decoder's is returned as it is.
 func decodeBlock(n *yaml.Node, out any, unknown []keyProblem) ([]keyProblem, error) {
 	placed := unknown
 	err := n.Decode(out)
@@ -151,13 +150,13 @@ func resolveAlias(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// KeyName is the key of a mapping as the decoder reads it: the text it is
-// written as, or, of a key that is an alias (*name: value), the text of the
-// node the anchor holds, which is the key the value is decoded into, and not
-// the anchor's name, which the alias node holds as its value. Every check of
-// a mapping's keys written by hand reads a key's text through it, so an
-// alias key is the key it stands for wherever the decoder takes it for one.
-// An alias of <<, which the decoder reads as the text "<<" rather than as a
+// KeyName returns the key of a mapping as the decoder reads it: the text it
+// is written as. For a key that is an alias (*name: value), it is the text
+// of the node the anchor holds, which is the key the value is decoded into,
+// not the anchor's name, which the alias node holds as its value. Every
+// hand-written check of a mapping's keys reads a key's text through it, so
+// an alias key is the key it stands for wherever the decoder takes it for
+// one. An alias of <<, which the decoder reads as the text "<<" and not as a
 // merge, is that text here too: only a << written out merges (mergeTag).
 func KeyName(key *yaml.Node) string {
 	if named := resolveAlias(key); named != nil {
@@ -169,11 +168,12 @@ func KeyName(key *yaml.Node) string {
 // MappingEntry is a key of a mapping and its value.
 type MappingEntry struct{ Key, Value *yaml.Node }
 
-// MappingEntries is every key a mapping holds with its value: its own and,
-// in the place of each merge key (<<: *base, or <<: [*a, *b]), those of the
-// mappings merged in, as the decoder reads them. Every check of a mapping's
-// keys written by hand goes through it, so a merged key is a key wherever the
-// decoder takes it for one. A value that is an alias is the node it names.
+// MappingEntries returns every key a mapping holds, with its value: its own
+// keys and, in place of each merge key (<<: *base, or <<: [*a, *b]), the
+// keys of the mappings merged in, as the decoder reads them. Every
+// hand-written check of a mapping's keys goes through it, so a merged key is
+// a key wherever the decoder takes it for one. A value that is an alias is
+// the node it names.
 func MappingEntries(n *yaml.Node) []MappingEntry {
 	var entries []MappingEntry
 	visiting := map[*yaml.Node]bool{}
@@ -206,25 +206,26 @@ func MappingEntries(n *yaml.Node) []MappingEntry {
 	return entries
 }
 
-// DecodedEntries is the entries of a mapping the decoder uses, in the order
-// it reads them: the mapping's own, then those merged in. Where MappingEntries
-// is every key a mapping could take a value from, this is each key with the
-// value it does take: a key the mapping sets itself is not taken from a
-// merged mapping, wherever in the mapping the merge key stands, and a key
-// that several merged mappings set is taken from the first — the first of a
-// list (<<: [*a, *b]), and a merged mapping's own before what is merged into
+// DecodedEntries returns the entries of a mapping that the decoder uses, in
+// the order it reads them: the mapping's own, then those merged in.
+// MappingEntries is every key a mapping could take a value from; this is
+// each key with the value it does take. A key the mapping sets itself is not
+// taken from a merged mapping, wherever the merge key stands. A key that
+// several merged mappings set is taken from the first: the first of a list
+// (<<: [*a, *b]), and a merged mapping's own keys before what is merged into
 // it in turn. A check of a mapping's values goes through it, so a value an
-// anchor holds and the mapping overrides, which the decoder never reads there,
-// is not held against it.
+// anchor holds and the mapping overrides, which the decoder never reads
+// there, is not held against it.
 //
-// Three things follow the decoder rather than the eye. A key YAML reads as no
-// key at all (null, ~) sets nothing, so none stands for another and each is
-// returned. The decoder knows a mapping's own keys by what YAML reads
-// them as, so one that is not text — 1, true — does not keep out a merged key
-// of the same spelling, whose value replaces its own: both are returned. And
-// a key that is an alias (*name: value) is the key the anchor holds, not the
-// anchor's name, and keeps out what that key does; it is returned as it is
-// written, at its own line, for a check to resolve (resolveAlias).
+// Three things follow the decoder rather than the eye:
+//   - A key YAML reads as no key at all (null, ~) sets nothing, so none
+//     stands for another and each is returned.
+//   - The decoder knows a mapping's own keys by what YAML reads them as, so
+//     one that is not text (1, true) does not keep out a merged key of the
+//     same spelling, whose value replaces its own. Both are returned.
+//   - A key that is an alias (*name: value) is the key the anchor holds, not
+//     the anchor's name, and keeps out what that key does. It is returned as
+//     written, at its own line, for a check to resolve (resolveAlias).
 func DecodedEntries(n *yaml.Node) []MappingEntry {
 	var entries []MappingEntry
 	taken := map[string]bool{}
@@ -270,13 +271,13 @@ func DecodedEntries(n *yaml.Node) []MappingEntry {
 	return entries
 }
 
-// checkKnownKeys refuses a key of a mapping, at any depth, that the struct it
-// is decoded into has no field for, with the decoder's own message. Types
-// that decode themselves check their own keys. name is what the message calls
-// t, which is a local type when checked from t's own UnmarshalYAML. The keys
-// are those the decoder reads: an alias is what it names, a key that is an
-// alias the key it names (KeyName), and a merge key supplies the keys of the
-// mappings it merges in (MappingEntries).
+// checkKnownKeys refuses a key of a mapping, at any depth, that has no field
+// in the struct it is decoded into, with the decoder's own message. Types
+// that decode themselves check their own keys. name is what the message
+// calls t; it is a local type when checked from t's own UnmarshalYAML. The
+// keys are those the decoder reads: an alias is what it names, a key that
+// is an alias is the key it names (KeyName), and a merge key supplies the
+// keys of the mappings it merges in (MappingEntries).
 func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 	return keyProblemsError(unknownKeys(n, t, name))
 }

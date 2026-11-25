@@ -12,13 +12,13 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// The protobuf decoder reads a body as one protobuf message and hands on the
-// JSON a grpc answer is written as (grpcJSON), so the two read alike: fields
-// by their names in the .proto file, the ones left unset with their zero
-// values, 64-bit integers as strings. The message's type comes from the
+// The protobuf decoder reads a body as one protobuf message and hands on
+// the JSON a grpc answer is written as (grpcJSON), so the two read alike:
+// fields by their names in the .proto file, unset fields with their zero
+// values, and 64-bit integers as strings. The message's type comes from the
 // files response.protobuf names, read and kept as a grpc request's
-// descriptor files are (descriptorFiles), which is why the decoder is in the
-// builds that have the grpc request type and in no other: the modules that
+// descriptor files are (descriptorFiles). So the decoder is in the builds
+// that have the grpc request type and in no other, since the modules that
 // read descriptors are linked for that type alone.
 
 // ProtobufDecoder says whether this build has the protobuf decoder.

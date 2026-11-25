@@ -23,80 +23,80 @@ import (
 )
 
 // A sql collector keeps its connections to a target in a pool, a
-// database/sql DB, one for each collector, target and connection settings
-// (sqlPoolKey): the account and credential files, the database, the
-// options, the TLS settings, the connection settings and the policy, so
-// that a change to any of them is a pool of its own. A pool is made at the
-// first scrape that needs it and shared by the collector's later scrapes of
-// the target; a pool is never shared between collectors.
+// database/sql DB. There is one pool for each collector, target and set of
+// connection settings (sqlPoolKey): the account and credential files, the
+// database, the options, the TLS settings, the connection settings and the
+// policy. So a change to any of them gets a pool of its own. A pool is made at
+// the first scrape that needs it and shared by the collector's later scrapes
+// of the target. A pool is never shared between collectors.
 //
-// The limits are of targets, not pools: a target (sqlTargetKey) is the
-// collector, the server or Snowflake account, and the connection settings,
-// so that the pools of the databases and accounts a collector reaches on one
-// server are one target's, while a static target whose connections block
-// gives it other settings is a target of its own, with its own limits.
+// The limits apply to targets, not pools. A target (sqlTargetKey) is the
+// collector, the server or Snowflake account, and the connection settings.
+// So the pools of the databases and accounts a collector reaches on one
+// server belong to one target. A static target whose connections block gives
+// it other settings is a target of its own, with its own limits.
 //
-//   - max_per_target bounds the connections to a target, across its pools:
-//     a scrape, or a keepalive ping, holds one of the target's places
+//   - max_per_target bounds the connections to a target, across its pools.
+//     A scrape, or a keepalive ping, holds one of the target's places
 //     (sqlTarget.sem) while it has a connection. A scrape that finds every
 //     place taken waits for one within its deadline, counted in the
-//     collector's limit waits, and fails naming the limit when the deadline
-//     comes first, counted in its limit failures. The connections kept idle
-//     hold no place, so a scrape that would make a connection while the
-//     target's places taken and its other pools' idle connections come to
-//     more than the limit first closes enough of those idle connections
-//     (makeRoom): the connections open to the target, in use or idle, are
-//     held to the limit. A reload that changes the settings makes another
-//     target, so that the old one's pools drain under the old limit. Each
-//     pool is held to the limit too (DB.SetMaxOpenConns). A target keeps no
-//     more pools than max_per_target, a pool being of no use without a
-//     connection, and no more than sqlMaxPoolsPerTarget without a limit: a
-//     scrape that needs another pool at the limit closes the target's pool
-//     used longest ago that no scrape is using, and fails, counted in the
-//     limit failures, when every one is in use (roomForPoolLocked).
+//     collector's limit waits. If the deadline comes first, it fails naming
+//     the limit, counted in its limit failures. Idle connections hold no
+//     place. So before a scrape makes a connection, if the target's places
+//     taken plus its other pools' idle connections exceed the limit, it first
+//     closes enough of those idle connections (makeRoom). This holds the
+//     connections open to the target, in use or idle, to the limit. A reload
+//     that changes the settings makes another target, so the old one's pools
+//     drain under the old limit. Each pool is held to the limit too
+//     (DB.SetMaxOpenConns). A target keeps no more pools than max_per_target,
+//     since a pool is of no use without a connection, and no more than
+//     sqlMaxPoolsPerTarget without a limit. A scrape that needs another pool
+//     at the limit closes the target's least recently used pool that no
+//     scrape is using. It fails, counted in the limit failures, when every
+//     pool is in use (roomForPoolLocked).
 //   - max_idle_per_target is how many connections a target keeps idle
-//     between scrapes, across its pools: a pool keeps no more
+//     between scrapes, across its pools. A pool keeps no more
 //     (SetMaxIdleConns), and a connection given back to a target whose pools
-//     keep that many idle already is closed (giveBack). idle_timeout is how
-//     long an idle one is kept (SetConnMaxIdleTime) and max_lifetime how
-//     long one is used at all (SetConnMaxLifetime); 0 keeps none idle, keeps
-//     them while the collector exists, and uses them for ever.
-//   - max_targets bounds the targets a collector has pools open for: a
-//     scrape of another target at the limit closes the pools of the target
-//     used longest ago that no scrape is using, and fails, counted in the
-//     limit failures, when every target is in use.
+//     already keep that many idle is closed (giveBack). idle_timeout is how
+//     long an idle connection is kept (SetConnMaxIdleTime), and max_lifetime
+//     how long one is used at all (SetConnMaxLifetime). A value of 0 keeps
+//     none idle, keeps them while the collector exists, and uses them for
+//     ever, respectively.
+//   - max_targets bounds the targets a collector has pools open for. A scrape
+//     of another target at the limit closes the pools of the least recently
+//     used target that no scrape is using. It fails, counted in the limit
+//     failures, when every target is in use.
 //   - keepalive check tcp sets TCP keepalives at the interval on every
-//     connection the exporter dials, so that one a firewall or a dead host
-//     dropped is found broken. check ping asks the database instead: every
-//     interval each idle connection of the pool is pinged, and a connection
-//     a ping finds broken is closed by database/sql when the driver says
-//     so; each failed ping is counted in the collector's keepalive failures.
-//     Each ping takes one of the target's places at max_per_target without
-//     waiting, the connections pinged being as many as the places free, and
-//     the round is skipped for the interval when the scrapes hold all of
-//     them; it is given the interval to answer in, so that it holds the
-//     place no longer than until the next is due, and one that does not
-//     answer by then is a failed ping. It never makes a connection
-//     (sqlNoConnect): it pings those the pool keeps idle or none. A ping
-//     is no use of the connection to idle_timeout: database/sql counts a
-//     connection's idle time from when it was last given back, a ping's
-//     giving back too, so with an idle_timeout the pool keeps when a scrape
-//     last had each connection (sqlIdleUse), and the keepalive closes the
-//     connection it took instead of pinging it when no scrape has had it
+//     connection the exporter dials, so a connection that a firewall or a
+//     dead host dropped is found broken. check ping asks the database
+//     instead. Every interval, each idle connection of the pool is pinged.
+//     database/sql closes a connection a ping finds broken when the driver
+//     says so. Each failed ping is counted in the collector's keepalive
+//     failures. Each ping takes one of the target's places at max_per_target
+//     without waiting, so as many connections are pinged as places are free.
+//     The round is skipped for the interval when the scrapes hold all of
+//     the places. A ping is given the interval to answer in, so it holds the place
+//     no longer than until the next one is due. A ping that does not answer
+//     by then is a failed ping. It never makes a connection (sqlNoConnect):
+//     it pings those the pool keeps idle, or none. A ping does not count as a
+//     use of the connection for idle_timeout. database/sql counts a
+//     connection's idle time from when it was last given back, including a
+//     ping's giving back. So with an idle_timeout the pool records when a
+//     scrape last had each connection (sqlIdleUse). The keepalive closes the
+//     connection it took, instead of pinging it, when no scrape has had it
 //     for idle_timeout.
 //
-// The credential and TLS files are read each time a connection is made, so
-// a password or a certificate replaced on disk is used by the next
-// connection. A reload closes the pools of collectors it removes and those
-// whose settings it changes (follow); the exporter's shutdown closes all
-// of them (closeAll). A closed pool is forgotten at once, so the next
-// scrape makes a new one, but the scrapes using it then, a statement in
-// progress or a scrape waiting at its max_per_target, finish on it: its
-// database/sql DB is closed when the last of them is done. A driver's Close
-// of a connection may wait on the network, so connections are closed apart
-// from the cache's lock and from a scrape past its deadline; and a
-// statement's end, which a driver may not bound, is bounded by the scrape's
-// deadline (end).
+// The credential and TLS files are read each time a connection is made, so a
+// password or certificate replaced on disk is used by the next connection. A
+// reload closes the pools of collectors it removes and of those whose
+// settings it changes (follow). The exporter's shutdown closes all of them
+// (closeAll). A closed pool is forgotten at once, so the next scrape makes a
+// new one. But the scrapes using it at that moment, with a statement in
+// progress or waiting at its max_per_target, finish on it. Its database/sql
+// DB is closed when the last of them is done. A driver's Close of a
+// connection may wait on the network, so connections are closed apart from
+// the cache's lock and from a scrape past its deadline. A statement's end,
+// which a driver may not bound, is bounded by the scrape's deadline (end).
 
 // sqlPoolKey is what a pool is kept by: the collector, the target, the
 // database with its placeholders filled, and the collector's settings.
@@ -115,10 +115,10 @@ type sqlTargetKey struct {
 	conns     sqlConnSettings
 }
 
-// sqlTarget is a target's limits and pools, kept while one of its pools'
-// DB is open, a pool a reload closed while scrapes were using it among
-// them, so that a pool made for the target in the meantime shares its
-// places with the scrapes finishing on the old one.
+// sqlTarget is a target's limits and pools. It is kept while the DB of one
+// of its pools is open, including a pool a reload closed while scrapes were
+// using it. So a pool made for the target in the meantime shares its places
+// with the scrapes finishing on the old one.
 type sqlTarget struct {
 	key sqlTargetKey
 	// sem is the target's places at max_per_target, held by a scrape or a
@@ -128,17 +128,17 @@ type sqlTarget struct {
 	// them are not closed; under the cache's lock.
 	pools map[*sqlPool]struct{}
 	open  int
-	// giving is held while a connection is given back to one of the
-	// target's pools to be kept idle (giveBack), from the count of the idle
-	// connections to the connection's return, so that two given back at once
-	// are counted one after the other.
+	// giving is held while a connection is given back to one of the target's
+	// pools to be kept idle (giveBack), from counting the idle connections to
+	// the connection's return. So two connections given back at once are
+	// counted one after the other.
 	giving sync.Mutex
 }
 
-// sqlMaxPoolsPerTarget is how many pools a target without a max_per_target
-// keeps open at most: each database or account a probe names is a pool, a
-// DB with goroutines of its own, and a target with a max_per_target keeps no
-// more pools than it may have connections.
+// sqlMaxPoolsPerTarget is the most pools a target without a max_per_target
+// keeps open. Each database or account a probe names is a pool, a DB with
+// its own goroutines. A target with a max_per_target keeps no more pools
+// than it may have connections.
 const sqlMaxPoolsPerTarget = 64
 
 // poolsPerTarget is how many pools a target of settings s keeps open at most.
@@ -163,10 +163,9 @@ type sqlPool struct {
 	inUse    int
 	lastUsed time.Time
 	closed   bool
-	// uncounted says the pool was closed for a collector the
-	// configuration no longer has, or at the shutdown: the connections its
-	// last scrapes make are no longer the collector's to count. Under the
-	// cache's lock.
+	// uncounted says the pool was closed for a collector the configuration no
+	// longer has, or at shutdown. The connections its last scrapes make are
+	// then no longer counted for the collector. Guarded by the cache's lock.
 	uncounted bool
 	// stop ends the pool's keepalive pings.
 	stop chan struct{}
@@ -175,23 +174,23 @@ type sqlPool struct {
 	// idle is when a scrape last had each connection, for a pool that
 	// pings with an idle_timeout; nil for any other.
 	idle *sqlIdleUse
-	// sockets is the network connections each connection dialed, by the
-	// driver's connection as idle keeps them, those of a connection whose
-	// network connections are all closed forgotten when the pool makes
-	// another (keepSockets).
+	// sockets holds the network connections each connection dialed, keyed by
+	// the driver's connection as idle keeps them. When the pool makes another
+	// connection, it forgets those of a connection whose network connections
+	// are all closed (keepSockets).
 	socketsMu sync.Mutex
 	sockets   map[any]*sqlSockets
 }
 
 // sqlSockets is the network connections one connection of a pool dialed
-// through the exporter's dialer, so that a connection whose statement's end
-// outlives the scrape's deadline can be closed under its driver (end): a
-// driver whose end takes no context and sets no deadline, as
+// through the exporter's dialer. They let a connection whose statement's end
+// outlives the scrape's deadline be closed under its driver (end). A driver
+// whose end takes no context and sets no deadline, such as
 // go-sql-driver/mysql's Rollback (transaction.go, exec("ROLLBACK")), returns
 // once its network connection is closed. The connections are kept as the
-// dialer gives them, so that a driver that looks into its connection
-// (mysql's *net.TCPConn and syscall.Conn) finds what it did before; those
-// the driver closed are forgotten at its next dial.
+// dialer gives them, so a driver that inspects its connection (mysql's
+// *net.TCPConn and syscall.Conn) finds what it did before. Those the driver
+// closed are forgotten at its next dial.
 type sqlSockets struct {
 	mu     sync.Mutex
 	conns  []net.Conn
@@ -278,11 +277,11 @@ func (p *sqlPool) socketsOf(dc any) *sqlSockets {
 	return p.sockets[dc]
 }
 
-// sqlConnKey is the driver's connection of a scrape's conn, which the pool
-// keeps its sockets and idle uses by, nil when Raw fails. It is read once,
-// as soon as the scrape has the connection, before anything is run on it:
-// once a statement runs, database/sql may close the Conn from a goroutine of
-// its own (a rows' or transaction's context ending), and Conn.Raw is not
+// sqlConnKey returns the driver's connection of a scrape's conn, by which the
+// pool keeps its sockets and idle uses, or nil when Raw fails. It is read
+// once, as soon as the scrape has the connection and before anything runs on
+// it. Once a statement runs, database/sql may close the Conn from its own
+// goroutine (when a rows' or transaction's context ends), and Conn.Raw is not
 // safe against that close (sqlTx).
 func sqlConnKey(conn *sql.Conn) any {
 	var key any
@@ -293,11 +292,11 @@ func sqlConnKey(conn *sql.Conn) any {
 	return key
 }
 
-// sqlIdleUse is when a scrape last had each connection of a pool, by the
-// driver's connection, which database/sql hands out guarded (Conn.Raw,
-// sqlDriverConn): every driver's connection is a pointer, so it is one key
-// for as long as it is open. An entry older than the idle_timeout is the
-// connection's end, so the keepalive forgets it then (prune): what
+// sqlIdleUse records when a scrape last had each connection of a pool, keyed
+// by the driver's connection, which database/sql hands out guarded (Conn.Raw,
+// sqlDriverConn). Every driver's connection is a pointer, so it stays one key
+// for as long as it is open. An entry older than the idle_timeout marks the
+// connection's end, so the keepalive forgets it then (prune). What
 // database/sql closed leaves nothing behind for long.
 type sqlIdleUse struct {
 	timeout time.Duration
@@ -364,16 +363,16 @@ func newSQLPoolCache() *sqlPoolCache {
 }
 
 // sqlPoolEvent, set by tests, is told what happens to pools and their
-// connections: "made" (a connection), "keepalive" (a ping answered),
-// "keepalive failed", "keepalive skipped" (every place at max_per_target
-// taken), "idle closed" (a connection the keepalive closed for its
-// idle_timeout), "room made" (an idle connection closed for a scrape at
-// max_per_target), "closed: " and why for a pool closed, "released" (its DB
-// closed, the last scrape using it done), "waiting: max_per_target" for a
-// scrape that waits for a connection, "ending" for a scrape's statement
-// beginning to end, before its connection is given back or closed, and "end
-// abandoned" for a statement whose end outlived the scrape's deadline, each
-// with the target's host:port.
+// connections, each event with the target's host:port. The events are
+// "made" (a connection), "keepalive" (a ping answered), "keepalive failed",
+// "keepalive skipped" (every place at max_per_target taken), "idle closed"
+// (a connection the keepalive closed for its idle_timeout), "room made" (an
+// idle connection closed for a scrape at max_per_target), "closed: " and why
+// for a closed pool, "released" (its DB closed, the last scrape using it
+// done), "waiting: max_per_target" (a scrape waiting for a connection),
+// "ending" (a scrape's statement beginning to end, before its connection is
+// given back or closed) and "end abandoned" (a statement whose end outlived
+// the scrape's deadline).
 var sqlPoolEvent atomic.Pointer[func(event, address string)]
 
 func sqlEvent(event, address string) {
@@ -448,9 +447,9 @@ func (c *sqlPoolCache) acquire(key sqlPoolKey, options map[string]string) (*sqlP
 }
 
 // roomForTargetLocked makes room for one more target of a collector at its
-// max_targets, limit: it closes the pools of the target used longest ago
-// that no scrape is using, when the collector has limit targets with pools
-// open, and fails, counted, when every one of them is in use.
+// max_targets, limit. When the collector has limit targets with pools open,
+// it closes the pools of the least recently used target that no scrape is
+// using. It fails, counted, when every one of them is in use.
 func (c *sqlPoolCache) roomForTargetLocked(collector string, limit int) error {
 	busy := map[*sqlTarget]bool{}
 	last := map[*sqlTarget]time.Time{}
@@ -519,11 +518,11 @@ func (c *sqlPoolCache) release(p *sqlPool) {
 }
 
 // closeLocked forgets a pool, so that the next scrape makes a new one, and
-// closes it: at once when no scrape is using it, and otherwise when the
-// last of them is done (release), its idle connections closed now and each
-// in use when it is given back, while the scrapes using it, waiting at its
-// max_per_target among them, finish on it. counted says the connections
-// they make are still the collector's to count.
+// closes it. It closes at once when no scrape is using it, and otherwise
+// when the last of them is done (release). Its idle connections are closed
+// now, and each one in use when it is given back. Meanwhile the scrapes
+// using it, including those waiting at its max_per_target, finish on it.
+// counted says the connections they make are still counted for the collector.
 func (c *sqlPoolCache) closeLocked(p *sqlPool, why string, counted bool) {
 	if p.closed {
 		return
@@ -653,13 +652,13 @@ type sqlKeepaliveRound struct {
 
 // keepaliveOnce pings every idle connection of the pool, within interval.
 // database/sql hands out the connection given back last first, so the round
-// takes all the idle connections before it gives any back: each held with
+// takes all the idle connections before it gives any back. Each is held with
 // one of the target's places at max_per_target, taken without waiting, as
-// many as there are places free. The connections are pinged at once, so
-// that one that does not answer takes none of the others' interval, and
-// given back as a scrape's are (giveBack). The round is skipped when it
-// takes none: no place free, or no idle connection left by the time it
-// takes one, since it makes none.
+// many as there are places free. The connections are pinged at once, so one
+// that does not answer takes none of the others' interval. They are given
+// back as a scrape's are (giveBack). The round is skipped when it takes none:
+// no place is free, or no idle connection is left by the time it takes one,
+// since it makes none.
 func keepaliveOnce(c *sqlPoolCache, p *sqlPool, interval time.Duration) (round sqlKeepaliveRound) {
 	ctx, cancel := context.WithTimeout(noConnect(context.Background()), interval)
 	defer cancel()
@@ -725,10 +724,10 @@ take:
 // driver.ErrBadConn.
 func pingConn(ctx context.Context, p *sqlPool, conn *sql.Conn) (closed bool, err error) {
 	err = conn.Raw(func(dc any) (err error) {
-		// The ping runs the driver in a goroutine of the keepalive's, where
-		// a panic of the driver would end the process: it is a failed ping
-		// instead, and the connection is discarded. It is recovered here,
-		// inside Raw, so that database/sql still unlocks the connection.
+		// The ping runs the driver in a goroutine of the keepalive, where a panic
+		// of the driver would end the process. Instead it becomes a failed ping,
+		// and the connection is discarded. It is recovered here, inside Raw, so
+		// that database/sql still unlocks the connection.
 		defer func() {
 			if r := recover(); r != nil {
 				err = errors.Join(sqlDriverPanic(p.driver.name, r), driver.ErrBadConn)
@@ -750,10 +749,10 @@ func pingConn(ctx context.Context, p *sqlPool, conn *sql.Conn) (closed bool, err
 	return false, err
 }
 
-// sqlResult is what a statement returned: its rows, as the transforms read
-// them, its columns, and the rows written as JSON; of several statements
-// (request.statements), named is each one's rows by its name, and rows and
-// columns are nil.
+// sqlResult is what a statement returned: its rows as the transforms read
+// them, its columns, and the rows written as JSON. For several statements
+// (request.statements), named holds each one's rows by its name, and rows
+// and columns are nil.
 type sqlResult struct {
 	rows    []any
 	columns []string
@@ -790,15 +789,14 @@ func (c *sqlPoolCache) query(ctx context.Context, key sqlPoolKey, col *model.Col
 		}
 		c.release(p)
 	}
-	// A connection kept idle may have been ended by the server meanwhile,
-	// and not every driver finds that out before its first statement: a
-	// PostgreSQL server that ends an idle session (idle_session_timeout, an
+	// A connection kept idle may have been ended by the server meanwhile, and
+	// not every driver finds that out before its first statement. For example,
+	// a PostgreSQL server that ends an idle session (idle_session_timeout, an
 	// administrator's pg_terminate_backend) leaves its last words on the
-	// socket, which pgx takes for a connection alive and reads as the
-	// answer to BEGIN. The transaction that could not begin has run nothing,
-	// so the scrape closes that connection and takes another, a new one
-	// once the idle ones are used up, rather than fail for a connection it
-	// only found.
+	// socket. pgx takes the connection for alive and reads them as the answer to
+	// BEGIN. The transaction that could not begin has run nothing, so the scrape
+	// closes that connection and takes another, a new one once the idle ones
+	// are used up, rather than fail for a connection it only found.
 	for attempt := 0; ; attempt++ {
 		before := p.made.Load()
 		conn, err := p.db.Conn(ctx)
@@ -867,15 +865,15 @@ func (c *sqlPoolCache) countRows(p *sqlPool, col *model.Collector, n int) {
 	c.mu.Unlock()
 }
 
-// statements runs runs, request.statements, in order on conn, each as a
-// collector's one statement is run, its own transaction ended before the
-// next begins, within ctx; finish ends the last, which query bounds by the
-// scrape's deadline (end). The response limit bounds the rows of all of
-// them together, as max_rows bounds each. The first that fails fails the
-// scrape, naming it. A statement's end that the scrape's deadline outlasts
-// fails the scrape too, and finish then waits for it, which end bounds and
-// abandons the connection after. failed is the place of the statement that
-// failed among runs.
+// statements runs runs, request.statements, in order on conn, within ctx.
+// Each runs as a collector's single statement is run, and its own
+// transaction ends before the next begins. finish ends the last one, and
+// query bounds that by the scrape's deadline (end). The response limit
+// bounds the rows of all of them together, as max_rows bounds each. The first
+// that fails fails the scrape, naming it. A statement's end that outlasts the
+// scrape's deadline fails the scrape too. finish then waits for it; end
+// bounds that wait and abandons the connection after it. failed is the
+// position of the failed statement in runs.
 func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn, col *model.Collector, runs []sqlRun, reused bool) (result *sqlResult, finish func(), failed int, err error) {
 	named := make(map[string]any, len(runs))
 	var used int64
@@ -919,21 +917,21 @@ func (p *sqlPool) statements(ctx context.Context, key sqlPoolKey, conn *sql.Conn
 	return &sqlResult{shown: body, named: named}, finish, 0, nil
 }
 
-// statement runs run on conn, within ctx, and reads its rows, which with
-// the used bytes of the statements before it are held to the response
-// limit; finish ends it, which query bounds by the scrape's deadline
-// (end).
+// statement runs run on conn, within ctx, and reads its rows. Together with
+// the bytes used by the statements before it, the rows are held to the
+// response limit. finish ends it, and query bounds that by the scrape's
+// deadline (end).
 func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Collector, run sqlRun, used int64) (result *sqlResult, finish func(), err error) {
 	var timeout time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
 		timeout = time.Until(deadline)
 	}
-	// The statement has a context of its own, which ends it when its rows
-	// are not all read: closing the rows of a statement still running reads
-	// the rest of them with mysql and pgx (mysqlRows.Close, pgconn's
-	// ResultReader.Close), up to the scrape's deadline, where a statement
-	// whose context has ended is abandoned by the driver, its connection
-	// closed with it.
+	// The statement has its own context, which ends it when its rows are not
+	// all read. With mysql and pgx, closing the rows of a statement still
+	// running reads the rest of them (mysqlRows.Close, pgconn's
+	// ResultReader.Close), up to the scrape's deadline. There, the driver
+	// abandons a statement whose context has ended and closes its connection
+	// with it.
 	stmtCtx, stop := context.WithCancel(ctx)
 	rows, done, err := p.driver.run(stmtCtx, conn, run.statement, run.args, timeout)
 	if err != nil {
@@ -961,10 +959,10 @@ func (p *sqlPool) statement(ctx context.Context, conn *sql.Conn, col *model.Coll
 	return result, finish, nil
 }
 
-// sqlMessageLimit is err in the words of the response limit when it is the
-// driver's refusal of a message from the server larger than the limit allows
-// (sqlDriver.messageTooLarge): a row too large for the limit, refused before
-// it is read.
+// sqlMessageLimit rewords err in terms of the response limit when err is the
+// driver's refusal of a server message larger than the limit allows
+// (sqlDriver.messageTooLarge). That is a row too large for the limit,
+// refused before it is read.
 func (p *sqlPool) sqlMessageLimit(col *model.Collector, err error) error {
 	if p.driver.messageTooLarge == nil || !p.driver.messageTooLarge(err) {
 		return err
@@ -977,21 +975,22 @@ func (p *sqlPool) sqlMessageLimit(col *model.Collector, err error) error {
 // scrape's deadline has passed by the time it begins.
 const sqlEndGrace = 100 * time.Millisecond
 
-// end ends a scrape's statement, finish (closing its rows and rolling its
-// transaction back), gives its connection back, and then its place and its
-// use of the pool, giveUp. The statement's end is bounded by the scrape's
-// deadline, or sqlEndGrace when that has passed already: a driver whose end
-// takes no context and sets no deadline (go-sql-driver/mysql's Rollback,
-// transaction.go) would hold the scrape for as long as the server does not
-// answer. When the bound comes first the scrape goes on, with the rows it
-// read or its failure, and the connection's network connections are closed
-// (sqlSockets), which ends the driver's wait; the connection is then
-// closed, never given back, and the place and the pool given up only after
-// that, so that a connection still open holds its place at max_per_target.
-// A connection whose network connections are not known, of a driver that
-// dials by itself (vertica), holds its place until the driver returns. dc is
-// the driver's connection (sqlConnKey): conn itself is not touched until
-// finish has returned, when nothing but the scrape closes it.
+// end ends a scrape's statement with finish (closing its rows and rolling its
+// transaction back), gives its connection back, and then gives up its place
+// and its use of the pool with giveUp. The statement's end is bounded by the
+// scrape's deadline, or by sqlEndGrace when that has passed already. A
+// driver whose end takes no context and sets no deadline
+// (go-sql-driver/mysql's Rollback, transaction.go) would otherwise hold the
+// scrape for as long as the server does not answer. When the bound comes
+// first, the scrape goes on with the rows it read or its failure, and the
+// connection's network connections are closed (sqlSockets), which ends the
+// driver's wait. The connection is then closed, never given back. The place
+// and the pool are given up only after that, so a connection still open
+// holds its place at max_per_target. A connection whose network connections
+// are unknown, of a driver that dials by itself (vertica), holds its place
+// until the driver returns. dc is the driver's connection (sqlConnKey): conn
+// itself is not touched until finish has returned, when nothing but the
+// scrape closes it.
 func (c *sqlPoolCache) end(ctx context.Context, p *sqlPool, conn *sql.Conn, dc any, finish, giveUp func()) {
 	sqlEvent("ending", p.key.address.hostPort)
 	rest := func(abandoned bool) {
@@ -1049,17 +1048,17 @@ func discardSQLConn(conn *sql.Conn) {
 	_ = conn.Close()
 }
 
-// giveBack gives a connection back to its pool, to be kept idle, or closes
-// it when its target's pools keep max_idle_per_target idle already: the
-// limit is of the target, across its pools, while database/sql holds each
-// pool to it alone (SetMaxIdleConns), which is enough for a target of one
-// pool. The idle connections are counted and the connection given back
-// under the target's giving lock, so that one given back in the meantime is
-// counted neither twice nor not at all; a connection closed is closed after
-// it, a driver's Close possibly waiting on the network. A connection of a
-// closed pool is closed: the pool's idle connections are closed apart
-// (closeLocked), and one given back before that would otherwise be kept,
-// and taken by a scrape still waiting on the pool.
+// giveBack gives a connection back to its pool to be kept idle, or closes it
+// when its target's pools already keep max_idle_per_target idle. The limit
+// applies to the target, across its pools, while database/sql holds each
+// pool to it alone (SetMaxIdleConns), which is enough for a target with one
+// pool. The idle connections are counted and the connection is given back
+// under the target's giving lock, so a connection given back in the meantime
+// is counted neither twice nor not at all. A connection to close is closed
+// after the lock, since a driver's Close may wait on the network. A
+// connection of a closed pool is closed: the pool's idle connections are
+// closed separately (closeLocked), and one given back before that would
+// otherwise be kept and taken by a scrape still waiting on the pool.
 func (c *sqlPoolCache) giveBack(p *sqlPool, conn *sql.Conn) {
 	t := p.target
 	limit := t.key.conns.maxIdle
@@ -1099,15 +1098,15 @@ func (c *sqlPoolCache) giveBack(p *sqlPool, conn *sql.Conn) {
 }
 
 // makeRoom closes idle connections of the other pools of p's target, which
-// hold none of its places, as many as the places taken and those idle
-// connections come to more than max_per_target, so that the connection the
-// scrape may make next keeps the connections open to the target within the
-// limit. The places taken are read before the idle connections: a scrape
-// gives its connection back before its place, so a connection on its way
-// back is counted once or twice, never not at all. It may close one too
-// many, when p has an idle connection the scrape takes, but never makes one
-// (sqlNoConnect). The connections are closed apart, a driver's Close
-// possibly waiting on the network, and waited for within the scrape's
+// hold none of its places. It closes as many as the places taken plus those
+// idle connections exceed max_per_target by, so the connection the scrape
+// may make next keeps the connections open to the target within the limit.
+// The places taken are read before the idle connections. A scrape gives its
+// connection back before its place, so a connection on its way back is
+// counted once or twice, never not at all. It may close one too many, when
+// p has an idle connection the scrape takes, but it never makes one
+// (sqlNoConnect). The connections are closed separately, since a driver's
+// Close may wait on the network, and waited for within the scrape's
 // deadline: the scrape makes no connection past it.
 func (c *sqlPoolCache) makeRoom(ctx context.Context, p *sqlPool) {
 	t := p.target
@@ -1169,10 +1168,10 @@ func sqlDeadline(ctx context.Context, doing string, err error) error {
 	return fmt.Errorf("%s: %w", doing, err)
 }
 
-// sqlDeadline is the package's sqlDeadline, which also says the deadline
-// came first when the server reports that it ended the statement at the
-// time limit the driver set it to, the scrape's time left: the server's
-// clock may end it a moment before the scrape's context ends.
+// sqlDeadline is the package's sqlDeadline, which also says the deadline came
+// first when the server reports that it ended the statement at the time
+// limit the driver set, the scrape's time left. The server's clock may end
+// the statement a moment before the scrape's context ends.
 func (p *sqlPool) sqlDeadline(ctx context.Context, doing string, err error) error {
 	if ctx.Err() == nil && p.driver.timedOut != nil && p.driver.timedOut(err) {
 		return fmt.Errorf("%s: the scrape's deadline came first (%w): %w", doing, context.DeadlineExceeded, err)
@@ -1213,10 +1212,10 @@ func traceSQL(ctx context.Context, key sqlPoolKey, run sqlRun, reused bool, err 
 }
 
 // follow closes the pools whose collector the configuration in force no
-// longer has, or has with other settings, and forgets the counts of the
-// collectors it no longer has, the connections of their pools still
-// draining no longer counted. A collector's settings are its own and those
-// each of its static targets gives it.
+// longer has, or has with other settings. It forgets the counts of the
+// collectors it no longer has, and the connections of their pools that are
+// still draining are no longer counted. A collector's settings are its own
+// and those each of its static targets gives it.
 func (c *sqlPoolCache) follow(collectors []model.Collector, targets []model.StaticTarget) {
 	wanted := map[string]map[sqlBase]bool{}
 	byName := map[string]*model.Collector{}
@@ -1406,9 +1405,9 @@ func (p *sqlPool) spec() (*sqlConnectSpec, error) {
 }
 
 // SQLConnectInfo is what a connection of the sql request type is made with,
-// as a test's stand-in for the driver is given it (UseSQLTestDriver): the
-// driver's name, the target, the account and the password read from its
-// file, the database, the options and whether the connection uses TLS.
+// as given to a test's stand-in for the driver (UseSQLTestDriver): the
+// driver's name, the target, the account, the password read from its file,
+// the database, the options, and whether the connection uses TLS.
 type SQLConnectInfo struct {
 	Driver, Host, Port, Account, Username, Password, Database, ServiceName string
 	Options                                                                map[string]string
@@ -1416,9 +1415,9 @@ type SQLConnectInfo struct {
 }
 
 // UseSQLTestDriver makes every connection of the sql request type with
-// connect, in place of the drivers, until the function it returns is
-// called: for the tests of other packages, which reach a stand-in database
-// through the very pools and connectors a real driver is reached through.
+// connect instead of the drivers, until the function it returns is called.
+// It is for the tests of other packages, which reach a stand-in database
+// through the same pools and connectors a real driver is reached through.
 func UseSQLTestDriver(connect func(ctx context.Context, info SQLConnectInfo) (driver.Conn, error)) (restore func()) {
 	hook := func(ctx context.Context, driverName string, spec *sqlConnectSpec) (driver.Conn, error) {
 		return connect(ctx, SQLConnectInfo{

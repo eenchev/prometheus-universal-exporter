@@ -22,18 +22,18 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A gcp store reads a secret over Google Cloud Secret Manager's REST API:
-// the version asked for, latest unless the reference names one, of the
-// secret the reference names in the store's project, whose payload is the
-// secret's text.
+// A gcp store reads a secret over Google Cloud Secret Manager's REST API. It
+// reads the version asked for (latest unless the reference names one) of
+// the secret the reference names in the store's project. The version's
+// payload is the secret's text.
 //
 // The request carries an access token. Where the exporter runs on Google
 // Cloud, with Workload Identity on GKE or a service account attached to the
 // machine, the metadata server gives it one, and nothing is configured. A
-// service account's key file, credentials_file or the one the
-// GOOGLE_APPLICATION_CREDENTIALS environment variable names, is used in its
-// place: a JWT signed with the key is exchanged for a token (RFC 7523). A
-// token is kept in memory until a minute before it expires.
+// service account's key file is used in its place: credentials_file, or the
+// one the GOOGLE_APPLICATION_CREDENTIALS environment variable names. A JWT
+// signed with the key is exchanged for a token (RFC 7523). A token is kept
+// in memory until a minute before it expires.
 
 const (
 	gcpSecretsEndpoint = "https://secretmanager.googleapis.com" //nolint:gosec // G101: the API's address, not a credential

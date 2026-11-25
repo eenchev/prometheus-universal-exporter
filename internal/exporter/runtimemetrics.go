@@ -52,20 +52,22 @@ func counter(name, help string, value float64) model.Metric {
 	return model.Metric{Name: name, Help: help, Type: model.CounterMetricType, Value: value}
 }
 
-// runtimeSeries are the go_ series read from runtime/metrics. Each is the sum
-// of its sources, which is how client_golang's Go collector rebuilds the
-// MemStats fields from runtime/metrics for Go 1.17 and later (memStatsFromRM):
-// heap_inuse is the live objects plus the unused space of the spans that hold
-// them, heap_idle the free plus the released, and so on. Mallocs and frees both
-// count the tiny allocations, as MemStats does, so that mallocs minus frees
-// stays the number of live objects. gc_sys is the GC metadata other than the
-// span and cache structures, and other_sys the runtime's other allocations
-// without the profiling buckets, again as in client_golang, which publishes
-// those structures as series of their own that this exporter does not.
+// runtimeSeries are the go_ series read from runtime/metrics. Each is the
+// sum of its sources, which is how client_golang's Go collector rebuilds the
+// MemStats fields from runtime/metrics for Go 1.17 and later
+// (memStatsFromRM). For example, heap_inuse is the live objects plus the
+// unused space of the spans that hold them, and heap_idle is the free plus
+// the released. Mallocs and frees both count the tiny allocations, as
+// MemStats does, so mallocs minus frees stays the number of live objects.
+// gc_sys is the GC metadata other than the span and cache structures, and
+// other_sys is the runtime's other allocations without the profiling
+// buckets. Both again follow client_golang, which publishes those
+// structures as series of their own; this exporter does not.
 //
-// The sources are asked for by name and a series is left out when the Go
-// release in use does not describe one of them: a sum with a part missing
-// would be a wrong number under a known name, which is worse than no series.
+// The sources are asked for by name. A series is left out when the Go
+// release in use does not describe one of its sources: a sum with a part
+// missing would be a wrong number under a known name, which is worse than
+// no series.
 var runtimeSeries = []struct {
 	name    string
 	help    string
@@ -295,12 +297,12 @@ func parseFloat(s string) float64 {
 	return v
 }
 
-// processStartSeconds converts the process start time, which /proc reports in
-// clock ticks since boot, into a unix timestamp, from the boot time /proc/stat
-// gives in whole seconds (btime), as client_golang does. The value is the same
-// at every scrape: one worked out from the uptime and the time now would move
-// by a fraction of a second between scrapes, and look like a restart to
-// changes(process_start_time_seconds[1h]).
+// processStartSeconds converts the process start time, which /proc reports
+// in clock ticks since boot, into a unix timestamp. As client_golang does,
+// it uses the boot time /proc/stat gives in whole seconds (btime). So the
+// value is the same at every scrape. A value worked out from the uptime and
+// the time now would move by a fraction of a second between scrapes, and
+// look like a restart to changes(process_start_time_seconds[1h]).
 func processStartSeconds() (float64, bool) {
 	stat, err := os.ReadFile("/proc/self/stat")
 	if err != nil {

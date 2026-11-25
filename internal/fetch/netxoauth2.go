@@ -23,11 +23,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// How the types that log in to a mail server, smtp, imap and pop3, choose their
-// login: request.auth names the mechanism. plain, login and cram-md5 go
-// with request.username and request.password_file; xoauth2 and oauthbearer
-// with request.username and request.xoauth2, which says where the OAuth
-// 2.0 access token comes from.
+// How the types that log in to a mail server (smtp, imap and pop3) choose
+// their login. request.auth names the mechanism. plain, login and cram-md5
+// use request.username and request.password_file. xoauth2 and oauthbearer
+// use request.username and request.xoauth2, which says where the OAuth 2.0
+// access token comes from.
 
 const (
 	netAuthPlain       = "plain"
@@ -55,11 +55,11 @@ func netAuthWithToken(mechanism string) bool {
 	return mechanism == netAuthXOAuth2 || mechanism == netAuthOAuthBearer
 }
 
-// checkNetLogin holds a collector's auth, xoauth2, username and
-// password_file to one another, and fills in auth: xoauth2 for a collector
-// that sets the block alone. sends says, in a refusal, why a password
-// goes with a name: "AUTH sends both". more are the mechanisms the type
-// speaks beside netAuthMechanisms, each with a password.
+// checkNetLogin checks a collector's auth, xoauth2, username and
+// password_file against one another. It fills in auth: xoauth2 for a
+// collector that sets only the block. sends says in a refusal why a
+// password needs a name: "AUTH sends both". more are the mechanisms the
+// type supports besides netAuthMechanisms, each with a password.
 func checkNetLogin(x *model.Collector, sends string, more ...string) error {
 	r := &x.Request
 	if r.Auth != "" && !slices.Contains(netAuthMechanisms, r.Auth) && !slices.Contains(more, r.Auth) {
@@ -90,11 +90,11 @@ func checkNetLogin(x *model.Collector, sends string, more ...string) error {
 	return nil
 }
 
-// checkNetTargetLogin holds a static target's own account to how its
+// checkNetTargetLogin checks a static target's own account against how its
 // collector logs in. A collector that logs in with a token sends no
 // password, so a target's password_file would be read and never sent, and
-// is refused; its username alone is the mailbox the collector's token logs
-// in to, as an application's token does for many (withTargetAccount).
+// is refused. The target's username alone is the mailbox the collector's
+// token logs in to, as many application tokens allow (withTargetAccount).
 func checkNetTargetLogin(c *model.Collector, t *model.StaticTarget) error {
 	if (c.Request.XOAuth2 != nil || netAuthWithToken(c.Request.Auth)) && t.Request.PasswordFile != "" {
 		return fmt.Errorf("request.password_file is set, but collector %q logs in with xoauth2, which sends its access token and no password; name the target's mailbox with request.username alone, or give it a collector of its own", c.Name)
@@ -102,10 +102,10 @@ func checkNetTargetLogin(c *model.Collector, t *model.StaticTarget) error {
 	return checkNetTargetAccount(t)
 }
 
-// checkNetXOAuth2 holds request.xoauth2 to one source of the token: a
-// file, or a grant with its endpoint and client, the refresh token grant
-// with its refresh token and the client credentials grant with its
-// secret.
+// checkNetXOAuth2 requires request.xoauth2 to have one source of the
+// token: a file, or a grant with its endpoint and client. The refresh
+// token grant needs its refresh token, and the client credentials grant
+// its secret.
 func checkNetXOAuth2(o *model.XOAuth2Config) error {
 	grant := o.Grant != "" || o.TokenURL != "" || o.ClientID != "" || o.ClientIDFile != "" || o.ClientSecretFile != "" || o.RefreshTokenFile != "" || len(o.Scopes) > 0
 	switch {
@@ -139,9 +139,9 @@ func netXOAuth2Credential(user, token string) string {
 }
 
 // netOAuthBearerCredential is what an OAUTHBEARER login sends, before
-// base64 (RFC 7628 § 3.1): the account as the authorization identity, its
-// = and , written as RFC 5801 writes them, the server's host and port, and
-// the token.
+// base64 (RFC 7628 § 3.1): the account as the authorization identity, with
+// its = and , escaped as in RFC 5801, the server's host and port, and the
+// token.
 func netOAuthBearerCredential(user, hostPort, token string) string {
 	host, port, err := net.SplitHostPort(hostPort)
 	if err != nil {

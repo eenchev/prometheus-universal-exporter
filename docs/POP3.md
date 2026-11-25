@@ -1,9 +1,10 @@
 # POP3
 
 The `pop3` request type logs in to a mail server as a client that fetches
-mail over POP3 does and asks how much mail the mailbox holds: the greeting,
-`CAPA`, `STLS`, a login, then `STAT`. No message is fetched or deleted. What the server said is handed to the transforms as one JSON
-document. Use it to watch:
+mail over POP3 does, and asks how much mail the mailbox holds: the greeting,
+`CAPA`, `STLS`, a login, then `STAT`. No message is fetched or deleted. What
+the server said is handed to the transforms as one JSON document. Use it to
+watch:
 
 - how many messages wait in a mailbox and how large they are together,
   such as a mailbox a job should be emptying;
@@ -16,14 +17,13 @@ A server that also speaks IMAP says more to the [`imap` type](IMAP.md):
 each folder's counts, unread messages and searches. POP3 knows one mailbox
 and two numbers.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with pop3](#building-with-pop3)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with pop3](#building-with-pop3)).
 
 ## Building with pop3
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=pop3              # bin/prometheus-universal-exporter
@@ -31,10 +31,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=pop3 -t exporter:pop3 .
 go build -tags "$(sh tools/request-type-tags.sh '' '' pop3)" .
 ```
 
-The tag is `request_type_pop3`. A configuration with a `pop3` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it. The type is written with
-the standard library alone, and adds no dependency.
+The build tag is `request_type_pop3`. A build without the type refuses a
+configuration with a `pop3` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -73,8 +73,12 @@ collectors:
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets). |
 
 A probe takes `timeout` and `param_<name>` parameters, which fill the
-collector's [label values](REQUESTS.md#in-label-values). The decoder is
-`json`; use `jq`, `yq` or `python`.
+collector's [label values](REQUESTS.md#in-label-values).
+
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## Logging in
 
@@ -91,9 +95,9 @@ collector's [label values](REQUESTS.md#in-label-values). The decoder is
 | `oauthbearer` | `AUTH OAUTHBEARER` (SASL, RFC 7628), the same token | `xoauth2` |
 
 The token of `xoauth2` and `oauthbearer` is sent in answer to the server's
-`+`, as Microsoft 365 takes it; a server that refuses the mechanism's name
+`+`, as Microsoft 365 takes it. A server that refuses the mechanism's name
 alone is asked once more with the token in the `AUTH` command, as Google
-writes Gmail's exchange.
+describes Gmail's exchange.
 
 Left out, the login is `user` where the server's `CAPA` names `USER`, or
 answers nothing, as an old server's does; else `plain`, else `login`, of
@@ -124,9 +128,9 @@ request:
 /probe?collector=gmail&target=pop3s://pop.gmail.com
 ```
 
-An account that takes OAuth alone, as a Workspace account can be set to and
-a Microsoft 365 mailbox is, logs in with `xoauth2`, an access token the
-collector gets with a refresh token:
+An account that takes only OAuth, as a Workspace account can be set to and a
+Microsoft 365 mailbox does, logs in with `xoauth2`, using an access token
+that the collector gets with a refresh token:
 
 ```yaml
 request:
@@ -140,12 +144,12 @@ request:
     scopes: [https://mail.google.com/]
 ```
 
-For Microsoft 365 the target is `pop3s://outlook.office365.com`, the
-endpoint `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token` and
-the scope `https://outlook.office.com/POP.AccessAsUser.All`. The block's
-keys, how long a token is kept and how the refresh token is made are those
-of the [`smtp` type's `xoauth2`](SMTP.md#xoauth2), and so is
-[an application's own token](SMTP.md#an-applications-own-token), for a
+For Microsoft 365, the target is `pop3s://outlook.office365.com`, the
+endpoint is `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`,
+and the scope is `https://outlook.office.com/POP.AccessAsUser.All`. The
+block's keys, how long a token is kept and how the refresh token is made
+are the same as for the [`smtp` type's `xoauth2`](SMTP.md#xoauth2), and so
+is [an application's own token](SMTP.md#an-applications-own-token), for a
 service account.
 
 Gmail hands a POP3 client the messages its POP setting covers, which is not
@@ -190,42 +194,46 @@ the collector sets `list`, and for a mailbox without a message.
 ## Static targets
 
 A [static target](STATIC-TARGETS.md) of a `pop3` collector is a mail
-server, written as a probe's target is. Its `request` may set `timeout`,
-and `username`, `password_file` and `tls` for a server with an account or a
-certificate authority of its own; a target that sets `username` logs in
-with its own `password_file`, and a `tls` block replaces the collector's
-whole. A target of a collector that logs in with a token sets no
-`password_file`; its `username` alone names the mailbox the collector's
-token logs in to, which is how one
-[application's token](SMTP.md#an-applications-own-token) watches many.
+server, written as a probe's target is. Its `request` may set `timeout`, and
+`username`, `password_file` and `tls` for a server with an account or a
+certificate authority of its own.
+
+- A target that sets `username` logs in with its own `password_file`.
+- A `tls` block replaces the collector's whole block.
+- A target of a collector that logs in with a token sets no
+  `password_file`. Its `username` alone names the mailbox that the
+  collector's token logs in to, which is how one
+  [application's token](SMTP.md#an-applications-own-token) watches many
+  mailboxes.
 
 ## Limits
 
-A scrape ends at its deadline, the probe's `timeout` or the scrape
-timeout, and after 30 seconds when it has neither. One line of a response
-may be 4 KiB, a `CAPA` answer 200 lines, and the responses together
-`max_response_bytes`, the lines of `LIST` among them, about 10 bytes a
-message; more fails the scrape, the last as a limit exceeded.
-One connection is made for each scrape; none is kept.
+A scrape ends at its deadline: the probe's `timeout` or the scrape timeout,
+or 30 seconds when it has neither. One line of a response may be 4 KiB, a
+`CAPA` answer 200 lines, and the responses together `max_response_bytes`,
+including the lines of `LIST`, about 10 bytes per message. More fails the
+scrape, the last as an exceeded limit. One connection is made for each
+scrape; none is kept.
 
 ## Errors and self-metrics
 
-The scrape fails, naming the server and its answer, when the greeting is
-not `+OK`, `STLS` is refused, TLS cannot be begun, the certificate does not
-verify, the login is refused, or `STAT` or `LIST` is:
+The scrape fails, naming the server and its answer, when the greeting is not
+`+OK`, `STLS` is refused, TLS cannot be begun, the certificate does not
+verify, the login is refused, or `STAT` or `LIST` is refused:
 
 ```text
 the server mail.example.com:995 refused PASS for orders@example.com with -ERR [AUTH] Username and password not accepted.
 ```
 
-That is the exporter's log; whoever called `/probe` is answered `-ERR` and
+That is the exporter's log. Whoever called `/probe` is answered `-ERR` and
 `[withheld; in the exporter's log]` for the server's words, as for
 [any failed probe](CONFIGURATION.md#what-a-failed-probes-caller-is-told). A
-password, a digest and a token are in no error, log line or debug report: a
+password, a digest and a token are in no error, log line or debug report. A
 [debug probe](CONFIGURATION.md#debug-probes) shows each command and its
 answer, with `PASS ***`, `APOP name ***` and `***` for the lines that carry
-them. A server that says back in its `-ERR` the command it refuses has
-what reads as a credential there masked, as `password=<redacted>`.
+them. When a server repeats in its `-ERR` the command that it refuses,
+anything there that reads as a credential is masked, as
+`password=<redacted>`.
 
 With `web.self_metrics.verbose`, a scrape is labelled with
 `pop3://host:port` and, as `http_method`, how far the session goes: `CAPA`,
@@ -235,8 +243,8 @@ or `STAT` with an account.
 
 - A POP3 server lets one session at a time into a mailbox. A scrape holds
   it for a moment, and fails with the server's `-ERR [IN-USE]` while a mail
-  client, or another scrape of the same account, is in it; that client
-  fails the same way if it comes while a scrape is.
+  client, or another scrape of the same account, is in it. That client
+  fails the same way if it comes while a scrape is in.
 - No message is fetched: there is no age of the oldest message. The
   [`imap` type](IMAP.md) counts by a search and says when the oldest
   match arrived.

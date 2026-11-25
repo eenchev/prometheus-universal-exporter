@@ -21,11 +21,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The pop3 request type logs in to a mail server as a mail client that
-// fetches over POP3 does and asks how much mail the mailbox holds: the
-// greeting, CAPA, STLS, a login, then STAT, and LIST when the collector
-// asks for the largest message. No message is fetched or deleted, and
-// QUIT ends the session with the mailbox as it was.
+// The pop3 request type logs in to a mail server the way a POP3 mail
+// client does, and asks how much mail the mailbox holds. The session is:
+// the greeting, CAPA, STLS, a login, then STAT, and LIST when the
+// collector asks for the largest message. No message is fetched or
+// deleted, and QUIT ends the session with the mailbox unchanged.
 //
 //	request:
 //	  type: pop3
@@ -34,22 +34,22 @@ import (
 //	  auth: apop                               # optional: the mechanism
 //
 // What the server said is handed to the transforms as one JSON document:
-// the greeting, whether the session is over TLS, the capabilities and the
-// SASL mechanisms the server names, the mechanism the login used, and the
-// mailbox's messages and their size together. A greeting that is no +OK,
-// TLS that cannot be begun, a login refused and a STAT refused fail the
-// scrape.
+// the greeting, whether the session is over TLS, the capabilities and SASL
+// mechanisms the server names, the mechanism the login used, and the
+// mailbox's message count and total size. The scrape fails on a greeting
+// that is not +OK, TLS that cannot be started, a refused login or a
+// refused STAT.
 //
-// The login is the mechanism request.auth names: user (USER and PASS),
-// apop, or one of the SASL mechanisms of AUTH, plain, login, cram-md5,
-// xoauth2 and oauthbearer. Left out, it is user where the server takes it, else plain,
-// else login, and xoauth2 where the collector has the block.
+// The login uses the mechanism request.auth names: user (USER and PASS),
+// apop, or one of the SASL mechanisms of AUTH (plain, login, cram-md5,
+// xoauth2 and oauthbearer). Left out, it is user where the server accepts
+// it, else plain, else login, and xoauth2 where the collector has the block.
 //
-// The target is host, host:port, pop3://host:port or pop3s://host:port:
-// port 110, and 995 for pop3s://, which is TLS from the first byte. On
-// pop3:// TLS is begun with STLS where the server offers it. A credential
-// is never sent over a connection that is not TLS, unless allow_plaintext
-// says the server has none.
+// The target is host, host:port, pop3://host:port or pop3s://host:port.
+// The port is 110, or 995 for pop3s://, which is TLS from the first byte.
+// On pop3://, TLS is started with STLS where the server offers it. A
+// credential is never sent over a connection that is not TLS, unless
+// allow_plaintext says the server has no TLS.
 //
 // The type imports nothing outside the standard library.
 
@@ -168,9 +168,9 @@ func (pop3Requester) Display(target string) string {
 }
 
 // pop3Document is what a scrape hands the transforms. auth, messages and
-// size_bytes are null of a session that did not log in, and largest_bytes
-// unless the collector asks for the list, and of a mailbox without a
-// message.
+// size_bytes are null for a session that did not log in. largest_bytes is
+// null unless the collector asks for the list, and for a mailbox without
+// a message.
 type pop3Document struct {
 	Greeting      string   `json:"greeting"`
 	TLS           bool     `json:"tls"`
@@ -297,11 +297,11 @@ func (s *pop3Session) exchange(verb, line, shown string) (pop3Answer, error) {
 	return answer, nil
 }
 
-// pop3Text is a server's text as the document, an error and a debug report
-// have it: its control characters written as ?, and cut where any
-// failure's text is. It is not looked through for credentials as netShown
-// looks, which is how a refusal is shown (read): a greeting and a +OK hold
-// nothing the scrape sent, and the numbers of a STAT are read from one.
+// pop3Text returns a server's text as the document, an error and a debug
+// report show it: control characters written as ?, and cut where any
+// failure's text is cut. Unlike a refusal (read), it is not searched for
+// credentials as netShown does. A greeting and a +OK hold nothing the
+// scrape sent, and the numbers of a STAT are read from one.
 func pop3Text(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -317,10 +317,10 @@ func pop3Refused(what, hostPort string, answer pop3Answer) error {
 	return model.Errorf("the server %s answered %s with %s %s", hostPort, what, answer.status(), model.Bare(answer.text))
 }
 
-// capabilities asks CAPA and reads its lines to the one that is a dot: the
-// capabilities, each by its first word, in upper case and sorted, each
-// once, and the mechanisms of its SASL line. A server that refuses CAPA,
-// as one older than RFC 2449 does, names none, and known is false.
+// capabilities sends CAPA and reads its lines up to the dot line. It
+// returns the capabilities, each by its first word, upper-cased, sorted
+// and unique, and the mechanisms of the SASL line. A server that refuses
+// CAPA, as one older than RFC 2449 does, names none, and known is false.
 func (s *pop3Session) capabilities() (names, sasl []string, known bool, err error) {
 	names, sasl = []string{}, []string{}
 	answer, err := s.send("CAPA", "")
@@ -367,10 +367,10 @@ func (s *pop3Session) capabilities() (names, sasl []string, known bool, err erro
 	return names, sasl, true, nil
 }
 
-// largest asks LIST and reads its lines to the one that is a dot, each a
-// message's number and its size: the size of the largest message, nil of
-// a mailbox without one. The lines are as many as the mailbox has
-// messages, and are held to the response limit as every answer is.
+// largest sends LIST and reads its lines up to the dot line, each a
+// message's number and size. It returns the size of the largest message,
+// or nil for a mailbox without one. There is one line per message, and the
+// lines are held to the response limit like every answer.
 func (s *pop3Session) largest(hostPort string) (*int64, error) {
 	answer, err := s.send("LIST", "")
 	if err != nil {
@@ -527,15 +527,7 @@ func (pop3Requester) Fetch(ctx context.Context, target string, c *model.Collecto
 	if err != nil {
 		return nil, err
 	}
-	resp := &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}
+	resp := jsonBody(body, target, c, start)
 	if state := conn.tlsState(); state != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: tlsConnectionOf(state)}
 	}
@@ -543,14 +535,15 @@ func (pop3Requester) Fetch(ctx context.Context, target string, c *model.Collecto
 }
 
 // login logs in with the mechanism request.auth names and returns it. Left
-// out, the mechanism is USER and PASS where the server names USER or
-// answered no CAPA, which every server older than SASL takes; else AUTH
-// PLAIN, else AUTH LOGIN, of those it names. A SASL mechanism the
-// collector names is one the server must name, where it answered CAPA.
+// out, the mechanism is USER and PASS where the server names USER or gave
+// no CAPA answer; every server older than SASL accepts this. Else it is
+// AUTH PLAIN, else AUTH LOGIN, among those the server names. A SASL
+// mechanism the collector names must be one the server names, where it
+// answered CAPA.
 //
 // A SASL credential is sent in answer to the server's challenge, never in
-// the AUTH command, which RFC 5034 allows and servers older than it, and
-// some that are not, do not take.
+// the AUTH command. RFC 5034 allows the latter, but servers older than it,
+// and some newer ones, do not accept it.
 func (s *pop3Session) login(c *model.Collector, password, timestamp string, capabilities, sasl []string, known bool, hostPort string) (string, error) {
 	user, mechanism := c.Request.Username, c.Request.Auth
 	if mechanism == "" {
@@ -640,10 +633,11 @@ func (s *pop3Session) login(c *model.Collector, password, timestamp string, capa
 			sent = netOAuthBearerCredential(user, hostPort, token)
 			name, last, ended = "OAUTHBEARER", netOAuthBearerEnd, netOAuthBearerEnd+" (to end the refused OAUTHBEARER)"
 		}
-		// The credential is sent in answer to the server's +, as Microsoft
-		// 365 takes it. A server that refuses the mechanism's name alone
-		// has seen no credential, and may be one that takes it in the
-		// command, as Google writes Gmail's: it is asked once more so.
+		// The credential is sent in answer to the server's +, which is how
+		// Microsoft 365 accepts it. A server that refuses the mechanism's
+		// name alone has seen no credential. It may accept the credential
+		// in the command, as Google documents for Gmail, so it is asked
+		// once more that way.
 		answer, err = begin(name)
 		switch {
 		case err == nil && answer.continued:

@@ -1,13 +1,15 @@
 //go:build !select_request_types || request_type_sshfile || request_type_sshexec
 
-// Package sshtest is an in-process SSH server with an SFTP subsystem, for the
-// sshfile request type's tests, which runs commands too, for the sshexec
-// type's: it serves the exporter's own filesystem, so a test writes files to
-// a temporary directory and reads them over SFTP by their absolute paths,
-// and it hands each command to the test's Options.Exec, which writes its
-// output and says its exit status. It authenticates by public key and by
-// password, presents host keys the test chooses, and can stop answering, as
-// a host that lost power does, while its connections stay open.
+// Package sshtest is an in-process SSH server for tests:
+//   - an SFTP subsystem for the sshfile request type's tests. It serves the
+//     exporter's own filesystem, so a test writes files to a temporary
+//     directory and reads them over SFTP by their absolute paths;
+//   - commands for the sshexec type's tests. It hands each command to the
+//     test's Options.Exec, which writes its output and gives its exit status.
+//
+// It authenticates by public key and by password, and presents host keys the
+// test chooses. It can stop answering while its connections stay open, as a
+// host that lost power does.
 //
 // Only tests import it, and it carries the types' build constraint, so a
 // build without them compiles none of what it imports.
@@ -66,23 +68,23 @@ type Options struct {
 	// have open at once, as OpenSSH's MaxSessions: one more is refused.
 	MaxSessions int
 	// SessionCloseDelay, when above 0, is how long the server waits after
-	// an SFTP session's client side ended before it frees the session and
-	// closes its own side, as a busy host may: a client that opens another
-	// session before it has seen the close is refused one at MaxSessions.
+	// the client side of an SFTP session ended before it frees the session
+	// and closes its own side, as a busy host may. A client that opens
+	// another session before it has seen the close is refused at MaxSessions.
 	SessionCloseDelay time.Duration
 	// SFTP, when set, is offered each SFTP session the server starts,
-	// numbered from 1 across its connections, before the server serves
-	// files on it; it returns true when it served the session itself,
-	// which the server then closes.
+	// before the server serves files on it. Sessions are numbered from 1
+	// across all connections. It returns true when it served the session
+	// itself, and the server then closes it.
 	SFTP func(n int, channel io.ReadWriter) bool
-	// Exec, when set, runs the command of each exec request, the command
-	// line as the client sent it: it writes the command's output to stdout
-	// and stderr and returns its exit status, which the server sends
-	// before it closes the session; a negative status -n says the command
-	// was ended by signal n, 9 or 15, which is sent as KILL or TERM. ctx
-	// ends when the client sends a signal, unless RefuseSignals, or closes
-	// the session, as a remote command is ended then. Unset, and
-	// ExecInput too, an exec request is refused.
+	// Exec, when set, runs the command line of each exec request as the
+	// client sent it. It writes the command's output to stdout and stderr
+	// and returns its exit status, which the server sends before it closes
+	// the session. A negative status -n means the command was ended by
+	// signal n (9 or 15), sent as KILL or TERM. ctx ends when the client
+	// sends a signal (unless RefuseSignals) or closes the session, as a
+	// remote command is ended then. If Exec and ExecInput are both unset,
+	// an exec request is refused.
 	Exec func(ctx context.Context, command string, stdout, stderr io.Writer) int
 	// ExecInput, when set, runs each command in Exec's place, reading
 	// what the client sends to the command's stdin from stdin.
@@ -519,15 +521,15 @@ func NewECDSAKey(t testing.TB) ssh.Signer {
 	return signer
 }
 
-// WriteClientKey writes a new ed25519 private key into dir in OpenSSH's
-// format, encrypted with passphrase when it is not empty, and returns its
-// path and its public key, for Options.AuthorizedKeys.
+// WriteClientKey writes a new ed25519 private key into dir in OpenSSH
+// format, encrypted with passphrase when it is not empty. It returns the
+// key's path and its public key, for Options.AuthorizedKeys.
 //
-// An encrypted key is encrypted as ssh-keygen -a 1 would: with one round
-// of bcrypt_pbkdf rather than the 16 that ssh.MarshalPrivateKeyWithPassphrase
-// always takes, each of which costs a sizeable part of a second under the
-// race detector, to make the key and again to decrypt it. The rounds are
-// written in the key, so it is read as any other.
+// An encrypted key is encrypted as ssh-keygen -a 1 would: with one round of
+// bcrypt_pbkdf. ssh.MarshalPrivateKeyWithPassphrase always takes 16, and
+// under the race detector each costs a sizeable part of a second, both to
+// make the key and to decrypt it. The rounds are written in the key, so it
+// is read like any other.
 func WriteClientKey(t testing.TB, dir, name, passphrase string) (string, ssh.PublicKey) {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -727,7 +729,7 @@ func (c *gatedConn) Close() error {
 }
 
 // Shell is an Options.Exec that runs each command line with /bin/sh -c, as
-// sshd runs one with the account's shell, so a test sees what a POSIX shell
+// sshd runs one with the account's shell. A test sees what a POSIX shell
 // makes of the line: its words, its quoting and its exit status. The
 // command is killed when ctx ends.
 func Shell(ctx context.Context, command string, stdout, stderr io.Writer) int {

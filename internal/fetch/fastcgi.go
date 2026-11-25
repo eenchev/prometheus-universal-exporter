@@ -23,34 +23,39 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// An http collector may speak FastCGI to its target in place of HTTP,
-// request.fastcgi: PHP-FPM's status and ping pages, which PHP-FPM serves
-// on its FastCGI port or socket alone, and any other FastCGI application.
-// The request is still written as an http collector's is, its URL, method,
-// headers and body, and is sent as a FastCGI responder's request: the URL's
-// host and port, or request.unix_socket, are where it is sent, its path the
-// script's name, SCRIPT_NAME, and with document_root before it its file,
-// SCRIPT_FILENAME, its query QUERY_STRING, its headers HTTP_ parameters,
-// and its body FCGI_STDIN (fcgiParams). The application's answer is a CGI
-// response, read as an HTTP answer is: its Status header the status, 200
-// without one, and its other headers and body the answer's, so every
-// decoder, rule, retry and redirect reads it as an HTTP answer.
+// An http collector may speak FastCGI to its target instead of HTTP, with
+// request.fastcgi. This covers PHP-FPM's status and ping pages, which
+// PHP-FPM serves only on its FastCGI port or socket, and any other FastCGI
+// application.
 //
-// The client is the http.Transport's own for the http scheme, registered
-// on the transports of FastCGI collectors (fastcgiTransport), so a
-// request goes through the transport's dialer, the target policy's
-// included, and every part of the http type above it is unchanged. Each
-// request is a connection of its own, which the application closes once
-// it has answered, as FCGI_KEEP_CONN left unset asks: a kept connection
-// would need its own pool, and a status page is asked for once a scrape.
-// A request's stderr, what PHP-FPM says of a script it could not find, is
-// handed to the rules as the answer's X-Fastcgi-Stderr header, its first
-// 4 KiB.
+// The request is still written like an http collector's (URL, method,
+// headers and body) and is sent as a FastCGI responder's request
+// (fcgiParams):
+//   - the URL's host and port, or request.unix_socket, is where it is sent;
+//   - its path is the script's name, SCRIPT_NAME, and with document_root
+//     before it, the script's file, SCRIPT_FILENAME;
+//   - its query is QUERY_STRING, its headers are HTTP_ parameters, and its
+//     body is FCGI_STDIN.
+//
+// The application's answer is a CGI response, read like an HTTP answer. Its
+// Status header is the status (200 without one), and its other headers and
+// body are the answer's. So every decoder, rule, retry and redirect reads
+// it as an HTTP answer.
+//
+// The client is the http.Transport's own for the http scheme, registered on
+// the transports of FastCGI collectors (fastcgiTransport). So a request
+// goes through the transport's dialer, including the target policy's, and
+// every part of the http type above it is unchanged. Each request has its
+// own connection, which the application closes once it has answered, as an
+// unset FCGI_KEEP_CONN asks. A kept connection would need its own pool, and
+// a status page is asked for once per scrape. The first 4 KiB of a
+// request's stderr (such as what PHP-FPM says of a script it could not
+// find) is handed to the rules as the answer's X-Fastcgi-Stderr header.
 
-// FastCGIConfig is request.fastcgi: the directory the script's file is
-// named in, SCRIPT_FILENAME being it and the URL's path, and parameters
-// sent beside those made of the request, which replace one of theirs of the
-// same name.
+// FastCGIConfig is request.fastcgi. It holds the directory the script's
+// file is named in (SCRIPT_FILENAME is it plus the URL's path), and
+// parameters sent beside those made from the request. Each replaces one of
+// theirs with the same name.
 type FastCGIConfig struct {
 	DocumentRoot string            `yaml:"document_root,omitempty"`
 	Params       map[string]string `yaml:"params,omitempty"`
@@ -63,14 +68,17 @@ var fastcgiParamName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // FastCGIParamPattern is fastcgiParamName, for the schema.
 const FastCGIParamPattern = `^[A-Za-z_][A-Za-z0-9_]*$`
 
-// validateFastCGI checks request.fastcgi when the configuration loads. The
-// request is sent to a FastCGI application, so a proxy, which speaks HTTP,
-// a login, which is HTTP's, and TLS, which FastCGI is not carried in, are
-// refused beside it; document_root is an absolute path, or left out; a
-// parameter has a CGI meta-variable's name and no control character in its
-// value, which would end the record a parameter is read from no sooner but
-// say what the configuration did not. No key of it holds a placeholder: the
-// script is the configuration's, never a probe's.
+// validateFastCGI checks request.fastcgi when the configuration loads:
+//   - The request goes to a FastCGI application, so a proxy (which speaks
+//     HTTP), a login (which is HTTP's) and TLS (which FastCGI is not carried
+//     in) are refused with it.
+//   - document_root is an absolute path, or left out.
+//   - A parameter has a CGI meta-variable's name and no control character
+//     in its value. Such a character would not end the record the parameter
+//     is read from any sooner, but would say what the configuration did not.
+//
+// No key of it holds a placeholder: the script is the configuration's,
+// never a probe's.
 func validateFastCGI(c *model.Collector, f *FastCGIConfig) error {
 	if f == nil {
 		return nil
@@ -100,9 +108,9 @@ func validateFastCGI(c *model.Collector, f *FastCGIConfig) error {
 	return nil
 }
 
-// fastcgiKey is request.fastcgi written as one comparable value, the part
-// of the transport's settings it is (TransportSettings.fastcgi): "" for
-// none, and otherwise the document root and the parameters in the order of
+// fastcgiKey writes request.fastcgi as one comparable value, its part of
+// the transport's settings (TransportSettings.fastcgi). It is "" for none.
+// Otherwise it is the document root and the parameters in the order of
 // their names, each after a NUL, which neither may hold.
 func fastcgiKey(f *FastCGIConfig) string {
 	if f == nil {
@@ -266,10 +274,11 @@ func (f *fastcgiTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // fcgiParamsOf are the parameters of req's FastCGI request, in the order
-// they are sent: the CGI meta-variables RFC 3875 names, made of the
-// request; the request's headers as HTTP_ ones, but Content-Type and
-// Content-Length, which are CONTENT_TYPE and CONTENT_LENGTH; and
-// request.fastcgi.params, each in place of one of the same name.
+// they are sent:
+//   - the CGI meta-variables RFC 3875 names, made from the request;
+//   - the request's headers as HTTP_ ones, except Content-Type and
+//     Content-Length, which are CONTENT_TYPE and CONTENT_LENGTH;
+//   - request.fastcgi.params, each in place of one with the same name.
 func fcgiParamsOf(req *http.Request, f *FastCGIConfig, length int, local, remote net.Addr) [][2]string {
 	// The path decoded, as CGI's SCRIPT_NAME is (RFC 3875, 4.1.13): the
 	// script's file is named by it, not by its escapes.

@@ -1,20 +1,19 @@
 # NATS
 
-The `nats` request type asks a NATS server whether it answers and how
-fast, over the client protocol, and, with JetStream, how the account's
-streams and consumers stand, and hands the answer to the transforms as a
-JSON document. Use it where the server's monitoring port (8222) is closed
-but a client may connect; where that port is open, an `http` collector
-reads more from it.
+The `nats` request type asks a NATS server, over the client protocol,
+whether it answers and how fast, and, with JetStream, how the account's
+streams and consumers stand. It hands the answer to the transforms as a JSON
+document. Use it where the server's monitoring port (8222) is closed but a
+client may connect; where that port is open, an `http` collector reads more
+from it.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with nats](#building-with-nats)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with nats](#building-with-nats)).
 
 ## Building with nats
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=nats              # bin/prometheus-universal-exporter
@@ -22,9 +21,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=nats -t exporter:nats .
 go build -tags "$(sh tools/request-type-tags.sh '' '' nats)" .
 ```
 
-The tag is `request_type_nats`. A configuration with a `nats` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_nats`. A build without the type refuses a
+configuration with a `nats` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -86,9 +86,10 @@ names and the account take no placeholder. A probe takes `timeout` and
 `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The target
 
@@ -97,13 +98,13 @@ none; `nats://host`, the same; or `tls://host`. A path, a query, a user or
 another scheme is refused with `400` before anything is sent, a static
 target's when it loads.
 
-A NATS connection starts in plaintext and the server says whether it is to
+A NATS connection starts in plaintext, and the server says whether it is to
 be TLS. The connection is turned to TLS when the server requires it, and
-when the target says `tls://`; a `tls://` target of a server that offers no
+when the target says `tls://`. A `tls://` target of a server that offers no
 TLS fails the scrape, so a credential is not sent in the clear to a server
-expected to be secure. To a server that does not require TLS and a target
+expected to be secure. To a server that does not require TLS, with a target
 without `tls://`, the user's password or the token goes as the protocol
-sends it, in the clear.
+sends it: in the clear.
 
 ## What a scrape does
 
@@ -143,8 +144,8 @@ subject of yours, and nothing is consumed.
 - `rtt_seconds` is the round trip of a `PING` after the login, and
   `connect_seconds` how long it took to connect and log in.
 - `jetstream` is the account's JetStream state as the API answers it, and
-  each stream's and consumer's `info` is the API's answer for it, as it
-  writes it, so a rule reads any field of it. Without `jetstream: true`,
+  each stream's and consumer's `info` is the API's answer for it, as the API
+  writes it, so a rule can read any field of it. Without `jetstream: true`,
   `jetstream` is `null` and the lists are empty.
 - **An account without JetStream is not a failure**: `jetstream` is `null`,
   `jetstream_error` says why, and no stream or consumer is asked about.
@@ -180,15 +181,15 @@ than the response limit, `request.max_response_bytes` or
 ## Errors and self-metrics
 
 A failed request is reported in the `nats` stage and follows
-`error_handling.on_fetch_error`, naming the server: one that cannot be
-reached, a TLS handshake that failed, what answered is no NATS server, a
-login it did not take
+`error_handling.on_fetch_error`, naming the server. Causes include a server
+that cannot be reached, a TLS handshake that failed, an answer that is not
+from a NATS server, a login that it did not accept
 (`nats1.example.com:4222 refused: Authorization Violation`), an answer past
-the response limit, or a credential file that cannot be read or is empty.
-A host the target lists refuse counts in
-`http_exporter_targets_refused_total`, answered `403`. Transforms see no
-status (`$status` is `null`, Python's `response.status_code` `None`) and
-the header `Content-Type: application/json`.
+the response limit, and a credential file that cannot be read or is empty.
+A host that the target lists refuse counts in
+`http_exporter_targets_refused_total` and is answered `403`. Transforms see
+no status (`$status` is `null`, and Python's `response.status_code` is
+`None`) and the header `Content-Type: application/json`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows the request with how
 it ended:

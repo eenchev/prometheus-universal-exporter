@@ -9,12 +9,12 @@ import (
 )
 
 // A jq or yq expression of a collector's rules reads the probe's parameters
-// as $params, an object of each param_<name> the probe gave by its name:
-// $params.queue is the value of param_queue, and null when the probe gave
-// none. A parameter an expression reads is one the collector uses, as one a
-// placeholder names is (CheckRequestParams), so which ones are read is found
-// when the configuration loads and kept with the collector
-// (model.ExpressionParams).
+// as $params. This is an object that holds each param_<name> the probe gave,
+// by its name: $params.queue is the value of param_queue, or null when the
+// probe gave none. A parameter an expression reads counts as one the
+// collector uses, like one a placeholder names (CheckRequestParams). The set
+// of read parameters is found when the configuration loads and kept with the
+// collector (model.ExpressionParams).
 
 // expressionParam finds $params where a program reads it, with what
 // follows when that is a field read by its name: .name, ."name" or
@@ -26,15 +26,15 @@ var expressionParam = regexp.MustCompile(`\$params\b(?:\s*(?:\.([A-Za-z_][A-Za-z
 // params.get("name"), in either quote.
 var scriptParam = regexp.MustCompile(`\bparams\b(?:\s*\[\s*(?:"([^"\\]*)"|'([^'\\]*)')\s*\]|\s*\.get\(\s*(?:"([^"\\]*)"|'([^'\\]*)'))?`)
 
-// ParseExpressionParams is what the expressions of c's rules read of
-// $params, and its Python code, the script of a python transform and a
-// pre_script, of params; nil for a collector that reads nothing of
-// either, as nearly every one does.
+// ParseExpressionParams returns what c's rules read of $params in their
+// expressions, and of params in their Python code (the script of a python
+// transform and a pre_script). It returns nil for a collector that reads
+// neither, which is nearly every one.
 //
-// A program names a variable only as it is written, so one that reads
-// $params holds that text, and so does a script that reads params. Text
-// that holds it and reads nothing, as a string or a comment may, or a
-// script's own variable of the name, only makes the collector take a
+// A program can name a variable only by writing it. So a program that reads
+// $params contains that text, and so does a script that reads params. Text
+// that contains it but reads nothing, such as a string, a comment, or a
+// script's own variable of that name, only makes the collector take a
 // parameter it has no use for.
 func ParseExpressionParams(c *model.Collector) *model.ExpressionParams {
 	var out *model.ExpressionParams
@@ -103,11 +103,11 @@ func useExpressionParams(c *model.Collector, params map[string]string, used map[
 	}
 }
 
-// A transform reads the scrape's clock too: $scrape_time and $last_success
-// in a jq or yq expression of a rule, scrape_time and last_success in a
-// Python script, each the seconds since the epoch of the trip's clock
-// (ScrapeClock) and of the last successful trip of the same collector,
-// target and parameters, which is null, or None, while there is none.
+// A transform also reads the scrape's clock: $scrape_time and $last_success
+// in a rule's jq or yq expression, scrape_time and last_success in a Python
+// script. Each is seconds since the epoch: of the trip's clock (ScrapeClock),
+// and of the last successful trip of the same collector, target and
+// parameters. The latter is null, or None, while there is none.
 
 // scriptClock finds the two names where a Python script may read them.
 var scriptClock = regexp.MustCompile(`\b(scrape_time|last_success)\b`)

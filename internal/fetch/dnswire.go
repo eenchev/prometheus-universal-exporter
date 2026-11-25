@@ -21,22 +21,23 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Every question of a dns collector is sent by the exporter itself, with
-// the client below: one question, class IN, recursion desired and the AD
-// bit set (RFC 6840 § 5.7), with an EDNS(0) OPT record offering 1232
-// bytes over UDP, over UDP with TCP for an answer marked truncated, or TCP
-// alone with transport tcp. A server that answers FORMERR to the OPT
-// record is asked again without it, as resolvers do. The answer is read
-// whole: its header, response code and flags, its question, which must be
-// the one asked, and its answer section's records, each with its TTL;
-// golang.org/x/net/dns/dnsmessage, which would read it too, is not among
-// the type's imports, which are the standard library's alone.
+// The exporter sends every question of a dns collector itself, with the
+// client below. Each message holds one question, of class IN, with
+// recursion desired, the AD bit set (RFC 6840 § 5.7), and an EDNS(0) OPT
+// record offering 1232 bytes over UDP. It goes over UDP, falling back to
+// TCP for an answer marked truncated, or over TCP alone with transport
+// tcp. A server that answers FORMERR to the OPT record is asked again
+// without it, as resolvers do. The whole answer is read: its header,
+// response code and flags, its question (which must be the one asked), and
+// its answer section's records, each with its TTL. The type imports only
+// the standard library, so golang.org/x/net/dns/dnsmessage, which could
+// also read it, is not used.
 //
-// It goes to request.server, or, without one, to the nameservers of
-// /etc/resolv.conf in their order, the next one asked when one fails or
-// answers SERVFAIL, REFUSED, NOTIMP or FORMERR; the file's options
-// (timeout, attempts, rotate, ndots), its search domains and /etc/hosts
-// are not read.
+// The question goes to request.server. Without one, it goes to the
+// nameservers of /etc/resolv.conf in their order. The next one is asked
+// when one fails or answers SERVFAIL, REFUSED, NOTIMP or FORMERR. The
+// file's options (timeout, attempts, rotate, ndots), its search domains and
+// /etc/hosts are not read.
 
 // dnsResolvConf is the file the system's nameservers are read from.
 const dnsResolvConf = "/etc/resolv.conf"
@@ -80,12 +81,12 @@ type dnsReply struct {
 // nameservers is asked, as Go's resolver and the C library's ask it.
 var dnsRetried = []string{"SERVFAIL", "REFUSED", "NOTIMP", "FORMERR"}
 
-// lookupDNS asks for the records of recordType of name, absolute and in
-// lower case, or for PTR of the reverse name of the address name is, and
-// answers the reply of the first server that gives one: one whose code is
-// not among dnsRetried, or else the last of those whose code is, the next
-// asked after each, or else, when no server answered at all, the last
-// failure.
+// lookupDNS asks for the records of recordType for name, absolute and in
+// lower case, or for PTR of the reverse name when name is an address. It
+// returns the reply of the first server that gives one: one whose code is
+// not in dnsRetried. Otherwise it returns the last reply whose code is in
+// dnsRetried (the next server is asked after each). If no server answered
+// at all, it returns the last failure.
 func lookupDNS(ctx context.Context, c *model.Collector, recordType, name string) (dnsReply, string, error) {
 	r := dnsRequest(c)
 	servers := []string{}
@@ -401,11 +402,11 @@ type dnsRecord struct {
 	start, end int
 }
 
-// readDNSAnswer reads the answer to the question of name of type qtype
-// with id: its response code and flags, whatever the code, and the records
-// of qtype whose owner is the name, or, but for a CNAME question, a name
-// its CNAME records lead to. An answer that is not to the question, or
-// whose records do not parse, fails.
+// readDNSAnswer reads the answer with id to the question for name of type
+// qtype. It reads the response code and flags, whatever the code, and the
+// records of qtype whose owner is the name or, except for a CNAME question,
+// a name its CNAME records lead to. An answer that is not to the question,
+// or whose records do not parse, fails.
 func readDNSAnswer(msg []byte, id uint16, name string, qtype uint16, server string) (dnsReply, error) {
 	malformed := &net.DNSError{Err: "cannot unmarshal DNS message", Name: name, Server: server}
 	if len(msg) < 12 || binary.BigEndian.Uint16(msg) != id || msg[2]&0x80 == 0 {

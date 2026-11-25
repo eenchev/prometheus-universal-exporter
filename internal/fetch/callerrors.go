@@ -67,9 +67,9 @@ func FetchErrorStage(c *model.Collector, err error) string {
 
 // GRPCStatusCode is the gRPC status code a fetch of a grpc collector ended
 // with: 0 when err is nil, the code of a call that failed, and -1 when no
-// call was made, as when the message did not encode. ok reports whether the
-// collector is a grpc one at all: of a type whose answers carry gRPC status
-// codes (RequestType.StatusCodes).
+// call was made, such as when the message did not encode. ok reports
+// whether the collector is a grpc one at all, that is, of a type whose
+// answers carry gRPC status codes (RequestType.StatusCodes).
 func GRPCStatusCode(c *model.Collector, err error) (code int, ok bool) {
 	if rt := requestTypeOf(c); rt == nil || !rt.StatusCodes {
 		return 0, false

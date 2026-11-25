@@ -24,24 +24,25 @@ const schemaBaseURL = "https://raw.githubusercontent.com/eenchev/prometheus-univ
 const configSchemaID = schemaBaseURL + "config.schema.json"
 
 // configSchema describes the configuration file as JSON Schema (draft
-// 2020-12), for editors: with the yaml-language-server modeline at the top of
-// a configuration, VS Code and other editors complete keys, show descriptions
-// and flag unknown keys and bad values as you type.
+// 2020-12) for editors. With the yaml-language-server modeline at the top of
+// a configuration, VS Code and other editors complete keys, show
+// descriptions, and flag unknown keys and bad values as you type.
 //
 // It is generated from the Config struct by reflection, so a key added to the
-// configuration is in the schema without anyone remembering to add it, and
-// configSchemaRules adds what the struct cannot say: allowed values,
+// configuration appears in the schema without anyone remembering to add it.
+// configSchemaRules adds what the struct cannot express: allowed values,
 // patterns, required keys and descriptions. configs/config.schema.json in the
-// repository is this function's output for a default build, printed by
-// --config.schema and written by make schemas; a test fails when the two
+// repository is this function's output for a default build. It is printed by
+// --config.schema and written by make schemas, and a test fails when the two
 // differ.
 //
-// The schema describes the canonical spelling, and the exporter takes the
-// words a key holds in that spelling alone — request.type, the error
-// policies and the other keys of a few words in lower case, request.method
-// in upper or lower case — so that the two agree on them. Startup validation
-// remains the authority on what is valid: it also checks what a schema
-// cannot, such as that expressions compile. The request types listed are the ones this binary was built with.
+// The schema describes the canonical spelling, and the exporter accepts the
+// words a key holds only in that spelling, so the two agree on them:
+// request.type, the error policies and the other keys of a few words in lower
+// case, and request.method in upper or lower case. Startup validation remains
+// the authority on what is valid. It also checks what a schema cannot, such
+// as whether expressions compile. The request types listed are the ones this
+// binary was built with.
 func configSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.Config{}), "", configSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -85,13 +86,13 @@ func CollectorFileSchemaJSON() ([]byte, error) {
 // staticTargetsSchemaID is where the published static target file schema lives.
 const staticTargetsSchemaID = schemaBaseURL + "static-targets.schema.json"
 
-// staticTargetsSchema describes the static target file (--static-targets-file),
-// generated from the StaticTargetFile struct as configSchema is from Config, with
-// staticTargetsSchemaRules adding what the struct cannot say.
+// staticTargetsSchema describes the static target file (--static-targets-file).
+// It is generated from the StaticTargetFile struct, as configSchema is from
+// Config, and staticTargetsSchemaRules adds what the struct cannot express.
 // configs/static-targets.schema.json is its output, printed by
-// --static-targets-file-schema; a test fails when the two differ. As for the
-// configuration, startup validation remains the authority: it also checks the
-// targets against the collectors they name.
+// --static-targets-file-schema, and a test fails when the two differ. As with
+// the configuration, startup validation remains the authority. It also checks
+// the targets against the collectors they name.
 func staticTargetsSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.StaticTargetFile{}), "", staticTargetsSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -106,10 +107,10 @@ func StaticTargetsSchemaJSON() ([]byte, error) {
 	return renderSchema(staticTargetsSchema())
 }
 
-// The target allocator (internal/allocator) reads files of its own beside
-// the exporter's, a static target file with discovered_targets and a probe
-// targets file, and describes them with what follows, so its schemas are
-// made, rendered and published as the exporter's are.
+// The target allocator (internal/allocator) reads its own files beside the
+// exporter's: a static target file with discovered_targets, and a probe
+// targets file. The code below describes them, so their schemas are made,
+// rendered and published the same way as the exporter's.
 
 // SchemaID is where the published schema of file, in configs, lives.
 func SchemaID(file string) string {
@@ -179,35 +180,37 @@ var (
 )
 
 // unpairedTLSPaths are the tls blocks that are not held to a client
-// certificate with its key (clientCertificatePair) wherever they are: a
-// defaults block's, whose two files a collector may take one of and write
-// the other, a collector's, which is held to it by the file around it
-// (collectorTLSPairRule), and the otlp block's, which holds it to them once
-// it is switched on.
+// certificate with its key (clientCertificatePair) in every case:
+//   - a defaults block's, because a collector may take one of its two files
+//     and write the other;
+//   - a collector's, which the file around it holds to the rule
+//     (collectorTLSPairRule);
+//   - the otlp block's, which is held to it once the block is switched on.
 var unpairedTLSPaths = []string{"defaults.request.tls", "collectors[].request.tls", "otlp.tls"}
 
-// A duration is written as time.ParseDuration reads it: a sequence of decimal
-// numbers with units, each number with a digit before or after its point, or
-// a bare 0, and a sign before it. No key takes a negative duration, so
-// durationPattern, a duration key's pattern, takes a - only before a zero,
-// such as -0s, which is the zero it equals, and a + before any, as the
-// exporter does: an editor then flags timeout: -5s, which the exporter
-// refuses at the load. Whether a duration is long enough, the least interval
-// say, a key with a least says by a not of its own (fetch.SchemaLeastDuration),
-// of a duration of one part; whether one of several parts is, or whether a
-// duration is too long to be held, 2562048h, which the exporter refuses as
-// no duration, is not a pattern's to tell (documented with the schemas,
-// docs/CONFIGURATION.md). signedDurationPattern is any duration, the
-// negative ones too: what a block that is switched off holds, unchecked.
+// A duration is written as time.ParseDuration reads it: a bare 0 or a
+// sequence of decimal numbers with units, each number with a digit before or
+// after its point, and a sign before it. No key takes a negative duration.
+// So durationPattern, the pattern of a duration key, accepts a - only before
+// a zero (such as -0s, which equals zero) and a + before any duration, as the
+// exporter does. An editor then flags timeout: -5s, which the exporter
+// refuses at load.
 //
-// A pattern is of text, and YAML reads an unquoted 0 as a number. The
-// exporter reads a duration from the scalar as it is written, whatever YAML
-// takes it for, so 0, +0 and -0 are the zero they spell and every other
-// number, lacking a unit, is no duration: timeout: 30 is refused, not read
-// as 30 of anything. durationSchema therefore takes, beside the text, the
-// whole number 0 and no other number. What it cannot tell is how that zero
-// was written: 0.0 and 00 are the number 0 to a schema and no duration to
-// the exporter.
+// A key with a minimum, such as the least interval, checks a duration of one
+// part against it with a not of its own (fetch.SchemaLeastDuration). A
+// pattern cannot check a duration of several parts against a minimum, or
+// tell that a duration is too long to hold (2562048h, which the exporter
+// refuses as no duration). This is documented with the schemas
+// (docs/CONFIGURATION.md). signedDurationPattern matches any duration,
+// negative ones too: what a switched-off block holds, unchecked.
+//
+// A pattern applies only to text, and YAML reads an unquoted 0 as a number.
+// The exporter reads a duration from the scalar as written, whatever YAML
+// takes it for. So 0, +0 and -0 are zero, and every other number has no unit
+// and is not a duration: timeout: 30 is refused, not read as 30 of anything.
+// durationSchema therefore accepts the text and also the whole number 0, but
+// no other number. It cannot tell how that zero was written: 0.0 and 00 are
+// the number 0 to a schema but not a duration to the exporter.
 const (
 	durationNumber        = `([0-9]+(\.[0-9]*)?|\.[0-9]+)`
 	durationZero          = `(0+(\.0*)?|\.0+)`
@@ -223,13 +226,13 @@ func durationSchema() map[string]any {
 	return map[string]any{"type": []string{"string", "integer"}, "pattern": durationPattern, "minimum": 0, "maximum": 0, "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit."}
 }
 
-// An optional key that takes one of a set of values, or text of a pattern,
-// is to the exporter the key left out when it is written "": name_escaping:
-// "" is the default, as name_escaping left out is. The schemas say the same
-// in one form each, so that an editor does not flag what the exporter takes:
-// grpcCodePattern is what an entry of retry.codes and accept_codes takes: a
-// gRPC status code's name other than OK, in any case and with blanks around
-// it or not, as the exporter matches it.
+// An optional key that takes one of a set of values, or text matching a
+// pattern, counts to the exporter as left out when it is written "":
+// name_escaping: "" is the default, like leaving name_escaping out. The
+// schemas say the same, each in one form, so an editor does not flag what
+// the exporter accepts. grpcCodePattern is what an entry of retry.codes and
+// accept_codes takes: the name of a gRPC status code other than OK, in any
+// case, with or without blanks around it, as the exporter matches it.
 var grpcCodePattern = fetch.SchemaCaselessOneOf(model.GRPCCodeNames[1:]...)
 
 // optionalEnum is the values and "", and optionalPattern the pattern or
@@ -249,25 +252,25 @@ func writtenKey(key string) map[string]any { return fetch.SchemaWrittenKey(key) 
 // off a text (fetch.SchemaSurroundingBlank).
 const surroundingBlank = fetch.SchemaSurroundingBlank
 
-// valueMapKeys is what the exporter refuses of a value_map's keys, a metric
-// rule's and a label's alike (transform.checkValueRules): the empty key, and
-// one with blanks around it, since a value is looked up without them and
-// would never be found. "*" is a key like any other to a schema. A key
-// written twice, and one YAML reads as no key at all (null, ~), are not a
-// schema's to see: a validator is handed the mapping YAML made of them.
+// valueMapKeys is what the exporter refuses as a key of a value_map, for a
+// metric rule and a label alike (transform.checkValueRules): the empty key,
+// and a key with blanks around it, since a value is looked up without them
+// and would never be found. To a schema, "*" is a key like any other. A
+// schema cannot see a key written twice, or one that YAML reads as no key
+// at all (null, ~): a validator is handed the mapping YAML made of them.
 func valueMapKeys() map[string]any {
 	return map[string]any{"minLength": 1, "pattern": "^([^" + surroundingBlank + "]([\\s\\S]*[^" + surroundingBlank + "])?)?$"}
 }
 
-// onlyBlanks is text of one blank or more and nothing else: what a label's
-// expression may not be (validateMetricRule). It goes under not, so that the
-// key keeps the types it takes, an unquoted 1 for a capture group among
-// them, and "" stays the key left out (fetch.SchemaOnlyBlanks).
+// onlyBlanks is text of one or more blanks and nothing else, which a label's
+// expression may not be (validateMetricRule). It goes under not, so the key
+// keeps the types it takes (among them an unquoted 1 for a capture group),
+// and "" still means the key is left out (fetch.SchemaOnlyBlanks).
 func onlyBlanks() map[string]any { return fetch.SchemaOnlyBlanks() }
 
-// blanksOrPlaceholder is onlyBlanks, or text with {{ in it: what a static
-// target's account and credential files may not be, a placeholder being
-// used as it is written there (fetch's checkSQLTargetRequest and
+// blanksOrPlaceholder is onlyBlanks, or text containing {{. A static
+// target's account and credential files may be neither, because a
+// placeholder there is used as written (fetch's checkSQLTargetRequest and
 // checkSSHTargetAccount).
 // placeholder is the rule of a value holding a {{param_...}} placeholder,
 // for a key a static target writes out in full.
@@ -288,12 +291,12 @@ const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
 // (fetch.SchemaCaseless).
 func caseless(text string) string { return fetch.SchemaCaseless(text) }
 
-// headerNames is what the exporter takes as a name of request.headers, a
-// collector's or a static target's, and of otlp.headers
-// (fetch.checkHeaderNames): an HTTP token, and not Accept-Encoding, in any
-// case, which the exporter sets itself. Two names that are one header in
-// different case are the exporter's alone to refuse: a schema sees each name
-// on its own.
+// headerNames is what the exporter accepts as a name in request.headers (of
+// a collector or a static target) and in otlp.headers
+// (fetch.checkHeaderNames): an HTTP token that is not Accept-Encoding, in
+// any case, since the exporter sets that one itself. Only the exporter
+// refuses two names that are one header in different case: a schema sees
+// each name on its own.
 func headerNames() map[string]any {
 	return map[string]any{
 		"pattern": "^[" + headerNameChars + "]+$",
@@ -301,12 +304,12 @@ func headerNames() map[string]any {
 	}
 }
 
-// forwardHeaderEntry is what the exporter takes as an entry of
-// request.forward_headers (fetch.checkForwardHeaders): a header name, with
-// blanks around it or not, as a probe's forwarding trims them, that is none
-// of the headers a probe never forwards, in any case. It is text, as every
-// key with a pattern is: an entry YAML reads as a number or a boolean is
-// refused by both, the exporter saying to quote it.
+// forwardHeaderEntry is what the exporter accepts as an entry of
+// request.forward_headers (fetch.checkForwardHeaders): a header name, with or
+// without blanks around it (a probe's forwarding trims them), that is not
+// one of the headers a probe never forwards, in any case. It is text, like
+// every key with a pattern: both refuse an entry that YAML reads as a number
+// or a boolean, and the exporter says to quote it.
 func forwardHeaderEntry() map[string]any {
 	never := []string{caseless(fetch.UnforwardablePrefix) + "[" + headerNameChars + "]*"}
 	for _, name := range fetch.UnforwardableHeaderNames() {
@@ -327,17 +330,17 @@ func queryNames() map[string]any {
 }
 
 // leastResponseRule is the rule of request.max_response_bytes and
-// limits.max_response_bytes: beside what every size is held to, 0, the
-// default, or at least config.MinResponseBytes, as the exporter has it
+// limits.max_response_bytes. Besides the rule for every size, the value is
+// 0 (the default) or at least config.MinResponseBytes, as in the exporter
 // (leastSizeRule).
 func leastResponseRule(description string) map[string]any {
 	return leastSizeRule(MinResponseBytes, description+" A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1KiB, since a limit under it is one whose unit was left out; 0, like the key left out, is the default. The range is checked by the exporter when the configuration loads.")
 }
 
-// leastSizeRule is the rule of a size that is 0, the default, or at least
-// least bytes: written as a number, by its minimum, and written as text, in
-// quotes or with a unit, by the not of text under the least
-// (fetch.SchemaLeastSize).
+// leastSizeRule is the rule of a size that is 0 (the default) or at least
+// least bytes. Written as a number, it is checked by its minimum. Written as
+// text, in quotes or with a unit, it is checked by a not of the text below
+// least (fetch.SchemaLeastSize).
 func leastSizeRule(least int64, description string) map[string]any {
 	return map[string]any{
 		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": least}},
@@ -346,14 +349,14 @@ func leastSizeRule(least int64, description string) map[string]any {
 	}
 }
 
-// collectorTLSPairRule is the rule of a file of collectors, the
-// configuration or a collector file, that each collector's request.tls
-// writes a client certificate with its key or neither, but for the file of
-// the two that the file's defaults write: a collector takes that one from
-// them (model.CollectorDefaults.ApplyTo), and writes the other itself. Of a
-// defaults block that writes one of the two and a collector that writes
-// neither, the schema cannot tell whether the collector's request type takes
-// tls, and so the defaults: that is the exporter's to refuse.
+// collectorTLSPairRule is the rule of a file of collectors (the
+// configuration or a collector file): each collector's request.tls writes a
+// client certificate with its key, or neither. The exception is the one of
+// the two files that the file's defaults write: a collector takes that one
+// from them (model.CollectorDefaults.ApplyTo) and writes the other itself.
+// When the defaults write one of the two and a collector writes neither, the
+// schema cannot tell whether the collector's request type takes tls, and so
+// the defaults. Refusing that is left to the exporter.
 func collectorTLSPairRule() []any {
 	var rules []any
 	for _, pair := range [][2]string{{"cert_file", "key_file"}, {"key_file", "cert_file"}} {
@@ -373,13 +376,13 @@ func collectorTLSPairRule() []any {
 	return rules
 }
 
-// credentialsRule is what the exporter refuses of a request's credentials,
-// a collector's and a static target's (fetch.validateCredentials,
-// validateStaticTargets), that the schemas took: bearer_token beside
-// bearer_token_file, basic_auth beside basic_auth_file, either of those
-// beside a bearer token, and a basic_auth_file without a username or a
-// password file, written with something other than blanks. A token written
-// "" is no token, to both; a basic_auth block is one written at all.
+// credentialsRule is what the exporter refuses in a request's credentials,
+// for a collector and a static target (fetch.validateCredentials,
+// validateStaticTargets), and which the schemas accepted: bearer_token
+// beside bearer_token_file, basic_auth beside basic_auth_file, either of
+// those beside a bearer token, and a basic_auth_file without a username or a
+// password file written with something other than blanks. To both, a token
+// written "" is no token, and a basic_auth block counts if written at all.
 func credentialsRule() map[string]any {
 	basic := map[string]any{"anyOf": []any{map[string]any{"required": []string{"basic_auth"}}, map[string]any{"required": []string{"basic_auth_file"}}}}
 	bearer := map[string]any{"anyOf": []any{writtenKey("bearer_token"), writtenKey("bearer_token_file")}}
@@ -415,12 +418,12 @@ func positiveDuration() map[string]any {
 	return fetch.SchemaLeastDuration(time.Nanosecond, false)
 }
 
-// acceptStatusSchema describes request.accept_status, a collector's or a
-// static target's: statuses from 100 to 599 and classes such as 2xx, written
-// as numbers or text, or fetch.AcceptAnyStatus as the only entry, which the
-// load refuses beside another (normalizeAcceptedStatuses). retry.statuses
-// keeps the statuses and classes alone: "any" retried would retry what
-// accept_status accepts.
+// acceptStatusSchema describes request.accept_status of a collector or a
+// static target: statuses from 100 to 599 and classes such as 2xx, written
+// as numbers or text, or fetch.AcceptAnyStatus as the only entry. The load
+// refuses fetch.AcceptAnyStatus beside another entry
+// (normalizeAcceptedStatuses). retry.statuses takes only statuses and
+// classes, because retrying "any" would retry what accept_status accepts.
 func acceptStatusSchema(description string) map[string]any {
 	return map[string]any{
 		"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^" + fetch.AcceptAnyStatus + "$"},
@@ -431,10 +434,10 @@ func acceptStatusSchema(description string) map[string]any {
 }
 
 // clientCertificatePair is the rule of a tls block that the exporter holds
-// to a client certificate with its key or neither (fetch.CheckClientTLSKeys
-// and the request types' checks): cert_file and key_file are both written
-// or neither is, "" being a file left out. A defaults block's is not held to
-// it, since a collector that takes one of the two from it may write the
+// to a client certificate with its key, or neither (fetch.CheckClientTLSKeys
+// and the request types' checks): cert_file and key_file are both written or
+// neither is, and "" counts as a file left out. A defaults block is not held
+// to it, since a collector that takes one of the two from it may write the
 // other itself.
 func clientCertificatePair() map[string]any {
 	return map[string]any{"allOf": []any{
@@ -524,10 +527,10 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 	return schema
 }
 
-// leastOutputRule is the rule of limits.max_output_bytes: beside what every
-// size is held to, 0, the default, or at least the answer of a Python script
-// that emits no metric (transform.MinPythonOutputBytes), as the exporter has
-// it (leastSizeRule).
+// leastOutputRule is the rule of limits.max_output_bytes. Besides the rule
+// for every size, the value is 0 (the default) or at least the answer of a
+// Python script that emits no metric (transform.MinPythonOutputBytes), as in
+// the exporter (leastSizeRule).
 func leastOutputRule() map[string]any {
 	return leastSizeRule(int64(transform.MinPythonOutputBytes), "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least "+strconv.Itoa(transform.MinPythonOutputBytes)+" bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range is checked by the exporter when the configuration loads.")
 }
@@ -583,10 +586,10 @@ func withDefaultsRules(rules map[string]map[string]any) map[string]map[string]an
 		}
 	}
 	rules["defaults"] = map[string]any{"description": "What every collector of this file takes for a key of these it does not set itself, key by key: one that sets limits.max_metrics keeps the other limits written here. A list is replaced whole. A request key applies to the collectors whose request type takes it. Collectors of other files do not take it. See docs/CONFIGURATION.md#defaults-for-the-collectors-of-a-file."}
-	// Defaults that turn the backoff off would give every collector what
-	// leaving failure_backoff out gives; a collector turns it off itself.
-	// The schema leaves the value to the exporter, as a key's kind is all
-	// it holds a boolean to.
+	// Defaults that turn the backoff off would give every collector the same
+	// as leaving failure_backoff out; a collector turns it off itself. The
+	// schema leaves the value to the exporter, because for a boolean it checks
+	// only the key's kind.
 	rules["defaults.failure_backoff.enabled"] = map[string]any{"description": "Only true, which leaving it out says too: false, which would give every collector what leaving failure_backoff out of defaults gives, is refused by the exporter when the configuration loads. A collector writes failure_backoff: {enabled: false} to turn off the backoff these defaults give it."}
 	rules["defaults.request"] = map[string]any{"description": "The request keys every collector of this file takes when it does not set them and its request type takes them."}
 	return rules
@@ -595,9 +598,16 @@ func withDefaultsRules(rules map[string]map[string]any) map[string]map[string]an
 // collectorSchemaRules are configSchemaRules but for those of a defaults
 // block.
 func collectorSchemaRules() map[string]map[string]any {
-	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
-	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
-	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
+	rules := configRootSchemaRules()
+	maps.Copy(rules, collectorKeySchemaRules())
+	maps.Copy(rules, otlpWebAndConnectionSchemaRules())
+	return withLoginRules("collectors[].request", "http and graphite: log in before the request and send the token the login gives, in Authorization as a bearer token unless header says otherwise. type json posts a JSON object of fields and field_files to url and reads the token from the answer; type oauth2 asks the token endpoint url with the OAuth 2.0 client credentials grant. No probe parameter sets or changes it. See docs/AUTHENTICATION.md#logging-in-to-a-target.", rules)
+}
+
+// configRootSchemaRules are the rules of the configuration's own keys,
+// its collector files, secret stores and rate limits.
+func configRootSchemaRules() map[string]map[string]any {
+	return map[string]map[string]any{
 		"": {
 			"anyOf": []any{
 				map[string]any{"required": []string{"collectors"}, "properties": map[string]any{"collectors": map[string]any{"minItems": 1}}},
@@ -624,6 +634,15 @@ func collectorSchemaRules() map[string]map[string]any {
 		"rate_limits[].rate_limit":                     {"required": []string{"requests_per_second"}, "description": "The most requests a second sent to the entry's hosts together, written as request.rate_limit is. A request waits within its deadline for its turn, and one whose turn would come at or past its deadline fails at once."},
 		"rate_limits[].rate_limit.requests_per_second": {"exclusiveMinimum": 0, "description": "Required. The requests a second on average, greater than 0, such as 5, or 0.5 for one every 2 seconds."},
 		"rate_limits[].rate_limit.burst":               {"minimum": 1, "description": "How many requests may be sent at once after a pause, before the rest wait their turn. 1 when left out."},
+	}
+}
+
+// collectorKeySchemaRules are the rules of a collector's keys, its decoder,
+// transform and metrics rules among them.
+func collectorKeySchemaRules() map[string]map[string]any {
+	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
+	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
+	return map[string]map[string]any{
 		// What a collector must have, and each of its rules a name.
 		"collectors[]":                                    collectorSchemaRule(),
 		"collectors[].name":                               {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
@@ -786,18 +805,27 @@ func collectorSchemaRules() map[string]map[string]any {
 			"maxItems":    model.MaxHistogramBuckets,
 			"description": "The upper bounds of the histogram's buckets, finite numbers in increasing order, each once, at most " + strconv.Itoa(model.MaxHistogramBuckets) + "; a value is counted in every bucket whose bound it is at most. The bucket +Inf is added. scale applies to each value before it is counted. The order and that each bound is finite are checked by the exporter when the configuration loads.",
 		},
-		"collectors[].limits.max_script_memory":      leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
-		"collectors[].limits.max_expression_memory":  leastSizeRule(minExpressionMemory, "jq and yq: the most the exporter's memory may grow by while the collector's transform runs, or a jq expression of its pagination or its login, such as 64MiB. One that takes it past that is stopped and its scrape fails as a limit exceeded. The memory is the whole exporter's, so scrapes running beside it count. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1MiB; 0, or left out, is the default, 256MiB."),
-		"collectors[].limits.max_output_bytes":       leastOutputRule(),
-		"collectors[].limits.script_timeout":         {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
-		"collectors[].limits.max_response_bytes":     leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
-		"collectors[].request.max_response_bytes":    leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
-		"collectors[].request.headers":               {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.forward_headers":       {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
-		"collectors[].request.forward_headers[]":     forwardHeaderEntry(),
-		"collectors[].request.basic_auth_file":       basicAuthFileRule("http, graphite and grpc: the files the username and the password of the Basic credential are read from, at every request, such as a mounted Secret. Both are required. Not with basic_auth or a bearer token."),
-		"collectors[].request.basic_auth.username":   {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
-		"collectors[].request.query":                 {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+		"collectors[].limits.max_script_memory":     leastSizeRule(minScriptMemory, "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."),
+		"collectors[].limits.max_expression_memory": leastSizeRule(minExpressionMemory, "jq and yq: the most the exporter's memory may grow by while the collector's transform runs, or a jq expression of its pagination or its login, such as 64MiB. One that takes it past that is stopped and its scrape fails as a limit exceeded. The memory is the whole exporter's, so scrapes running beside it count. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 1MiB; 0, or left out, is the default, 256MiB."),
+		"collectors[].limits.max_output_bytes":      leastOutputRule(),
+		"collectors[].limits.script_timeout":        {"not": fetch.SchemaLeastDuration(MinScriptTimeout, true), "description": "How long a Python script may run. Starting the interpreter is not counted. At least 1ms; defaults to 100ms."},
+		"collectors[].limits.max_response_bytes":    leastResponseRule("The most bytes of an answer the collector reads, decompressed, whatever its request.max_response_bytes; the smaller of the two wins."),
+		"collectors[].request.max_response_bytes":   leastResponseRule("http, graphite, grpc, localfile, sshfile and s3file: the most bytes of an answer, or of a file, the collector reads, decompressed. kubernetes: the most bytes of a page of the listing, and of the objects listed without their managed fields. redis: the most bytes of the server's replies to one scrape's commands, together. tcp: the most bytes of the server's answer. ldap: the most bytes of the server's messages to one scrape, every page of every search together, count_only searches' among them. sql: the most bytes of the values the statement's rows hold, text and binary data by their length and every other value as 8, each with its column's name's length, a NULL counting nothing. 10MiB when neither it nor limits.max_response_bytes is set."),
+		"collectors[].request.headers":              {"propertyNames": headerNames(), "description": "http and graphite: headers sent to the target. A name is an HTTP token, letters, digits and !#$%&'*+-.^_`|~, set once whatever its case, and not Accept-Encoding, which the exporter sets itself. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.forward_headers":      {"description": "http, graphite and grpc: the headers a probe forwards to the target, from its header_<name> parameters. Not Authorization, which forward_authorization forwards, Accept-Encoding, which the exporter sets itself, or Host, Connection, Content-Length, Transfer-Encoding, Trailer, TE, Upgrade and any Proxy- header, which describe the connection to the exporter; each would never be forwarded."},
+		"collectors[].request.forward_headers[]":    forwardHeaderEntry(),
+		"collectors[].request.basic_auth_file":      basicAuthFileRule("http, graphite and grpc: the files the username and the password of the Basic credential are read from, at every request, such as a mounted Secret. Both are required. Not with basic_auth or a bearer token."),
+		"collectors[].request.basic_auth.username":  {"not": basicUsernameColon(), "description": "http, graphite and grpc: the username sent in the Basic credential. Not with a colon, which ends the username in the credential (RFC 7617)."},
+		"collectors[].request.query":                {"propertyNames": queryNames(), "description": "http and graphite: query parameters added to the request, after the target's own query, each name and value sent escaped. A name is not empty and holds no control character. Values may contain {{param_name}} placeholders."},
+	}
+}
+
+// otlpWebAndConnectionSchemaRules are the rules of the otlp and web blocks,
+// and of more of a collector's keys: its name escaping and validation, the
+// response's charset, the request's connection settings and target lists,
+// and the transform's filters and labels.
+func otlpWebAndConnectionSchemaRules() map[string]map[string]any {
+	return map[string]map[string]any{
 		"otlp.headers":                               {"description": "Headers sent with every export request, such as a tenant or an API key. Once the block is switched on, a name is an HTTP token, set once whatever its case, and not Accept-Encoding."},
 		"otlp":                                       otlpSchemaRule(),
 		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
@@ -858,12 +886,12 @@ func collectorSchemaRules() map[string]map[string]any {
 		// validateOTLP does.
 		"otlp.interval": {"pattern": signedDurationPattern, "description": "How often the points waiting are exported. At least 1s once the block is switched on; defaults to 30s."},
 		// What a followed redirect carries (fetch/redirecttrust.go). An entry
-		// of the list is what parseTrustedHost takes, as far as a pattern can
-		// say it: "*", a name or a glob of one, with a final dot or without,
-		// that is digits and dots alone or has a letter, a hyphen or an
-		// underscore in it, or what is written as an IPv6 address is; in
-		// brackets or not, with spaces around it. An address of that shape
-		// that is none is the exporter's to refuse.
+		// of the list is what parseTrustedHost accepts, as far as a pattern
+		// can express it: "*", or a name or a glob of one, with or without a
+		// final dot, that is only digits and dots or contains a letter, a
+		// hyphen or an underscore, or text written like an IPv6 address; in
+		// brackets or not, with spaces around it. The exporter refuses text of
+		// that shape that is not an address.
 		"collectors[].request.follow_redirects":         {"description": "http and graphite: follow redirect statuses instead of answering with the redirect itself. A redirect that leaves the origin the request was made to — its scheme, host and port — is sent only Accept, Accept-Language and User-Agent, with the values the first request had, so a token must never be put in those three, and never the request body, and is refused over https when the collector has a tls.cert_file, unless its host is in redirect_trusted_hosts. Defaults to false. See docs/REQUESTS.md#what-a-followed-redirect-carries."},
 		"collectors[].request.new_connection":           {"description": "http and graphite: send every request — each attempt, and each redirect followed — on a new connection, closed after its answer, rather than on one kept from an earlier request, so each probe looks the name up, connects and makes the TLS handshake again, and sees the certificate the site serves now. For uptime checks. Defaults to false. See docs/REQUESTS.md#connections."},
 		"collectors[].request.unix_socket":              {"pattern": fetch.UnixSocketPattern, "description": "http and tcp: the absolute path of a Unix domain socket the requests are sent over in place of a connection to the target's host, such as /var/run/docker.sock. http: every request of the collector, its login's, redirects' and pages' included, as curl --unix-socket sends it; the URL's host still names the Host header and the TLS server name, and its path and query are sent as usual; not with proxy_url. tcp: the exchange, the target naming the service in labels alone. No probe parameter, static target or defaults block sets it. See docs/REQUESTS.md#over-a-unix-socket and docs/TCP.md#over-a-unix-socket."},
@@ -871,45 +899,48 @@ func collectorSchemaRules() map[string]map[string]any {
 		"collectors[].request.redirect_trusted_hosts":   {"description": "http and graphite: the hosts, besides the origin the request is made to, that a followed redirect may carry the collector's headers, credentials and request body to, and present its TLS client certificate to: host names, globs such as *.example.com, whose star matches dots too, and single IP addresses, each trusted on every port; \"*\" trusts every host. Matched against the host the redirect names as it is written there, which is never looked up: a final dot is part of the name, and an internationalised name is listed, and matched, in its xn-- form. No probe parameter sets it."},
 		"collectors[].request.redirect_trusted_hosts[]": {"type": "string", "pattern": fetch.TrustedHostPattern},
 		// An entry of allowed_targets or denied_targets is ASCII, which a
-		// pattern can say; that it is a name, a glob, an address or a network
-		// is the exporter's to check (fetch/targetpolicy.go). The pattern is
-		// of what an entry may not hold, under not, so that an entry YAML
-		// reads as a number is still taken, as the exporter takes it. An
-		// entry of nothing at all, "", is refused here as there.
+		// pattern can check. The exporter checks that it is a name, a glob, an
+		// address or a network (fetch/targetpolicy.go). The pattern describes
+		// what an entry may not hold, under not, so an entry that YAML reads
+		// as a number is still accepted, as the exporter accepts it. An empty
+		// entry, "", is refused here as there.
 		"collectors[].request.allowed_targets[]": {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
 		"collectors[].request.denied_targets[]":  {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
-		// An entry of include or exclude is neither empty nor blanks alone
+		// An entry of include or exclude is neither empty nor only blanks
 		// (transform.checkFilterEntry): the empty regular expression matches
-		// every name, and one of blanks only the names that hold them. An
-		// entry is not a key, so "" is not one left out; a value of
-		// transform.labels is one, the label left out
+		// every name, and one of only blanks matches just the names that hold
+		// them. An entry is not a key, so "" does not mean left out. A value of
+		// transform.labels is a key, and "" there is the label left out
 		// (transform.applyCollectorLabels).
 		"collectors[].transform.include":   {"description": "prometheus without metrics rules: keep only the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it. Left out, every metric is kept. An entry is not empty and not blanks alone: '.*' matches every name."},
 		"collectors[].transform.include[]": filterEntry(),
 		"collectors[].transform.exclude":   {"description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name."},
 		"collectors[].transform.exclude[]": filterEntry(),
 		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. Values may contain {{param_name}} placeholders, filled from the probe's parameters. See docs/CONFIGURATION.md#collector-wide-labels."},
-	})
+	}
 }
 
-// otlpSchemaRule is the rule of the otlp block: one that enabled switches on
-// (enabledSwitchRule), whose timeout and interval, once it is on, are not
-// negative, whose compression is then one of its values, whose
-// max_pending_points, unready_after_failures and batch_max_size are then not
-// negative, whose unready_after_failures is then at most its most, whose
-// interval is then at least 1s, whose metric_names is then one of its
-// values, whose scope then has a name without a control character and a
-// version without one, whose batch_max_bytes is then 0 or at least
-// its least (leastSizeRule), whose tls is then a client certificate with its
-// key or neither (clientCertificatePair), and whose headers' names are then
-// header names (headerNames), as the exporter checks them then
-// (validateOTLP). Switched off, the block is
-// kept unchecked by both: the keys' own pattern takes any duration, and the
-// keys themselves any compression and any whole number. Compression was
-// held to its values whatever the switch said, and the two numbers to zero
-// and above, so an editor flagged in a block kept for later what the
-// exporter loads. What is not of a key's type — text for a number, a list
-// for text — is no value of the key, switched off or on, to both.
+// otlpSchemaRule is the rule of the otlp block, which enabled switches on
+// (enabledSwitchRule). Once it is on, as the exporter checks it
+// (validateOTLP):
+//   - timeout and interval are not negative, and interval is at least 1s;
+//   - compression is one of its values;
+//   - max_pending_points, unready_after_failures and batch_max_size are not
+//     negative, and unready_after_failures is at most its maximum;
+//   - metric_names is one of its values;
+//   - scope has a name and a version, neither with a control character;
+//   - batch_max_bytes is 0 or at least its minimum (leastSizeRule);
+//   - tls is a client certificate with its key, or neither
+//     (clientCertificatePair);
+//   - the names of headers are header names (headerNames).
+//
+// Switched off, the block is left unchecked by both: the keys' own pattern
+// accepts any duration, and the keys themselves any compression and any
+// whole number. Compression used to be held to its values whatever the
+// switch said, and the two numbers to zero and above, so an editor flagged
+// what the exporter loads in a block kept for later. A value not of the
+// key's type (text for a number, a list for text) is invalid to both,
+// switched off or on.
 // basicUsernameColon is text with a colon: what the username of a Basic
 // credential may not be (fetch.CheckBasicUsername). It goes under not, so
 // that "" stays the key left out.
@@ -917,9 +948,9 @@ func basicUsernameColon() map[string]any {
 	return map[string]any{"type": "string", "pattern": ":"}
 }
 
-// webBasicAuthRule is web.basic_auth: a block switched on by enabled, whose
-// username, once it is, holds no colon, which no client could present
-// (validateWebAuth); switched off, the block is unchecked, as the exporter
+// webBasicAuthRule is web.basic_auth: a block switched on by enabled. Once it
+// is on, its username holds no colon, which no client could present
+// (validateWebAuth). Switched off, the block is unchecked, as the exporter
 // leaves it.
 func webBasicAuthRule() map[string]any {
 	rule := enabledSwitchRule(reflect.TypeOf(model.ExporterBasicAuth{}), "Basic authentication on the exporter's own endpoints. Off until enabled is true; a block that sets any other key must say enabled, true or false. Once enabled, username holds no colon, which ends the username in a Basic credential (RFC 7617).")
@@ -956,14 +987,14 @@ func otlpSchemaRule() map[string]any {
 	return rule
 }
 
-// otlpExporterInstanceOnRule is what otlp.exporter_instance is held to in an
-// otlp block switched on, once it is switched on itself, as
-// checkExporterInstance holds it: its attribute, "" being the default, is
-// not blanks alone and not service.name, and neither it nor the value holds
-// a control character. That the attribute is no key of
-// otlp.resource_attributes, or of a static target's resource, is the
-// exporter's alone to refuse: a schema cannot compare a value with the keys
-// of another setting, or of another document.
+// otlpExporterInstanceOnRule is what otlp.exporter_instance is held to when
+// the otlp block and it are both switched on, as checkExporterInstance holds
+// it: its attribute ("" being the default) is not only blanks and not
+// service.name, and neither the attribute nor the value holds a control
+// character. Only the exporter refuses an attribute that is a key of
+// otlp.resource_attributes or of a static target's resource: a schema
+// cannot compare a value with the keys of another setting or of another
+// document.
 func otlpExporterInstanceOnRule() map[string]any {
 	return map[string]any{
 		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
@@ -978,11 +1009,11 @@ func otlpExporterInstanceOnRule() map[string]any {
 // otlp.scope's name and version may not hold (checkOTLPScope).
 const noControlCharacters = `^[^\x00-\x1F\x7F]*$`
 
-// otlpLogsOnRule is what otlp.logs is held to in an otlp block switched on,
-// once it is switched on itself, as validateOTLPLogs holds it: its level is
-// one of the levels, in any case, or left out; its interval at least 1s; and
-// its max_pending_records not negative. Switched off, it is unchecked, and
-// so is the whole of it in an otlp block switched off.
+// otlpLogsOnRule is what otlp.logs is held to when the otlp block and it are
+// both switched on, as validateOTLPLogs holds it: its level is one of the
+// levels, in any case, or left out; its interval is at least 1s; and its
+// max_pending_records is not negative. Switched off, it is unchecked, and
+// so is all of it in a switched-off otlp block.
 func otlpLogsOnRule() map[string]any {
 	var levels []string
 	for _, level := range []string{"debug", "info", "warn", "error"} {
@@ -1002,12 +1033,12 @@ func otlpLogsOnRule() map[string]any {
 	}
 }
 
-// otlpTracesOnRule is what otlp.traces is held to in an otlp block switched
-// on, once it is switched on itself, as validateOTLPTraces holds it: its
-// threshold at least 1ms, its interval at least 1s, its max_pending_spans
-// and max_per_second not negative, and its sample_ratio from 0 to 1.
-// Switched off, it is unchecked, and so is the whole of it in an otlp block
-// switched off.
+// otlpTracesOnRule is what otlp.traces is held to when the otlp block and it
+// are both switched on, as validateOTLPTraces holds it: its threshold is at
+// least 1ms, its interval at least 1s, its max_pending_spans and
+// max_per_second are not negative, and its sample_ratio is from 0 to 1.
+// Switched off, it is unchecked, and so is all of it in a switched-off otlp
+// block.
 func otlpTracesOnRule() map[string]any {
 	return map[string]any{
 		"if": map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}},
@@ -1021,16 +1052,16 @@ func otlpTracesOnRule() map[string]any {
 	}
 }
 
-// metricRuleSchemaRule is what the exporter refuses of a metric rule's
+// metricRuleSchemaRule is what the exporter refuses in a metric rule's
 // time_format and time_zone that a schema can tell (transform.CheckMetricRule):
-// time_zone without time_format, and time_format beside value_map, each of
-// which turns the text into the value. Either key written "" is the key left
-// out, to the exporter and so here, as an optional key of free text is
-// throughout the configuration: a time_zone of "" asks for no time_format,
-// and a time_format of "" is none, beside time_zone and beside value_map.
-// dependentRequired and required alone go by the key being written, whatever
-// its value, and so took time_zone: "" for a zone and time_format: "" for a
-// format.
+// time_zone without time_format, and time_format beside value_map, since
+// each of those turns the text into the value. Either key written "" counts
+// as left out, to the exporter and so here, like any optional free-text key
+// in the configuration. So a time_zone of "" needs no time_format, and a
+// time_format of "" is none, beside time_zone and beside value_map.
+// dependentRequired and required alone go by whether the key is written,
+// whatever its value, so they took time_zone: "" for a zone and
+// time_format: "" for a format.
 func metricRuleSchemaRule() map[string]any {
 	timeFormatBesideValueMap := writtenKey("time_format")
 	timeFormatBesideValueMap["required"] = []string{"time_format", "value_map"}
@@ -1047,43 +1078,43 @@ func metricRuleSchemaRule() map[string]any {
 	}
 }
 
-// collectorSchemaRule requires what a collector must have, and of its rules
-// a name, as the exporter does (validateMetricRule, checkPythonRule): every
-// transform but prometheus, whose rule may pass series through under their
-// own names. A name written "" is no name, to both, so it is the rule and
-// not the key's pattern that refuses it, and only where a name is needed.
+// collectorSchemaRule requires what a collector must have, and a name for
+// each of its rules, as the exporter does (validateMetricRule,
+// checkPythonRule). This holds for every transform but prometheus, whose
+// rules may pass series through under their own names. To both, a name
+// written "" is no name, so the rule refuses it, not the key's pattern, and
+// only where a name is needed.
 //
 // A rule of a python collector names a series the script makes, and says
 // nothing the script says itself (checkPythonRule): no type, description,
 // required or error_mode. Each of its labels names a label of that series to
 // cut, so it sets truncate: true and no value (checkPythonRuleLabels). A
-// text key written "" is the key left out there as everywhere; required is
-// a boolean, written when it is there.
+// text key written "" is the key left out, there as everywhere. required is
+// a boolean and counts when it is written.
 //
-// A rule's name, a derived entry's and the names of a rule's labels are
-// classic Prometheus names unless the collector's name_escaping is
-// underscores or values, or its metric_name_validation_scheme utf8, under
-// which
-// a scrape exports any name escaped and the exporter takes any written one
-// (transform.TakesLabelName): the patterns of the two keys hold where the
-// collector does not say one of those two. A label's name that the
+// A rule's name, a derived entry's name and the names of a rule's labels are
+// classic Prometheus names, unless the collector's name_escaping is
+// underscores or values, or its metric_name_validation_scheme is utf8. Under
+// those, a scrape exports any name escaped and the exporter accepts any
+// written name (transform.TakesLabelName). So the patterns of the two keys
+// apply where the collector sets neither of those two. A label name that the
 // collector's transform.rename_labels renames or remove_labels removes is
-// taken whatever its characters (transform.TakesLabelNameBeforeRenames),
-// which a schema cannot tell, since it would have to read the name among
-// the keys of one setting or the entries of the other: the pattern of a
-// label's name holds where the collector writes neither of the two, and
-// where it writes one, a name that neither takes off is the exporter's alone
-// to refuse. The two keys are text under every
-// name_escaping, as a key with a pattern is throughout, by the type they
-// have themselves (configSchemaRules): a name YAML reads as a number or a
-// boolean is refused by the schemas and, read from them, by the load, and is
-// written in quotes where it is meant, such as "404" under values.
+// accepted whatever its characters (transform.TakesLabelNameBeforeRenames).
+// A schema cannot tell this, since it would have to find the name among the
+// keys of one setting or the entries of the other. So the pattern of a
+// label's name applies where the collector writes neither of the two. Where
+// it writes one, only the exporter refuses a name that neither takes off.
+// The two keys are text under every name_escaping, like every key with a
+// pattern, by their own type (configSchemaRules). The schemas refuse a name
+// that YAML reads as a number or a boolean, and so does the load, which
+// reads it from them. Such a name is written in quotes where it is meant,
+// such as "404" under values.
 //
-// A prometheus rule's expression is not blanks alone, as the exporter
+// A prometheus rule's expression is not only blanks, as the exporter
 // refuses one (transform.checkRulePattern): it is a regular expression over
-// metric names, like an entry of transform.include. And the rule has a name
-// or an expression, written with something other than "": with neither it
-// says which metrics it is about by nothing, and the exporter refuses it
+// metric names, like an entry of transform.include. The rule also has a
+// name or an expression written with something other than "". With neither,
+// nothing says which metrics it is about, and the exporter refuses it
 // (checkPrometheusRuleSelects).
 func collectorSchemaRule() map[string]any {
 	transformIs := func(name string) map[string]any {
@@ -1133,10 +1164,10 @@ func collectorSchemaRule() map[string]any {
 	}
 }
 
-// derivedSchemaRule is a derived entry's, as the exporter checks it
-// (transform.CheckDerived): a name, not "", and exactly one of sum, difference and
-// ratio; by only beside sum, which then reads one family, and without it a
-// sum reads two or more.
+// derivedSchemaRule is the rule of a derived entry, as the exporter checks it
+// (transform.CheckDerived): a name that is not "", and exactly one of sum,
+// difference and ratio. by is allowed only beside sum, which then reads one
+// family; without by, a sum reads two or more.
 func derivedSchemaRule() map[string]any {
 	required := func(key string) map[string]any { return map[string]any{"required": []string{key}} }
 	return map[string]any{
@@ -1155,12 +1186,12 @@ func derivedOperandRule() map[string]any {
 	return map[string]any{"type": "string", "minLength": 1, "not": onlyBlanks()}
 }
 
-// labelSchemaRule is a label's: a name, and exactly one of value and
-// expression, either of which written "" is the key left out, as it is to
-// the exporter (validateMetricRule), so a label with expression and value:
-// "" reads the response and one with both "" has neither. A required label
-// takes no value_map that maps a value to "", which would leave the label
-// off (transform.checkLabelValueMaps).
+// labelSchemaRule is the rule of a label: a name, and exactly one of value
+// and expression. Either of those written "" counts as left out, as it does
+// to the exporter (validateMetricRule). So a label with expression and
+// value: "" reads the response, and one with both "" has neither. A required
+// label takes no value_map that maps a value to "", which would leave the
+// label off (transform.checkLabelValueMaps).
 func labelSchemaRule() map[string]any {
 	return map[string]any{
 		"required":    []string{"name"},
@@ -1272,14 +1303,14 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 	})
 }
 
-// withLoginRules adds to rules those of the login block under request, a
-// collector's or a static target's, as the exporter checks it
-// (fetch.validateLogin): type and url required; for json, exactly one of
-// token, token_header and token_cookie, and field_files; for oauth2,
-// client_secret_file and exactly one of client_id and client_id_file; no
-// key of the other kind; and neither header nor prefix beside token_cookie.
-// "" is a key left out, to both (writtenKey), but for prefix, where it is
-// the token sent alone.
+// withLoginRules adds to rules those of the login block under request, for a
+// collector or a static target, as the exporter checks it
+// (fetch.validateLogin). type and url are required. For json: exactly one of
+// token, token_header and token_cookie, and field_files. For oauth2:
+// client_secret_file and exactly one of client_id and client_id_file. No key
+// of the other kind, and neither header nor prefix beside token_cookie. To
+// both, "" is a key left out (writtenKey), except for prefix, where "" means
+// the token is sent alone.
 func withLoginRules(request, description string, rules map[string]map[string]any) map[string]map[string]any {
 	kind := func(name string) map[string]any {
 		return map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}}
@@ -1316,10 +1347,10 @@ func withLoginRules(request, description string, rules map[string]map[string]any
 			// json login's answer is read, from the body alone.
 			map[string]any{"if": kind("jwt"), "then": map[string]any{"allOf": []any{writtenKey("signing_key_file"), none("fields", "field_files", "token_header", "token_cookie", "client_id", "client_id_file", "client_secret_file", "grant_type", "refresh_token_file", "endpoint_params", "auth_style")}}},
 			map[string]any{"if": kind("oauth2"), "then": map[string]any{"allOf": []any{oneOf("client_id", "client_id_file"), none("fields", "field_files", "token", "token_header", "token_cookie", "expires_in", "signing_key_file", "issuer", "subject", "audience", "key_id", "claims", "lifetime", "exchange"),
-				// The refresh token grant sends the refresh token of its
-				// file, and a public client of it has no secret, sending
-				// its id as a parameter; the client credentials grant,
-				// grant_type left out, sends the secret and no refresh
+				// The refresh token grant sends the refresh token from its
+				// file. A public client of that grant has no secret and sends
+				// its id as a parameter. The client credentials grant
+				// (grant_type left out) sends the secret and no refresh
 				// token.
 				map[string]any{
 					"if":   map[string]any{"properties": map[string]any{"grant_type": map[string]any{"const": "refresh_token"}}, "required": []string{"grant_type"}},

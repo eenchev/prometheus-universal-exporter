@@ -12,21 +12,20 @@ import (
 // one JSON value on each line, as a log shipper, a bulk API or an export of
 // records writes them. Its document is the list of those values, in the
 // order of their lines, so that a jq rule reads it as it reads a JSON array
-// (`.[]`, items: `.[]`); a body of no value at all is the empty list.
+// (`.[]`, items: `.[]`). A body with no value at all is the empty list.
 //
-//   - A line is what lies between two line feeds, a carriage return before
-//     the line feed being whitespace. A line of nothing but whitespace is
-//     passed over.
-//   - Each other line is one value as the json decoder reads a document
-//     (jsonvalue.go): the same grammar, numbers and strings made the same
-//     way, and nothing but whitespace after it on its line. A value written
-//     across lines, as a pretty-printed one is, is not one value per line,
-//     and is refused at the line it ends early on.
-//   - The list counts as the outermost level of the document, so a value of
-//     a line nests MaxDepth - 1 deep at most, and the whole document is
-//     within MaxDepth as every decoder's is.
-//   - An error names the line, and the column, the json decoder's error
-//     names, counted in the whole body, as model.Position so that the
+//   - A line is what lies between two line feeds; a carriage return before
+//     the line feed is whitespace. A line of only whitespace is skipped.
+//   - Each other line is one value, read as the json decoder reads a
+//     document (jsonvalue.go): the same grammar, numbers and strings made
+//     the same way, and nothing but whitespace after it on its line. A value
+//     written across lines, as a pretty-printed one is, is not one value per
+//     line, and is refused at the line where it ends early.
+//   - The list counts as the outermost level of the document, so a line's
+//     value nests MaxDepth - 1 deep at most, and the whole document is
+//     within MaxDepth, as for every decoder.
+//   - An error names the line, and the column the json decoder's error
+//     names, counted in the whole body, as model.Position, so that the
 //     failure is the same failure at whichever line it occurs.
 
 // errNDJSONTrailingData is the error of a line that goes on after its value.

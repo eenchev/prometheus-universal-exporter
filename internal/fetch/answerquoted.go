@@ -6,12 +6,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// goQuotesTheAnswer are the words before which Go's HTTP client quotes what
-// a server sent that is no HTTP answer: the first line of it, a status code,
-// a version or a header line (net/http's response.go, net/textproto's
-// reader.go). A target that speaks another protocol — an SSH or SMTP
-// banner, a Redis error — is told apart by that line, and a probe's caller
-// who names such a target is not told what it said.
+// goQuotesTheAnswer are the words Go's HTTP client puts before what it
+// quotes of a server's reply that is no HTTP answer: its first line, a
+// status code, a version or a header line (net/http's response.go,
+// net/textproto's reader.go). That line tells apart a target that speaks
+// another protocol, such as an SSH or SMTP banner or a Redis error. A
+// probe's caller who names such a target is not told what it said.
 var goQuotesTheAnswer = []string{
 	"malformed HTTP response ",
 	"malformed HTTP status code ",
@@ -22,7 +22,7 @@ var goQuotesTheAnswer = []string{
 }
 
 // withAnswerWithheld is err, an error of an HTTP request, marked as the
-// operator's when Go's words in it quote what the server sent: a probe's
+// operator's when Go's words in it quote what the server sent. A probe's
 // caller is told the text up to those words, and model.WithheldMark after
 // them.
 func withAnswerWithheld(err error) error {

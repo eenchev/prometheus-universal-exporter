@@ -11,11 +11,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A probe's parameters fill the request (pathparams.go, requesttemplate.go)
-// and, by the same rules, the two places a collector writes a fixed label
-// value: the values of transform.labels, and the value of a metric rule's
-// static label. One collector can then label its series with a value only
-// the scrape knows:
+// A probe's parameters fill the request (pathparams.go, requesttemplate.go).
+// By the same rules they also fill the two places where a collector writes
+// a fixed label value: the values of transform.labels, and the value of a
+// metric rule's static label. One collector can then label its series with
+// a value that only the scrape knows:
 //
 //	transform:
 //	  type: jq
@@ -31,37 +31,38 @@ import (
 // probed with &param_tenant=acme exports
 // status_up{region="eu",source="api-acme",tenant="acme"}.
 //
-// A label value is written as a header value is: {{param_<name>}} or
-// {{param_<name>:<default>}}, any number of them among text of its own, `{{`
-// opening a placeholder only where param_ follows, and no filter, since a
-// label value is written one way, as it is given: what a series' labels may
-// hold is the exposition writers' to escape. The one thing a value may not
-// be is text that is not UTF-8, which no label is.
+// A label value is written like a header value: {{param_<name>}} or
+// {{param_<name>:<default>}}, any number of them mixed with plain text.
+// `{{` opens a placeholder only where param_ follows. There is no filter,
+// because a label value is written one way, as given; escaping a series'
+// labels is the exposition writers' job. The only thing a value may not be
+// is text that is not UTF-8, which no label is.
 //
 // The placeholders are read once, when the configuration loads
-// (ParseLabelParams), and kept with the collector (model.LabelParams): a
-// collector whose labels hold none, as nearly every one's do, costs a probe
-// one look at a nil pointer. A probe of a collector that has some is checked
+// (ParseLabelParams), and kept with the collector (model.LabelParams). A
+// collector whose labels hold none, as nearly all do, costs a probe one
+// nil pointer check. For a collector that has some, a probe is checked
 // with the request's placeholders (CheckRequestParams), so a missing value
-// is the caller's 400 before the target is contacted, and its transform is
-// given a copy of the collector with the values filled in (FilledLabels):
-// everything that reads a label value, the limits and the collector-wide
-// label settings among it, then treats a filled value as the same text
-// written in the configuration.
+// is the caller's 400 before the target is contacted. Its transform gets a
+// copy of the collector with the values filled in (FilledLabels).
+// Everything that reads a label value, including the limits and the
+// collector-wide label settings, then treats a filled value as the same
+// text written in the configuration.
 
 // labelUnfiltered is why a placeholder of a label value takes no filter.
 const labelUnfiltered = "a label value is written one way, as it is given, so write the placeholder without a |, which a default cannot hold either"
 
 // ParseLabelParams reads the placeholders of c's label values: those of
-// transform.labels, and those of its metric rules' static labels, each rule
-// named by ruleName as the collector's other errors name it. It returns nil
-// when no value holds one. A placeholder that is not well formed — unclosed,
-// written with a space after the braces, named otherwise than param_<name>,
-// with a filter or a brace in its default — and a default that is not valid
-// UTF-8 are refused, naming the collector and the value.
+// transform.labels and those of its metric rules' static labels. Each rule
+// is named by ruleName, as the collector's other errors name it. It
+// returns nil when no value holds a placeholder. It refuses, naming the
+// collector and the value, a placeholder that is not well formed
+// (unclosed, written with a space after the braces, named otherwise than
+// param_<name>, with a filter or a brace in its default) and a default
+// that is not valid UTF-8.
 //
-// A label that has an expression is not static, whatever its value says
-// beside it, and is not read: the check of a rule refuses it.
+// A label that has an expression is not static, whatever its value says,
+// and is not read: the rule check refuses it.
 func ParseLabelParams(c *model.Collector, ruleName func(index int) string) (*model.LabelParams, error) {
 	var out model.LabelParams
 	var errs []error
@@ -127,10 +128,10 @@ func labelPlaceholders(labels *model.LabelParams) []pathPlaceholder {
 	return out
 }
 
-// labelPlaceholderValue is the value a placeholder of a label value is
-// filled with: the probe's, else the default, else an error, as a
-// placeholder of the request (placeholderValue); and an error for a value
-// that is not valid UTF-8, whoever gave it.
+// labelPlaceholderValue returns the value that fills a placeholder of a
+// label value: the probe's, else the default, else an error, as for a
+// request placeholder (placeholderValue). It also returns an error for a
+// value that is not valid UTF-8, whoever gave it.
 func labelPlaceholderValue(t *model.LabelTemplate, p model.LabelPlaceholder, params map[string]string) (string, error) {
 	value, err := placeholderValue(t.Where, pathPlaceholder{Name: p.Param, Default: p.Default, HasDefault: p.HasDefault}, params)
 	if err != nil {
@@ -182,12 +183,12 @@ func labelValue(t *model.LabelTemplate, params map[string]string) (string, error
 	return b.String(), nil
 }
 
-// A check of the configuration that measures a fixed label value measures
-// one that holds placeholders as a probe that gives no parameter fills it:
-// each placeholder replaced by its default, and by nothing where it has
-// none. What a probe will give is not known when the configuration loads;
-// what the configuration itself makes of the value is, and a value that is
-// too long by its own text and defaults fails every probe that leaves the
+// A configuration check that measures a fixed label value measures a value
+// with placeholders as a probe without parameters fills it: each
+// placeholder is replaced by its default, or by nothing where it has none.
+// What a probe will give is not known when the configuration loads, but
+// what the configuration itself makes of the value is. A value that is too
+// long from its own text and defaults fails every probe that leaves the
 // parameters out.
 
 // CollectorLabelDefaults is the transform.labels value of name, written as
@@ -235,22 +236,23 @@ func templateDefaults(t *model.LabelTemplate) string {
 // labels are no longer those its placeholders were read from.
 var errLabelsChanged = errors.New("the collector's label values are not those its {{param_...}} placeholders were read from when the configuration loaded")
 
-// FilledLabels returns c as a transform reads it for a probe with params:
-// c itself when its label values hold no placeholder, and otherwise a copy
-// whose transform.labels and metric rules' labels have their placeholders
-// filled in, so that everything reading a label value finds what it would
-// find had the filled text been written in the configuration. c, which the
-// probes of a collector share, is not written to: the copy has its own
-// transform.labels, and its own rules where one of them has a filled label.
+// FilledLabels returns c as a transform reads it for a probe with params.
+// If c's label values hold no placeholder, it returns c itself. Otherwise
+// it returns a copy whose transform.labels and metric rules' labels have
+// their placeholders filled in. Everything that reads a label value then
+// finds what it would find if the filled text were written in the
+// configuration. c is shared by the probes of a collector and is not
+// written to: the copy has its own transform.labels, and its own rules
+// where one of them has a filled label.
 //
-// A value filled to nothing is the label left out, as a label with an empty
-// value is everywhere: a transform.labels value of "" sets nothing, so a
-// series keeps a label of that name it has of its own, and a rule's label is
-// taken out of the copy's rule, which then gives its series no such label.
+// A value filled to nothing means the label is left out, as with an empty
+// label value everywhere. A transform.labels value of "" sets nothing, so
+// a series keeps its own label of that name. A rule's label is removed
+// from the copy's rule, which then gives its series no such label.
 //
 // The probe's parameters were checked before the target was contacted
-// (CheckPathParams), and a static target's when its file loaded, so an error
-// here is of a caller that checked neither.
+// (CheckPathParams), and a static target's when its file loaded. So an
+// error here comes from a caller that checked neither.
 func FilledLabels(c *model.Collector, params map[string]string) (*model.Collector, error) {
 	labels := c.LabelParams
 	if labels == nil {

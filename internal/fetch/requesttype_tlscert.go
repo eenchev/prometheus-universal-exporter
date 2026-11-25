@@ -23,10 +23,10 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-// The tlscert request type makes a TLS handshake with the target and hands
+// The tlscert request type makes a TLS handshake with the target and passes
 // the certificates the server presented to the transforms as a JSON
-// document: for each, its subject, names, issuer, serial and validity, and
-// for the chain whether it verifies.
+// document. For each certificate it gives the subject, names, issuer, serial
+// and validity, and for the chain whether it verifies.
 //
 //	request:
 //	  type: tlscert
@@ -34,28 +34,27 @@ import (
 //	    ca_file: /etc/exporter/ca.pem   # verify against these besides the system's roots
 //	    server_name: www.example.com    # SNI, and the name verified
 //
-// The probe's target is host:port, port 443 when it is left out. The
+// The probe's target is host:port, with port 443 when it is left out. The
 // handshake is the scrape: nothing is sent over the connection, which is
 // closed when the handshake is over.
 //
-// A server that starts in plaintext and turns to TLS when asked, a mail or
-// FTP server, is read with starttls: smtp, imap, pop3 or ftp. The greeting
-// is read and the protocol's request for TLS spoken (startTLS, which tcp
-// speaks too), and the handshake is made once the server has said yes;
-// the target's port is then the protocol's own when it is left out, 25,
-// 143, 110 or 21 (tlsCertStartTLSPorts). What the server said before TLS is
-// in the debug report and in an error, quoted and withheld from a probe's
-// caller, and never in the document, which says only which protocol began
-// TLS.
+// A server that starts in plaintext and switches to TLS when asked, such as
+// a mail or FTP server, is read with starttls: smtp, imap, pop3 or ftp. The
+// greeting is read and the protocol's request for TLS is sent (startTLS,
+// which tcp uses too). The handshake is made once the server agrees. The
+// target's port then defaults to the protocol's own: 25, 143, 110 or 21
+// (tlsCertStartTLSPorts). What the server said before TLS goes into the
+// debug report and into an error, quoted and withheld from a probe's caller.
+// It never goes into the document, which says only which protocol began TLS.
 //
-// A chain that does not verify does not fail the scrape: the expiry of a
-// certificate nobody trusts is still worth knowing, and why it is not
-// trusted is in the document, verified false and the error's text beside
-// it. A handshake that fails, a connection refused, or a deadline that
-// comes first does fail it.
+// A chain that does not verify does not fail the scrape. The expiry of a
+// certificate nobody trusts is still worth knowing, and the document says
+// why it is not trusted: verified false, with the error's text beside it. A
+// failed handshake, a refused connection, or a deadline that comes first
+// does fail the scrape.
 //
-// The tls block is the one http, grpc and sql take, read by the same code
-// (tlsConfig): ca_file, a client certificate, and server_name. Its
+// The tls block is the same one http, grpc and sql take, read by the same
+// code (tlsConfig): ca_file, a client certificate, and server_name. Its
 // insecure_skip_verify is refused, since no certificate is refused anyway.
 //
 // This file imports nothing outside the standard library.
@@ -136,12 +135,12 @@ const tlsCertMethod = "HANDSHAKE"
 // tlsCertDefaultPort is the port of a target that names none.
 const tlsCertDefaultPort = "443"
 
-// tlsCertStartTLSPorts are the ports of a target that names none with
-// request.starttls: each the port registered under the protocol's own name,
-// where its servers begin TLS with STARTTLS. SMTP's is 25, where a domain's
-// mail is delivered, rather than 587, where a user's client submits it: a
-// mail server's certificate is the one others deliver to it with; the
-// submission port is written as :587.
+// tlsCertStartTLSPorts are the default ports for a request.starttls target
+// that names none. Each is the port registered under the protocol's own
+// name, where its servers begin TLS with STARTTLS. SMTP uses 25, where a
+// domain's mail is delivered, rather than 587, where a user's client
+// submits it, because a mail server's certificate is the one others deliver
+// to it with. The submission port is written as :587.
 var tlsCertStartTLSPorts = map[string]string{startTLSSMTP: "25", startTLSIMAP: "143", startTLSPOP3: "110", startTLSFTP: "21"}
 
 // tlsCertLimitKeys is the key that sets the bound of what a server says
@@ -244,21 +243,21 @@ type tlsCertDocument struct {
 	OCSP tlsCertOCSP `json:"ocsp"`
 }
 
-// tlsCertOCSP is the OCSP response the server stapled to the handshake:
-// whether there was one, the status it gives the server's certificate,
-// good, revoked or unknown, whether it is signed by the certificate's
-// issuer, or a responder that issuer delegated to, for that certificate,
-// why not or why it could not be read, and its times, Unix seconds, 0 for
-// one it does not have.
+// tlsCertOCSP is the OCSP response the server stapled to the handshake. It
+// says whether there was one and what status it gives the server's
+// certificate (good, revoked or unknown). It says whether it is signed for
+// that certificate by the issuer or by a responder the issuer delegated to,
+// and if not, why, or why it could not be read. Its times are Unix seconds,
+// 0 for a time it does not have.
 type tlsCertOCSP struct {
 	Stapled  bool   `json:"stapled"`
 	Status   string `json:"status"`
 	Verified bool   `json:"verified"`
 	Error    string `json:"error"`
-	// ProducedAt is when the responder signed it; ThisUpdate when the
-	// status was known to be true; NextUpdate when a newer one is due, 0
-	// when the responder names no time, and SecondsUntilNextUpdate that
-	// less the time of the scrape, negative for a staple gone stale.
+	// ProducedAt is when the responder signed it. ThisUpdate is when the
+	// status was known to be true. NextUpdate is when a newer one is due, 0
+	// when the responder names no time. SecondsUntilNextUpdate is NextUpdate
+	// minus the scrape time, negative for a stale staple.
 	ProducedAt             int64 `json:"produced_at"`
 	ThisUpdate             int64 `json:"this_update"`
 	NextUpdate             int64 `json:"next_update"`
@@ -279,12 +278,12 @@ var ocspReasons = map[int]string{
 	ocsp.AACompromise: "aACompromise",
 }
 
-// stapledOCSP reads the OCSP response raw the server stapled for leaf,
-// checked against issuer, the certificate after it in the chain it
-// verified by, or as presented: its signature and that it is of leaf. A
-// response that cannot be read says why, with no status; one whose
-// signature does not check is read for its status and times all the same,
-// with verified false and why.
+// stapledOCSP reads raw, the OCSP response the server stapled for leaf. It
+// checks the signature, and that the response is for leaf, against issuer:
+// the certificate after leaf in the chain it verified by, or in the chain as
+// presented. A response that cannot be read says why, with no status. One
+// whose signature does not check is still read for its status and times,
+// with verified false and the reason.
 func stapledOCSP(raw []byte, leaf, issuer *x509.Certificate, now time.Time) tlsCertOCSP {
 	out := tlsCertOCSP{Stapled: len(raw) > 0}
 	if !out.Stapled || leaf == nil {
@@ -330,13 +329,13 @@ type tlsCertChainInfo struct {
 	// Length is the number of certificates presented.
 	Length int `json:"length"`
 	// EarliestNotAfter and SecondsUntilEarliestExpiry are when the chain
-	// stops verifying: of a chain that verifies, the latest of the chains
-	// it verifies by, each ending when the first of its certificates, its
-	// root included, expires, since a client trusts the server while any
-	// of them holds; of one that does not, the first of the presented
-	// certificates to expire. A certificate the server still sends but no
-	// client needs, such as an expired cross-signed root, would otherwise
-	// hold the expiry in the past for good.
+	// stops verifying. For a chain that verifies, this is the latest end
+	// among the chains it verifies by. Each chain ends when the first of its
+	// certificates, root included, expires, since a client trusts the server
+	// while any chain holds. For a chain that does not verify, it is the
+	// first presented certificate to expire. Otherwise a certificate the
+	// server still sends but no client needs, such as an expired
+	// cross-signed root, would keep the expiry in the past for good.
 	EarliestNotAfter           int64 `json:"earliest_not_after"`
 	SecondsUntilEarliestExpiry int64 `json:"seconds_until_earliest_expiry"`
 	// EarliestFrom is which certificates EarliestNotAfter is of:
@@ -504,25 +503,17 @@ func fetchTLSCert(ctx context.Context, target string, c *model.Collector, overri
 	}
 	traceOutcome(ctx, began+outcome)
 	traceFacts(ctx, tlsCertFacts(&doc, state)...)
-	return &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}, nil
+	return jsonBody(body, target, c, start), nil
 }
 
-// tlsCertStartTLS asks the server conn reaches to begin TLS as
-// request.starttls's protocol does (startTLS): it reads the greeting, which
-// must be the protocol's ready one, and speaks the protocol's request for
-// TLS, returning how the debug report tells it, the greeting and each
-// command and answer quoted, for the handshake's outcome to follow. The
-// reads and writes end at the scrape's deadline, or when it is cancelled;
-// the handshake, which the caller makes next, is bounded by the context
-// alone, as one without STARTTLS is.
+// tlsCertStartTLS asks the server conn reaches to begin TLS, as
+// request.starttls's protocol does (startTLS). It reads the greeting, which
+// must be the protocol's ready greeting, and sends the protocol's request
+// for TLS. It returns the text for the debug report (the greeting and each
+// command and answer, quoted), to be followed by the handshake's outcome.
+// The reads and writes end at the scrape's deadline or when it is
+// cancelled. The handshake, which the caller makes next, is bounded by the
+// context alone, as one without STARTTLS is.
 func tlsCertStartTLS(ctx context.Context, conn net.Conn, address tlsCertAddress, c *model.Collector) (string, error) {
 	protocol := c.Request.StartTLS
 	deadline, _ := ctx.Deadline()
@@ -552,8 +543,9 @@ func tlsCertStartTLS(ctx context.Context, conn net.Conn, address tlsCertAddress,
 
 // verifyTLSCertChain verifies the chain the server presented, as a TLS
 // client would: the first certificate against serverName, the others as
-// intermediates, up to roots, the system's when nil, at now. It returns
-// the chains it verifies by, each from the server's certificate to a root.
+// intermediates, up to roots (the system's when nil), at time now. It
+// returns the chains it verifies by, each from the server's certificate to
+// a root.
 func verifyTLSCertChain(certs []*x509.Certificate, roots *x509.CertPool, serverName string, now time.Time) ([][]*x509.Certificate, error) {
 	if len(certs) == 0 {
 		return nil, errors.New("the server presented no certificate")
@@ -617,10 +609,11 @@ func describeCertificate(cert *x509.Certificate, now time.Time) tlsCertificate {
 	return d
 }
 
-// checkTLSCertFiles reads the tls block's files as a handshake reads them,
-// for --dry-run: a CA file missing or holding no certificate, a client
-// certificate or key that does not load. Loading the configuration reads
-// none of them, since a file may be mounted after the exporter starts.
+// checkTLSCertFiles reads the tls block's files the way a handshake does,
+// for --dry-run. It reports a CA file that is missing or holds no
+// certificate, and a client certificate or key that does not load. Loading
+// the configuration reads none of them, since a file may be mounted after
+// the exporter starts.
 func checkTLSCertFiles(c *model.Collector, t *model.StaticTarget) []string {
 	if t != nil {
 		return nil
@@ -631,22 +624,22 @@ func checkTLSCertFiles(c *model.Collector, t *model.StaticTarget) []string {
 	return nil
 }
 
-// tlsCertSchemaRule is what a tlscert collector's request is held to beyond its
-// keys, as the exporter holds it (validateTLSCertRequest): its tls
-// block takes no insecure_skip_verify true, since a chain that does not
-// verify is reported and never refused.
+// tlsCertSchemaRule is the rule a tlscert collector's request must meet
+// beyond its keys, matching validateTLSCertRequest: its tls block may not
+// set insecure_skip_verify true, since a chain that does not verify is
+// reported and never refused.
 func tlsCertSchemaRule() map[string]any {
 	return map[string]any{"properties": map[string]any{"tls": map[string]any{"properties": map[string]any{"insecure_skip_verify": map[string]any{"not": map[string]any{"const": true}}}}}}
 }
 
-// tlsCertFacts are what a handshake's span tells (TracedRequest.Facts): by
-// OpenTelemetry's conventions the protocol's version and the cipher, by
+// tlsCertFacts are what a handshake's span reports (TracedRequest.Facts).
+// By OpenTelemetry's conventions: the protocol version and the cipher, by
 // the names Go and the IANA registry give them, and when the first
-// certificate expires; and how many certificates the server presented,
-// whether the chain verified, whether an OCSP response was stapled and the
-// status it gives, and the days the first has left, a fraction of a day
-// included. Never a certificate's subject or issuer, which the
-// server wrote, nor why the chain did not verify.
+// certificate expires. Also: how many certificates the server presented,
+// whether the chain verified, whether an OCSP response was stapled and its
+// status, and the days the first certificate has left, fractions included.
+// It never reports a certificate's subject or issuer, which the server
+// wrote, nor why the chain did not verify.
 func tlsCertFacts(doc *tlsCertDocument, state tls.ConnectionState) []TraceFact {
 	facts := []TraceFact{
 		nameFact("tls.protocol.name", "tls"),

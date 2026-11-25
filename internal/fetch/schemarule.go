@@ -7,31 +7,31 @@ import (
 	"unicode"
 )
 
-// The configuration schema (internal/config) holds a collector of each
-// request type to what Validate holds it to beyond its keys, by the type's
-// SchemaRule. These are the pieces such a rule is made of, shared by the
-// rules of the types and the rest of the schema.
+// The configuration schema (internal/config) checks each request type's
+// collector for what Validate requires beyond its keys, using the type's
+// SchemaRule. These are the building blocks of such rules, shared by the
+// types' rules and the rest of the schema.
 
 // SchemaWrittenKey is the rule that an object has the key and that it is
-// not "": what required alone cannot say, which goes by the key being
-// there, whatever its value. Every rule about a key that may be written ""
-// — one that requires it, or that forbids it beside another — is made of
-// it, so that key: "" is the key left out to the rule as it is to the
-// exporter.
+// not "". required alone cannot say this, since it only checks that the key
+// is present, whatever its value. Every rule about a key that may be
+// written "" — one that requires it, or that forbids it beside another — is
+// built from it. So key: "" means the key is left out, to the rule as to
+// the exporter.
 func SchemaWrittenKey(key string) map[string]any {
 	return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
 }
 
 // SchemaSurroundingBlank is a regular expression class of the characters
-// strings.TrimSpace takes off a text, written so that Go and JavaScript read
-// it alike: the two below U+0100 that are no ASCII as escapes, the rest as
-// themselves.
+// strings.TrimSpace removes from a text, written so Go and JavaScript read
+// it the same way. The two non-ASCII characters below U+0100 are written
+// as escapes, and the rest as themselves.
 const SchemaSurroundingBlank = `\t\n\v\f\r \x85\xA0` + "  -     　"
 
-// SchemaCaseless is a regular expression of text matched without regard to
-// case, written so that Go and JavaScript read it alike: each letter as a
-// class of its two cases, anything else escaped as regexp.QuoteMeta escapes
-// it.
+// SchemaCaseless is a regular expression matching text without regard to
+// case, written so Go and JavaScript read it the same way. Each letter
+// becomes a class of its two cases, and anything else is escaped as
+// regexp.QuoteMeta escapes it.
 func SchemaCaseless(text string) string {
 	var b strings.Builder
 	for _, r := range text {
@@ -47,12 +47,12 @@ func SchemaCaseless(text string) string {
 	return b.String()
 }
 
-// SchemaCaselessOneOf is the pattern of a text naming one of names as the
-// exporter matches a name such as request.driver or request.record_type: in
-// any case, with blanks around it or not. The spec has a driver and a DNS
-// record type matched so, as their databases and RFCs name them in any
-// case, so the schema takes what the exporter takes rather than the
-// exporter refusing what an enum would.
+// SchemaCaselessOneOf is the pattern of a text naming one of names, matched
+// the way the exporter matches a name such as request.driver or
+// request.record_type: in any case, with or without blanks around it. The
+// spec matches a driver and a DNS record type this way, because their
+// databases and RFCs name them in any case. So the schema accepts what the
+// exporter accepts, rather than refusing what an enum would.
 func SchemaCaselessOneOf(names ...string) string {
 	alternatives := make([]string, len(names))
 	for i, name := range names {

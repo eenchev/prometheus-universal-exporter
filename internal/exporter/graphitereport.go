@@ -8,15 +8,16 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// The graphite decoder leaves series out before the metric rules see them —
-// with no point that has a value, older than response.graphite.max_age,
-// answered twice — and, under response.graphite.invalid_lines: skip, carbon
-// lines it cannot read (decode/graphite.go). Without a word, a metric missing
-// for one of those reasons looks the same as one nobody wrote. So they are
-// counted in the collector's self-metrics, the series left out are logged at
-// debug level with why, and skipped lines at warn level, first in full and
-// then sparingly as other repeated failures are (failurelog.go), until a
-// read skips none.
+// The graphite decoder leaves out some series before the metric rules see
+// them: those with no point that has a value, those older than
+// response.graphite.max_age, and those answered twice. Under
+// response.graphite.invalid_lines: skip it also leaves out carbon lines it
+// cannot read (decode/graphite.go). Without a word, a metric missing for one
+// of those reasons looks the same as one nobody wrote. So they are counted
+// in the collector's self-metrics. The left-out series are logged at debug
+// level with the reason. Skipped lines are logged at warn level, first in
+// full and then sparingly like other repeated failures (failurelog.go),
+// until a read skips none.
 
 // noteGraphite counts and logs what the graphite decoder left out of d. file
 // is the directory's file d was read from, or empty; target is the target as

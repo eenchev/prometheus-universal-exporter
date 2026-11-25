@@ -1,9 +1,9 @@
 # SIP
 
-The `sip` request type asks a SIP server, a proxy, a registrar or a PBX,
-whether it answers, the way SIP devices ask each other: it sends one
-`OPTIONS` request (RFC 3261) over UDP, TCP or TLS and hands the response to
-the transforms as a JSON document, with its status, how long it took and
+The `sip` request type asks a SIP server (a proxy, a registrar or a PBX)
+whether it answers, the way SIP devices ask each other. It sends one
+`OPTIONS` request (RFC 3261) over UDP, TCP or TLS, and hands the response to
+the transforms as a JSON document, with its status, how long it took, and
 what the server says of itself. Use it to watch, from where the exporter
 runs:
 
@@ -13,14 +13,13 @@ runs:
 
 No call is placed and nothing is registered.
 
-The type is opt-in: the default build and the published image leave it out,
-so a build carries it only when asked
-([Building with sip](#building-with-sip)).
+The type is opt-in: the default build and the published image leave it out
+(see [Building with sip](#building-with-sip)).
 
 ## Building with sip
 
-`OPT_IN_REQUEST_TYPES` names the opt-in types a build adds to the types it
-carries, comma-separated:
+`OPT_IN_REQUEST_TYPES` lists, comma-separated, the opt-in types that a
+build adds:
 
 ```sh
 make build OPT_IN_REQUEST_TYPES=sip              # bin/prometheus-universal-exporter
@@ -28,9 +27,10 @@ docker build --build-arg OPT_IN_REQUEST_TYPES=sip -t exporter:sip .
 go build -tags "$(sh tools/request-type-tags.sh '' '' sip)" .
 ```
 
-The tag is `request_type_sip`. A configuration with a `sip` collector
-is refused by a build without the type, at startup, on a reload and by
-`--dry-run`, saying how to build one that has it.
+The build tag is `request_type_sip`. A build without the type refuses a
+configuration with a `sip` collector at startup, on a reload and with
+`--dry-run`, and the error says how to build one that has it. The type uses
+only the standard library and adds no dependency.
 
 ## A collector
 
@@ -74,16 +74,17 @@ and the account take no placeholder. A probe takes `timeout` and
 `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
-The decoder is `json`, whether `decoder.type` is left out or set to it; any
-other decoder, and a transform that does not read JSON, is refused when the
-configuration loads. Use `jq`, `yq` or `python`.
+The decoder is `json`, whether `decoder.type` is left out or set to it. Any
+other decoder, and a transform that does not read JSON (`regex`, `csv`,
+`css`, `prometheus`), is refused when the configuration loads; use `jq`,
+`yq` or `python`.
 
 ## The transport
 
 - `udp`, the default, is what most SIP is spoken over. A datagram may be
   lost, so the request is sent again while no response comes, as RFC 3261
-  has a client do: after half a second, then after twice as long each
-  time, up to four seconds, until the scrape's deadline.
+  has a client do: after half a second, then after twice as long each time,
+  up to four seconds, until the scrape's deadline.
 - `tcp` sends the request once over a connection of the scrape's own.
 - `tls` does the same over TLS, and the server's certificate is verified
   as the `tls` block says, against the system's authorities when it names
@@ -130,11 +131,12 @@ NAPTR records are not looked up.
 
 - `status_code` and `reason` are the response's, and `ok` is true of a
   status from 200 to 299.
-- **A response is an answer, whatever its status.** A `404` or a `405` is a
-  server that is up and does not like the question: the scrape succeeds
-  and `ok` is false, so a rule decides what counts as up. Many servers
-  answer an OPTIONS for no user with `200`, some with `404`; set
-  `request_uri` to a user the server knows, or read `.status_code < 500`.
+- **A response is an answer, whatever its status.** A `404` or a `405` comes
+  from a server that is up and does not like the question: the scrape
+  succeeds and `ok` is false, so a rule decides what counts as up. Many
+  servers answer an OPTIONS for no user with `200`, and some with `404`.
+  Set `request_uri` to a user that the server knows, or read
+  `.status_code < 500`.
 - `attempts` is how many times the last request was sent, more than once
   over UDP alone, and `response_seconds` how long after it was first sent
   its response came. `requests` is how many requests the scrape made: 2
@@ -187,11 +189,12 @@ one that ignores requests from addresses it does not know reads here as no
 response.
 
 A message is the response only when it answers this request, by the branch
-of its `Via`, its `Call-ID` and its `CSeq`. Any other is ignored, and so is
-a provisional response (`100 Trying`), with the final one waited for. When
-the deadline, the probe's `timeout` or the scrape's own, 30 seconds when
-neither is set, comes first, the scrape fails saying how many times the
-request was sent, how many messages were ignored and why the last one was:
+of its `Via`, its `Call-ID` and its `CSeq`. Any other message is ignored, and
+so is a provisional response (`100 Trying`), while the final one is waited
+for. When the deadline (the probe's `timeout`, or the scrape's own, 30
+seconds when neither is set) comes first, the scrape fails, saying how many
+times the request was sent, how many messages were ignored, and why the
+last one was:
 
 ```text
 no response from 192.0.2.10:5060 before the deadline, the request sent 7 times: context deadline exceeded
@@ -221,17 +224,22 @@ of one.
 ## Errors and self-metrics
 
 A failed request is reported in the `sip` stage and follows
-`error_handling.on_fetch_error`, naming the server: no response before the
-deadline, a refusal the network sent back
-(`reading the response of 192.0.2.10:5060: ... connection refused`), a
-connection closed before an answer, an answer over a stream that is no SIP
-response, a TLS handshake that failed, a credential file that cannot be
-read or is empty, or a challenge that cannot be answered. A host the target
-lists refuse counts in `http_exporter_targets_refused_total`, answered
-`403`. Transforms see no status (`$status` is `null`, Python's
-`response.status_code` `None`) and the header
-`Content-Type: application/json`; the response's status is the document's
-`status_code`.
+`error_handling.on_fetch_error`, naming the server. Causes include:
+
+- no response before the deadline;
+- a refusal that the network sent back
+  (`reading the response of 192.0.2.10:5060: ... connection refused`);
+- a connection closed before an answer;
+- an answer over a stream that is not a SIP response;
+- a TLS handshake that failed;
+- a credential file that cannot be read or is empty;
+- a challenge that cannot be answered.
+
+A host that the target lists refuse counts in
+`http_exporter_targets_refused_total` and is answered `403`. Transforms see
+no status (`$status` is `null`, and Python's `response.status_code` is
+`None`) and the header `Content-Type: application/json`; the response's
+status is the document's `status_code`.
 
 A [debug probe](CONFIGURATION.md#debug-probes) shows each request with how
 it ended:
@@ -254,8 +262,8 @@ TLS, and `http_method="OPTIONS"`.
 - **OPTIONS only.** No INVITE, so no call is placed and no media is
   tested, and no REGISTER, so the account is not registered: it only
   answers a challenge to the OPTIONS.
-- **The address is the target's.** SRV and NAPTR records are not looked
-  up, and a response is read on the socket the request left from, so a
+- **The address is the target's.** SRV and NAPTR records are not looked up,
+  and a response is read on the socket that the request left from, so a
   server that answers from another address is not heard over UDP.
 - **Digest alone.** MD5 and SHA-256 with `qop=auth` or none; `auth-int`
   alone, AKA and other schemes are not answered.

@@ -23,11 +23,11 @@ import (
 )
 
 // The imap request type logs in to a mail server as a mail client does and
-// asks how much mail each mailbox holds: the greeting, CAPABILITY,
-// STARTTLS, LOGIN or AUTHENTICATE, then STATUS for each mailbox the
-// collector names, LIST for each it names by a pattern, GETQUOTAROOT when
-// it asks for the quota, and for each of its counts EXAMINE and SEARCH. A
-// mailbox is opened only to be searched, read-only, so no message is
+// asks how much mail each mailbox holds. The session is: the greeting,
+// CAPABILITY, STARTTLS, LOGIN or AUTHENTICATE, then STATUS for each mailbox
+// the collector names, LIST for each it names by a pattern, GETQUOTAROOT
+// when it asks for the quota, and EXAMINE and SEARCH for each of its counts.
+// A mailbox is opened only to be searched, read-only, so no message is
 // read, marked or moved.
 //
 //	request:
@@ -40,14 +40,14 @@ import (
 // What the server said is handed to the transforms as one JSON document:
 // the greeting, whether the session is over TLS, the capabilities, and for
 // each mailbox its messages, unseen, recent, the next UID and, where the
-// server counts it, its size. A mailbox the server refuses STATUS for has
-// answered: it is in the document with what the server said, and the scrape
-// succeeds. A greeting that is no OK, TLS that cannot be begun and a login
-// refused fail the scrape.
+// server counts it, its size. A mailbox the server refuses STATUS for still
+// counts as answered: it is in the document with what the server said, and
+// the scrape succeeds. A greeting that is not OK, TLS that cannot be begun,
+// or a refused login fails the scrape.
 //
-// The target is host, host:port, imap://host:port or imaps://host:port:
-// port 143, and 993 for imaps://, which is TLS from the first byte. On
-// imap:// TLS is begun with STARTTLS where the server offers it. A password
+// The target is host, host:port, imap://host:port or imaps://host:port. The
+// port is 143, or 993 for imaps://, which is TLS from the first byte. On
+// imap://, TLS is begun with STARTTLS where the server offers it. A password
 // is never sent over a connection that is not TLS, unless allow_plaintext
 // says the server has none.
 //
@@ -61,11 +61,10 @@ type IMAPConfig struct {
 }
 
 // IMAPCount is an entry of request.counts: how many messages of a mailbox
-// match a search, counted by the server. The mailbox is opened to search
-// it, read-only, with EXAMINE, which marks nothing read and changes no
-// flag. With oldest, the first of the matching messages is asked when it
-// arrived, its INTERNALDATE and nothing else of it; no message's text is
-// fetched.
+// match a search, counted by the server. The mailbox is opened read-only to
+// search it, with EXAMINE, which marks nothing read and changes no flag.
+// With oldest, the server is asked when the first matching message arrived:
+// its INTERNALDATE and nothing else of it. No message's text is fetched.
 type IMAPCount struct {
 	Name    string `yaml:"name,omitempty"`
 	Mailbox string `yaml:"mailbox,omitempty"`
@@ -140,10 +139,10 @@ func init() {
 		}
 		return value, nil
 	}
-	// A probe's value is written into a search within double quotes only
-	// (Validate), where it is one string whatever it holds, but for what
-	// ends the string, and what a search sent without a charset may not
-	// hold: so no probe adds a criterion to a search.
+	// A probe's value is written into a search only within double quotes
+	// (Validate). There it is one string whatever it holds, except for what
+	// ends the string and what a search sent without a charset may not hold.
+	// So no probe adds a criterion to a search.
 	templateEscapers[imapSearchKind] = func(where, name, value string) (string, error) {
 		if strings.ContainsFunc(value, func(r rune) bool { return r < ' ' || r >= 0x7f || r == '"' || r == '\\' }) {
 			return "", fmt.Errorf("%s: the value of %s holds a double quote, a backslash or a character that is not printable ASCII, which a search's quoted text may not take from a probe", where, name)
@@ -327,11 +326,11 @@ type imapQuota struct {
 }
 
 // imapCounted is the answer to one of request.counts: how many messages of
-// the mailbox match, null when the server refused to open the mailbox or
-// to search it, whose answer is then in text.
+// the mailbox match. It is null when the server refused to open the mailbox
+// or to search it, and the server's answer is then in text.
 //
-// oldest_timestamp is when the first of the matching messages arrived, in
-// seconds since the epoch: null unless the count asks for it, when nothing
+// oldest_timestamp is when the first matching message arrived, in seconds
+// since the epoch. It is null unless the count asks for it, when nothing
 // matches, and when the server did not say.
 type imapCounted struct {
 	Name            string `json:"name"`
@@ -377,8 +376,8 @@ type imapAnswer struct {
 	text     string
 }
 
-// line reads one line of a response, with the literals it holds: a line
-// that ends {n} goes on with n bytes and the rest of the line, and the
+// line reads one line of a response, with the literals it holds. A line
+// that ends {n} goes on with n bytes and then the rest of the line. The
 // literal is put into the line as a quoted string, so that what reads the
 // line reads one form.
 func (s *imapSession) line() (string, error) {
@@ -639,26 +638,18 @@ func (imapRequester) Fetch(ctx context.Context, target string, c *model.Collecto
 	if err != nil {
 		return nil, err
 	}
-	resp := &HTTPResponse{
-		StatusCode: http.StatusOK,
-		NoStatus:   true,
-		Headers:    http.Header{"Content-Type": {"application/json"}},
-		Body:       body,
-		Target:     target,
-		Collector:  c.Name,
-		Duration:   time.Since(start),
-	}
+	resp := jsonBody(body, target, c, start)
 	if state := conn.tlsState(); state != nil {
 		resp.Trip = &HTTPTrip{Total: resp.Duration, TLSConnection: tlsConnectionOf(state)}
 	}
 	return resp, nil
 }
 
-// imapText is a greeting as the document and a debug report have it: its
-// control characters written as ?, and cut where any failure's text is.
-// It is not looked through for credentials as netShown looks, which reads
-// the AUTH=PLAIN of a greeting's capabilities as one: a greeting holds
-// nothing the scrape sent.
+// imapText is a greeting as the document and a debug report show it. Its
+// control characters are written as ?, and it is cut where any failure's
+// text is. It is not searched for credentials the way netShown searches,
+// which would read the AUTH=PLAIN of a greeting's capabilities as one. A
+// greeting holds nothing the scrape sent.
 func imapText(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
@@ -701,10 +692,10 @@ func imapCapabilities(untagged []string) []string {
 	return out
 }
 
-// login logs in, with the mechanism request.auth names, or else with
-// AUTHENTICATE PLAIN where the server offers it, which carries any name and
-// password, and with LOGIN otherwise. A refusal fails the scrape, saying
-// what the server said, never what was sent.
+// login logs in with the mechanism request.auth names. Without one, it uses
+// AUTHENTICATE PLAIN where the server offers it, since that carries any name
+// and password, and LOGIN otherwise. A refusal fails the scrape. The error
+// says what the server said, never what was sent.
 func (s *imapSession) login(c *model.Collector, password string, offered []string, hostPort string) error {
 	user, mechanism := c.Request.Username, c.Request.Auth
 	if mechanism == "" {
@@ -726,10 +717,10 @@ func (s *imapSession) login(c *model.Collector, password string, offered []strin
 		} else if answer, err = s.command("AUTHENTICATE "+name, ""); err == nil && answer.status == "+" {
 			answer, err = s.continued(credential, "*** (the credential)")
 		}
-		// A server that asks for more has refused what it was given: a
-		// token's refusal comes as a continuation whose text is the error,
-		// which an empty line answers for XOAUTH2 and one byte for
-		// OAUTHBEARER, and any other is given up with *.
+		// A server that asks for more has refused what it was given. A token's
+		// refusal comes as a continuation whose text is the error. For XOAUTH2
+		// an empty line answers it, and for OAUTHBEARER one byte. Any other
+		// continuation is given up with *.
 		if err == nil && answer.status == "+" {
 			switch name {
 			case "XOAUTH2":
@@ -878,14 +869,13 @@ func (s *imapSession) mailboxes(named, capabilities []string, hostPort string) (
 	return out, nil
 }
 
-// counts answers each of request.counts: its mailbox is opened read-only,
-// with EXAMINE, unless the count before it asked for the same, and
-// searched. A
-// server with ESEARCH answers the number of matches; any other lists them,
-// and they are counted, a line of that answer being as long as the
-// response limit leaves room for. A mailbox the server does not open, and
-// a search it refuses, as it does criteria it cannot read, is the count's
-// answer, and fails nothing.
+// counts answers each of request.counts. Its mailbox is opened read-only
+// with EXAMINE, unless the count before it asked for the same one, and then
+// searched. A server with ESEARCH answers the number of matches. Any other
+// lists them and they are counted. A line of that answer may be as long as
+// the response limit leaves room for. A mailbox the server does not open,
+// and a search it refuses (as it refuses criteria it cannot read), is the
+// count's answer and fails nothing.
 func (s *imapSession) counts(asked []IMAPCount, filled, capabilities []string) ([]imapCounted, error) {
 	out := []imapCounted{}
 	counted := slices.Contains(capabilities, "ESEARCH") || slices.Contains(capabilities, "IMAP4REV2")
@@ -954,9 +944,9 @@ func imapAskedForMore(command string) error {
 var imapInternalDate = regexp.MustCompile(`(?i)\bINTERNALDATE "([^"]*)"`)
 
 // arrived asks when the message of a sequence number arrived in its
-// mailbox, its INTERNALDATE, and nothing else of it. A message that is
-// gone since the search, and a date the server writes otherwise than IMAP
-// does, are no date, and fail nothing.
+// mailbox: its INTERNALDATE, and nothing else of it. A message gone since
+// the search, or a date the server writes differently from IMAP, gives no
+// date and fails nothing.
 func (s *imapSession) arrived(message int64) (*int64, error) {
 	answer, err := s.command("FETCH "+strconv.FormatInt(message, 10)+" (INTERNALDATE)", "")
 	if err != nil {
@@ -984,9 +974,10 @@ func (s *imapSession) arrived(message int64) (*int64, error) {
 }
 
 // imapSearchCount is how many messages a search matched and the first of
-// them, the lowest sequence number, 0 when nothing matched or the server
-// did not say: the COUNT and the MIN of an ESEARCH response, or the
-// numbers of the SEARCH responses, none of either being no match.
+// them, the lowest sequence number. first is 0 when nothing matched or the
+// server did not say. They come from the COUNT and MIN of an ESEARCH
+// response, or from the numbers of the SEARCH responses. None of either
+// means no match.
 func imapSearchCount(untagged []string) (count, first int64) {
 	for _, line := range untagged {
 		fields := strings.Fields(line)

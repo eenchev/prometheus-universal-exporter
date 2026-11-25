@@ -13,23 +13,26 @@ import (
 )
 
 // checkMetricFamilies refuses a collector whose rules are bound to fail the
-// validation every scrape's metrics go through (model.MetricSet.Validate),
-// whatever the target answers: two rules giving one metric name different
-// types; a rule named as a series of another rule's histogram or summary; a
-// description longer than limits.max_help_length; a static label value
-// longer than limits.max_label_value_length that nothing cuts or maps first;
-// and more fixed labels than limits.max_labels_per_metric
-// (checkFixedLabelCount).
+// validation that every scrape's metrics go through
+// (model.MetricSet.Validate), whatever the target answers:
+//   - two rules giving one metric name different types;
+//   - a rule named as a series of another rule's histogram or summary;
+//   - a description longer than limits.max_help_length;
+//   - a static label value longer than limits.max_label_value_length that
+//     nothing cuts or maps first;
+//   - more fixed labels than limits.max_labels_per_metric
+//     (checkFixedLabelCount).
+//
 // Each would otherwise load, and then fail every scrape with an error that
 // names the series rather than the setting to change.
 //
-// A label value that holds {{param_...}} placeholders is measured as a probe
-// that gives no parameter fills it, each placeholder replaced by its default
-// and by nothing where it has none (fetch.CollectorLabelDefaults): too long
-// by its own text and its defaults, it fails every probe that leaves the
-// parameters out. What a probe's own values make of it is the scrape's to
-// find. Such a value of a rule's label that a value_map of the rule's name
-// maps is measured as mapped (checkTemplatedLabelLength).
+// A label value that holds {{param_...}} placeholders is measured as if a
+// probe gave no parameter: each placeholder is replaced by its default, or
+// by nothing where it has none (fetch.CollectorLabelDefaults). If it is too
+// long with its own text and its defaults, it fails every probe that leaves
+// the parameters out. What a probe's own values make of it is for the
+// scrape to find. Such a value of a rule's label that a value_map of the
+// rule's name maps is measured as mapped (checkTemplatedLabelLength).
 //
 // Several rules may give one name the same type: they feed one family, as
 // one rule per source field of the same metric does, and that is kept.
@@ -118,17 +121,18 @@ func checkMetricFamilies(x *model.Collector) error {
 }
 
 // checkFixedLabelCount refuses a collector whose series carry more labels
-// than limits.max_labels_per_metric before the target has said anything:
-// the labels every series gets, those of transform.labels, and those every
-// series of a rule gets, the rule's static labels, counted once each and as
-// remove_labels and rename_labels leave them (transform.applyCollectorLabels).
-// The count is of the labels that are certain, so a refused collector is
-// one whose every series would fail validation: a value with a placeholder,
-// which a probe may fill with nothing, and a static label some value_map of
-// its name may map to "", which leaves it off, are not counted. The labels
-// the exporter adds past the validation, such as a static target's, are not
-// held to the limit and not counted either. A python transform's rules make
-// no series, so only transform.labels are counted for it.
+// than limits.max_labels_per_metric before the target has said anything.
+// It counts the labels every series gets (those of transform.labels) and
+// those every series of a rule gets (the rule's static labels), each once
+// and as remove_labels and rename_labels leave them
+// (transform.applyCollectorLabels). Only certain labels are counted, so a
+// refused collector is one whose every series would fail validation. Not
+// counted are a value with a placeholder, which a probe may fill with
+// nothing, and a static label that some value_map of its name may map to
+// "", which leaves it off. The labels the exporter adds after validation,
+// such as a static target's, are not held to the limit and not counted
+// either. A python transform's rules make no series, so only
+// transform.labels are counted for it.
 func checkFixedLabelCount(x *model.Collector) error {
 	limit := x.Limits.MaxLabelsPerMetric
 	if limit <= 0 {
@@ -200,18 +204,18 @@ func labelHasValueMap(x *model.Collector, name string) bool {
 }
 
 // checkTemplatedLabelLength refuses the static value of the label name of
-// the metric rule at index rule, which holds placeholders and is least once
-// they take their defaults, where every probe of a kind would fail
-// validation for its length: as a constant is refused, with the value a
-// value_map of the rule's name maps it to measured in its place
+// the metric rule at index rule when every probe of a kind would fail
+// validation for its length. The value holds placeholders and is least once
+// they take their defaults. It is refused as a constant is, with the value
+// that a value_map of the rule's name maps it to measured in its place
 // (transform.MappedStaticLabelValue).
 //
-// Where such a map maps the label, its "*" entry is what every value the
-// probe gives that the map does not list becomes, and one longer than the
-// limit is refused whatever the defaults are: a probe can give a value
-// listed, but the label is written to take any. A value the map lists only
-// some of is the probe's to fill: a listed value mapped to too long a text
-// fails the probe that gives it, as any long value does, and is refused here
+// Where such a map maps the label, its "*" entry is what every value from
+// the probe that the map does not list becomes. A "*" entry longer than the
+// limit is refused whatever the defaults are: a probe can give a listed
+// value, but the label is written to take any. A value the map lists only
+// some of is for the probe to fill. A listed value mapped to too long a text
+// fails the probe that gives it, as any long value does. It is refused here
 // only where the defaults are that value, since then it fails every probe
 // that leaves the parameters out. A value filled to nothing is the label
 // left out, which no map sees.
@@ -248,13 +252,14 @@ func checkTemplatedLabelLength(x *model.Collector, rule int, metric, name, least
 
 // seriesNames are the names under which the series of the metric rule at
 // index rule meet the value maps and the cuts of truncate: true, which go by
-// the series' name (mapLabelValues, truncateLabels): a rule's own name, and
-// for a prometheus rule without one, which keeps each series' own name, ""
-// for the names no rule has, which nothing maps, then each name of another
-// rule that the rule's expression matches, as the scrape matches it against
-// the name the series was read with, before metrics_prefix and
-// name_escaping, which apply after the maps and the cuts. An expression
-// that does not compile matches nothing: the scrape fails that rule anyway.
+// the series' name (mapLabelValues, truncateLabels). That is the rule's own
+// name. A prometheus rule without one keeps each series' own name, so for it
+// the names are "" for the names no rule has (which nothing maps), then each
+// name of another rule that the rule's expression matches. The scrape
+// matches the expression against the name the series was read with, before
+// metrics_prefix and name_escaping, which apply after the maps and the cuts.
+// An expression that does not compile matches nothing: the scrape fails
+// that rule anyway.
 func seriesNames(x *model.Collector, rule int) []string {
 	r := &x.Metrics[rule]
 	if r.Name != "" || r.Expression == "" || x.Transform.Type != "prometheus" {
@@ -273,12 +278,12 @@ func seriesNames(x *model.Collector, rule int) []string {
 	return names
 }
 
-// labelTruncatedByName says whether the label name of the series of the
-// name metric is cut to the limit at the scrape whatever the rule that made
-// them: some rule of that name sets truncate: true on it, which
-// truncateLabels applies to every series of the name, after the value maps.
-// The series of a rule without a name, "", are cut by the rule's own setting
-// alone.
+// labelTruncatedByName reports whether the label name of the series of the
+// metric named metric is cut to the limit at the scrape, whatever rule made
+// them. That is so when some rule of that name sets truncate: true on it,
+// which truncateLabels applies to every series of the name, after the value
+// maps. The series of a rule without a name, "", are cut only by the rule's
+// own setting.
 func labelTruncatedByName(x *model.Collector, metric, name string) bool {
 	if metric == "" {
 		return false
@@ -301,9 +306,9 @@ func labelTruncatedByName(x *model.Collector, metric, name string) bool {
 const valueMapAny = "*"
 
 // labelValueMap is the value_map that maps the label name of the series of
-// the rules named metric, as mapLabelValues finds it: the first any rule of
-// that name gives the label, which CheckLabelValueMapsAgree holds the others
-// to. It is nil where none does.
+// the rules named metric, as mapLabelValues finds it: the first one any rule
+// of that name gives the label. CheckLabelValueMapsAgree holds the others to
+// it. It is nil where no rule gives one.
 func labelValueMap(x *model.Collector, metric, name string) map[string]string {
 	for i := range x.Metrics {
 		if x.Metrics[i].Name != metric {

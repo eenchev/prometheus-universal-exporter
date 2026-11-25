@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // What a chain of requests (chain.go) tells the rest of the exporter, and
@@ -128,6 +130,21 @@ type ChainError struct {
 func (e *ChainError) Error() string { return e.Report.Failed + ": " + e.err.Error() }
 
 func (e *ChainError) Unwrap() error { return e.err }
+
+// pastedChain runs a chain on answers pasted on the debug page, nil in a
+// build without the http type (chain.go).
+var pastedChain func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, first *HTTPResponse, steps map[string]*HTTPResponse) (*HTTPResponse, error)
+
+// PastedChain runs c's chain on the answers pasted on the debug page: first
+// is the first request's, and steps each step's by name. It returns ok
+// false for a collector without a chain, or a build without the http type.
+func PastedChain(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, first *HTTPResponse, steps map[string]*HTTPResponse) (response *HTTPResponse, ok bool, err error) {
+	if pastedChain == nil || CollectorPolicy(c).Chain == nil {
+		return nil, false, nil
+	}
+	response, err = pastedChain(ctx, target, c, overrides, first, steps)
+	return response, true, err
+}
 
 // chainTrip is what the requests of one trip of a chain share.
 type chainTrip struct {

@@ -47,7 +47,9 @@ type collectJob struct {
 	// scrape is set for a static target's scrape, whose budget is its
 	// interval, so an error it runs out of says so as a scrape's.
 	scrape bool
-	log    collectLog
+	// staticName is the static target a scrape is of, "" for a probe.
+	staticName string
+	log        collectLog
 	// python is the worker statistics the trip's scripts count in when the
 	// trip counts in no statistics itself, rec's, as a debug probe does not
 	// (pythonstats.go).
@@ -56,6 +58,9 @@ type collectJob struct {
 	// one (debugpage.go): no request is made, and the body is held to the
 	// collector's response limit as a fetched one is.
 	pasted *fetch.HTTPResponse
+	// pastedSteps are the answers pasted for the steps of a chain, by step
+	// name, which a chained collector's run reads after pasted.
+	pastedSteps map[string]*fetch.HTTPResponse
 	// requester, when set, is the collector whose request block fetches the
 	// target, with its target policy, credentials and accept_status. collector
 	// then decodes and transforms the response. A debug page's run of one
@@ -385,6 +390,13 @@ func (t *collectTrip) fetch() (*fetch.HTTPResponse, *collected) {
 	}
 	if j.pasted != nil {
 		response, err = pastedResponse(t.c, j.pasted)
+		if err == nil {
+			// A chain reads the answers pasted for its steps, after the
+			// first, and shows the URLs it would have asked.
+			if chained, ok, chainErr := fetch.PastedChain(t.ctx, pastedTarget(j.target), requester, j.overrides, response, j.pastedSteps); ok {
+				response, err = chained, chainErr
+			}
+		}
 	} else {
 		fetchCtx := t.ctx
 		if t.revalidates {
@@ -396,7 +408,8 @@ func (t *collectTrip) fetch() (*fetch.HTTPResponse, *collected) {
 		response, err = t.s.fetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
 	if t.chain = chainReportOf(response, err); t.chain != nil {
-		t.s.noteChain(t.ctx, t.chain, requester, t.rec, j.display, j.target)
+		t.s.noteChain(t.ctx, t.chain, requester, t.rec, j.display, j.target, j.staticName)
+		t.trace.record(func(pt *probeTrace) { pt.chain = t.chain })
 	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
@@ -908,4 +921,13 @@ func chainFailedStep(report *fetch.ChainReport) string {
 		return ""
 	}
 	return report.FailedStep
+}
+
+// pastedTarget is the target the URLs of a chain run on pasted answers are
+// shown on: the run's, or a name that is no host's when it has none.
+func pastedTarget(target string) string {
+	if target == "" {
+		return "http://target.invalid"
+	}
+	return target
 }

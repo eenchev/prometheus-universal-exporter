@@ -3,6 +3,7 @@
 package exporter
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -175,4 +176,69 @@ func TestEachRequestOfAChainIsASpanOfItsStep(t *testing.T) {
 	if want := []string{"first ", "last_build 1", "last_build 2", "last_build 3"}; !slices.Equal(steps, want) {
 		t.Fatalf("the requests' spans are %v, want %v", steps, want)
 	}
+}
+
+// A debug probe of a chain reports it step by step; the debug page runs a
+// chain on answers pasted for its steps, showing the URLs it would ask and
+// the workflow diagram with the failed step red, and the steps after it
+// not reached.
+func TestTheDebugReportOfAChain(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	server := modeServer(t, jenkinsCollector("failing", "", false))
+	server.SetDebug(DebugFull)
+	r := debugProbeGet(t, server, "collector=failing&debug=true&target="+url.QueryEscape(target.URL))
+	assertContains(t, r.Body.String(),
+		"\nChain\n",
+		"  first       ok          GET "+target.URL+"/api/json -> 200 in ",
+		`              read: jobs=["api","web","db"]`,
+		"  last_build  FAILED      3 items, 1 failed, in ",
+		`              item 2 (web): GET `+target.URL+`/job/web/lastBuild/api/json -> received HTTP status 404`,
+	)
+
+	page := debugPageServer(t, &model.Config{Collectors: []model.Collector{jenkinsCollector("pasted", "", false)}})
+	run := pastedTo("pasted", `{"jobs":[{"name":"api"},{"name":"web"}]}`)
+	run["steps"] = map[string]string{"last_build": `{"duration": 1000}`}
+	answer := postRun(t, page, run, http.StatusOK)
+	if !answer.OK || !strings.Contains(answer.Series, `jenkins_last_build_seconds{job="web"} 1`) {
+		t.Fatalf("the run on pasted answers: %+v", answer)
+	}
+	shown := chainShown(t, answer)
+	for _, want := range []string{`"tag":"svg"`, `["class","chain-block chain-ok"]`, "http://target.invalid/job/web/lastBuild/api/json", `"id":"chain-step-last_build"`} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("no %q in the chain shown:\n%s", want, shown)
+		}
+	}
+	delete(run, "steps")
+	answer = postRun(t, page, run, http.StatusOK)
+	if shown = chainShown(t, answer); answer.OK || !strings.Contains(shown, `["class","chain-block chain-failed"]`) || !strings.Contains(shown, "no answer was pasted for it") {
+		t.Fatalf("a step with no answer pasted: %s", shown)
+	}
+}
+
+// The status page draws each chained collector's last trip, with the
+// requests it sent, and each chained static target's last scrape; the
+// collectors page says how many requests a chain makes.
+func TestTheStatusPagesDrawAChainsLastTrip(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	cfg := &model.Config{Collectors: []model.Collector{jenkinsCollector("chained", model.ChainItemSkip, false)}}
+	server := landingServer(t, cfg)
+	if r := probeOnce(t, server, "/probe?collector=chained&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	status := getPath(server, http.MethodGet, server.staticTargetsStatusEndpoint()).Body.String()
+	assertContains(t, status, `<h2 id="chains">Chained collectors</h2>`, `id="chain-chained"`, "4 requests per trip", "<svg", "failed items skipped")
+	collectors := getPath(server, http.MethodGet, "/collectors").Body.String()
+	assertContains(t, collectors, "a chain of 2 requests; the last trip sent 4 requests")
+}
+
+// chainShown is the chain a debug page's run answered, as its JSON.
+func chainShown(t *testing.T, answer debugAnswer) string {
+	t.Helper()
+	shown, err := json.Marshal(answer.Chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(shown)
 }

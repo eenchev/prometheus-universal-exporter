@@ -57,6 +57,32 @@ type chainRun struct {
 	report *ChainReport
 	// answers are each step's answer, for answer: all.
 	answers []json.RawMessage
+	// pasted are the answers pasted on the debug page, by step name, for a
+	// chain run on them (pastedChain); nil for one that asks the target.
+	pasted map[string]*HTTPResponse
+}
+
+// ask sends a request of the chain, c's with overrides, and returns its
+// answer: the target's, or the one pasted for the step.
+func (r *chainRun) ask(ctx context.Context, c *model.Collector, overrides RequestOverrides) (*HTTPResponse, error) {
+	if r.pasted == nil {
+		return fetch(ctx, r.target, c, overrides, r.forwarded)
+	}
+	countChainRequest(ctx)
+	step := chainStepOf(ctx).name
+	pasted, ok := r.pasted[step]
+	if !ok {
+		return nil, errors.New("no answer was pasted for it")
+	}
+	if limit := responseLimit(c); int64(len(pasted.Body)) > limit {
+		return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", len(pasted.Body), limit), model.ErrLimitExceeded)
+	}
+	answer := *pasted
+	answer.Headers = pasted.Headers.Clone()
+	if u, err := requestURL(r.target, c, overrides); err == nil {
+		answer.Trip = &HTTPTrip{URL: u}
+	}
+	return &answer, nil
 }
 
 // chainValueRead is a value read from an answer: its value, text or a
@@ -71,7 +97,6 @@ type chainValueRead struct {
 // fetchChain makes the requests of a chain and returns the trip's
 // response.
 func fetchChain(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-	own := httpRequest(c)
 	// The probe's timeout covers every request, so it is applied once,
 	// here, and not again by each request's fetch.
 	if overrides.Timeout > 0 {
@@ -81,11 +106,17 @@ func fetchChain(ctx context.Context, target string, c *model.Collector, override
 		overrides.Timeout = 0
 	}
 	ctx = expr.WithMemoryLimit(ctx, c.Limits.MaxExpressionMemory)
+	return runChain(ctx, target, c, overrides, forwarded, nil)
+}
+
+// runChain makes a chain's requests, or reads the answers pasted for them.
+func runChain(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header, pasted map[string]*HTTPResponse) (*HTTPResponse, error) {
+	own := httpRequest(c)
 	origin, err := resolveRequestURL(target, c, overrides)
 	if err != nil {
 		return nil, err
 	}
-	r := &chainRun{ctx: withChainTrip(ctx, origin), target: target, c: c, overrides: overrides, forwarded: forwarded, own: own, origin: origin, values: map[string]chainValueRead{}}
+	r := &chainRun{ctx: withChainTrip(ctx, origin), target: target, c: c, overrides: overrides, forwarded: forwarded, own: own, origin: origin, values: map[string]chainValueRead{}, pasted: pasted}
 	r.report = &ChainReport{Answer: c.Answer}
 	first := ChainStepReport{Name: model.ChainFirst, Method: ConfiguredMethod(c), State: ChainStepNotReached}
 	if overrides.Method != "" {
@@ -139,7 +170,7 @@ func (r *chainRun) first() (response *HTTPResponse, done bool, err error) {
 	report := &r.report.Steps[0]
 	state := &chainStepState{name: model.ChainFirst, requests: new(atomic.Int64)}
 	report.Started = time.Now()
-	response, err = fetch(withChainStep(r.ctx, state), r.target, r.c, r.overrides, r.forwarded)
+	response, err = r.ask(withChainStep(r.ctx, state), r.c, r.overrides)
 	report.Duration, report.Requests = time.Since(report.Started), int(state.requests.Load())
 	report.URL = RedactURL(r.origin, MaskCredentialQueryValues)
 	if err != nil {
@@ -294,7 +325,7 @@ func (r *chainRun) send(ctx context.Context, step model.ChainStep, params map[st
 	if u, err := requestURL(r.target, sc, overrides); err == nil {
 		shown = RedactURL(u, MaskCredentialQueryValues)
 	}
-	response, err := fetch(ctx, r.target, sc, overrides, r.forwarded)
+	response, err := r.ask(ctx, sc, overrides)
 	return response, shown, err
 }
 
@@ -700,10 +731,11 @@ type chainItem struct {
 	response *HTTPResponse
 	values   map[string]any
 	// fails says the item failed; err is its error, nil for a status it
-	// does not accept.
-	fails bool
-	err   error
-	merge func()
+	// does not accept. cancelled says it was cancelled when another item
+	// failed first.
+	fails, cancelled bool
+	err              error
+	merge            func()
 }
 
 // item makes one item of a fan-out.
@@ -716,6 +748,12 @@ func (r *chainRun) item(ctx context.Context, step model.ChainStep, i, items int,
 	start := time.Now()
 	response, shown, err := r.send(withChainStep(ctx, state), step, params)
 	item.report.Duration, item.report.URL = time.Since(start), shown
+	if err != nil && ctx.Err() != nil && r.ctx.Err() == nil {
+		// Cancelled, not failed: another item failed the fan-out first,
+		// under on_item_error: fail.
+		item.cancelled, item.report.Error = true, "cancelled: another item failed first"
+		return item
+	}
 	if err != nil {
 		item.fails, item.err, item.report.Error = true, err, model.CutTo(err.Error(), model.MaxFailureBytes, false)
 		return item
@@ -854,4 +892,18 @@ func itemEntry(item *chainItem) json.RawMessage {
 		}{item.report.Entry, item.report.Status, item.report.Body})
 	}
 	return encoded
+}
+
+func init() { pastedChain = runPastedChain }
+
+// runPastedChain runs a chain on answers pasted on the debug page: first is
+// the first request's, and steps each step's by name, a fan-out step's
+// used for every item. No request is sent. The report shows the URLs the
+// chain would ask target for.
+func runPastedChain(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, first *HTTPResponse, steps map[string]*HTTPResponse) (*HTTPResponse, error) {
+	pasted := map[string]*HTTPResponse{model.ChainFirst: first}
+	for name, answer := range steps {
+		pasted[name] = answer
+	}
+	return runChain(ctx, target, c, overrides, nil, pasted)
 }

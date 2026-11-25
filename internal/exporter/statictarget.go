@@ -71,7 +71,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	job := collectJob{
 		collector: c, target: target.Target, overrides: sc.overrides, headers: headers,
 		rec: sc.rec, display: sc.address, cacheKey: sc.cacheKey, revalidateKey: sc.cacheKey, log: sc.log,
-		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
+		scrape: true, staticName: target.Name, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
 		lastSuccess: lastSuccessKey(c, &sc.target, target.Target, sc.overrides),
 	}
 	// A target that failure_backoff is backing off from is not contacted,

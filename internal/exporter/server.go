@@ -107,6 +107,9 @@ type Server struct {
 	// backoffs keeps the targets failure_backoff keeps trips from
 	// (backoff.go).
 	backoffs *failureBackoffs
+	// chains are the last trips of the chained collectors and static
+	// targets, which the status page draws (chainreport.go).
+	chains chainTrips
 	// lastSuccesses keeps when each trip whose clock placeholders read
 	// ~last_success last succeeded (lastsuccess.go).
 	lastSuccesses lastSuccesses

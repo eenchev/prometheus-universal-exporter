@@ -163,6 +163,9 @@ type debugRunRequest struct {
 	Target       *string     `json:"target"`
 	StaticTarget string      `json:"static_target"`
 	Params       debugValues `json:"params"`
+	// Steps are the answers pasted for the steps of a chain, each a JSON
+	// body by step name, a fan-out step's used for every item.
+	Steps map[string]string `json:"steps"`
 }
 
 // debugValues are a run's headers or probe parameters. Each name maps to a
@@ -264,6 +267,17 @@ type debugAnswer struct {
 	// OTLP is what the next OTLP export would send of the run's series,
 	// with otlp.enabled alone (debugotlp.go).
 	OTLP *debugOTLP `json:"otlp,omitempty"`
+	// Chain is the workflow diagram of a chained collector's run, as the
+	// elements the page makes of it, and each step's details below it
+	// (chaindiagram.go); nil for a run that made no chain.
+	Chain *debugChain `json:"chain,omitempty"`
+}
+
+// debugChain is a chain as the debug page shows it: its diagram's
+// elements, and each step's details.
+type debugChain struct {
+	Diagram []diagramNode    `json:"diagram"`
+	Steps   []debugChainStep `json:"steps"`
 }
 
 type debugStage struct {
@@ -349,6 +363,9 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 			}
 		}
 		out.Response = shown
+	}
+	if t.chain != nil {
+		out.Chain = &debugChain{Diagram: chainDiagramNodes(t.chain, chainDiagramOptions{values: true, links: true}), Steps: chainDetails(t.chain, configured)}
 	}
 	for _, step := range t.steps {
 		out.Stages = append(out.Stages, debugStage{Stage: step.stage, Outcome: step.outcome, Took: step.took.Round(time.Millisecond).String(), Note: step.note})
@@ -787,6 +804,15 @@ func readDebugRunRequest(w http.ResponseWriter, r *http.Request) (debugRunReques
 		return req, http.StatusBadRequest, fmt.Errorf("status %d is no HTTP status; give one from 100 to 599", req.Status)
 	case req.Headers.count() > debugMaxHeaders:
 		return req, http.StatusBadRequest, fmt.Errorf("%d headers; a pasted response may have at most %d", req.Headers.count(), debugMaxHeaders)
+	case source != debugSourcePasted && len(req.Steps) > 0:
+		return req, http.StatusBadRequest, errors.New("steps are the answers pasted for a chain's steps; a fetched target's chain asks the target")
+	case len(req.Steps) > model.MaxChainSteps:
+		return req, http.StatusBadRequest, fmt.Errorf("%d steps; a chain has at most %d", len(req.Steps), model.MaxChainSteps)
+	}
+	for name, body := range req.Steps {
+		if len(body) > debugMaxBodyBytes {
+			return req, http.StatusRequestEntityTooLarge, fmt.Errorf("the answer pasted for step %q is %d bytes; the debug page takes one of at most %d", name, len(body), debugMaxBodyBytes)
+		}
 	}
 	for _, name := range req.Headers.names() {
 		if !debugHeaderName.MatchString(name) {
@@ -934,6 +960,12 @@ func (s *Server) prepareDebugRun(r *http.Request, req debugRunRequest) (debugPro
 			status = http.StatusOK
 		}
 		p.pasted = &fetch.HTTPResponse{StatusCode: status, Headers: headers, Body: []byte(*req.Body), Collector: c.Name}
+		for _, name := range model.SortedKeys(req.Steps) {
+			if p.pastedSteps == nil {
+				p.pastedSteps = map[string]*fetch.HTTPResponse{}
+			}
+			p.pastedSteps[name] = &fetch.HTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"application/json"}}, Body: []byte(req.Steps[name]), Collector: c.Name}
+		}
 		if rt := fetch.RequestTypes[c.Request.Type]; rt != nil && rt.Rows {
 			// A sql collector's answer is the rows its driver read, which
 			// its decoder hands on as they are: what is pasted is those

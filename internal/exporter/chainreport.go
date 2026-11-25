@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -85,7 +86,14 @@ const (
 // what is not a failure of the trip: a fan-out cut by max_items, items that
 // failed under skip, and, at debug level, each request. target is the
 // target as logs show it, keyTarget as the failure log tells targets apart.
-func (s *Server) noteChain(ctx context.Context, report *fetch.ChainReport, c *model.Collector, rec statsRecorder, target, keyTarget string) {
+// staticName is the static target the trip is a scrape of, "" for a probe.
+func (s *Server) noteChain(ctx context.Context, report *fetch.ChainReport, c *model.Collector, rec statsRecorder, target, keyTarget, staticName string) {
+	if probeTraceFrom(ctx) == nil {
+		// The status pages draw each chained collector's last trip and
+		// each static target's last scrape; a debug run is in its own
+		// report alone.
+		s.chains.note(c.Name, staticName, report, time.Now())
+	}
 	verbose := s.verboseSelfMetrics()
 	rec.update(func(x *serverStats) {
 		for i := range report.Steps {
@@ -212,4 +220,57 @@ func chainStepNames(steps []model.ChainStep) []string {
 		names[i] = step.Name
 	}
 	return names
+}
+
+// chainTrips are the last trip of each chained collector, and the last
+// scrape of each static target of one, which the status page draws.
+type chainTrips struct {
+	mu          sync.Mutex
+	byCollector map[string]chainTrip
+	byTarget    map[string]chainTrip
+}
+
+// chainTrip is a trip's chain report and when it ended.
+type chainTrip struct {
+	report *fetch.ChainReport
+	at     time.Time
+}
+
+// note keeps report as the collector's last trip, and the static target's
+// when staticName is not "".
+func (c *chainTrips) note(collector, staticName string, report *fetch.ChainReport, at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byCollector == nil {
+		c.byCollector, c.byTarget = map[string]chainTrip{}, map[string]chainTrip{}
+	}
+	c.byCollector[collector] = chainTrip{report: report, at: at}
+	if staticName != "" {
+		c.byTarget[staticName] = chainTrip{report: report, at: at}
+	}
+}
+
+// ofCollector and ofTarget are the last trip of a collector and of a
+// static target, ok false for none.
+func (c *chainTrips) ofCollector(name string) (chainTrip, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	trip, ok := c.byCollector[name]
+	return trip, ok
+}
+
+func (c *chainTrips) ofTarget(name string) (chainTrip, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	trip, ok := c.byTarget[name]
+	return trip, ok
+}
+
+// requests is how many requests the trip's chain sent.
+func (t chainTrip) requests() int {
+	n := 0
+	for _, step := range t.report.Steps {
+		n += step.Requests
+	}
+	return n
 }

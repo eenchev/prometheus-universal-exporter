@@ -3,6 +3,7 @@ package exporter
 import (
 	"encoding/json"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/url"
 	"path"
@@ -276,6 +277,9 @@ type staticStatusRow struct {
 	LastErrorRecovered *bool `json:"last_error_recovered,omitempty"`
 	// Recent are its last scrapes, oldest first, as the strip shows them.
 	Recent []staticStatusScrape `json:"recent"`
+	// Chain is the workflow diagram of the last scrape of a target whose
+	// collector makes a chain, "" for another (chaindiagram.go).
+	Chain template.HTML `json:"-"`
 	// LabelText, Age and DurationText are the row's values as the page
 	// writes them.
 	LabelText    string `json:"-"`
@@ -316,6 +320,8 @@ type staticStatusPage struct {
 	ProbeKeys     int              `json:"probe_keys"`
 	FailingProbes int              `json:"failing_probe_keys"`
 	Probes        []probeStatusRow `json:"probes"`
+	// Chains are the chained collectors' last trips (chainStatusRows).
+	Chains []chainStatusRow `json:"chains,omitempty"`
 	// OTLP is how OTLP exports are going.
 	OTLP otlpStatusSection `json:"otlp"`
 	// PerKey and MaxKeys are the bounds of the recent probes, as the page
@@ -363,6 +369,7 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 	if s.allocatorStatus != nil {
 		page.Bundle = allocatorBundleFor(s.allocatorStatus(), s.manager.Generation(), now)
 	}
+	page.Chains = s.chainStatusRows(cfg, now)
 	page.Probes = s.probeRowsAt(now)
 	page.ProbeKeys = len(page.Probes)
 	for i := range page.Probes {
@@ -414,6 +421,15 @@ func (s *Server) staticStatusPageFor(cfg *model.Config, targets []model.StaticTa
 			}
 		}
 		row.LabelText = strings.Join(labels, ", ")
+		if trip, ok := s.chains.ofTarget(target.Name); ok {
+			// The workflow of the target's last scrape that made its
+			// chain; one answered from the cache since is one grey block.
+			options := chainDiagramOptions{}
+			if st := statuses[i]; st != nil && st.last.cached {
+				options.cached = trip.at
+			}
+			row.Chain = chainDiagram(trip.report, options)
+		}
 		if st := statuses[i]; st != nil {
 			last := st.last
 			age := max(now.Sub(last.started), 0).Seconds()
@@ -847,7 +863,7 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 <tbody>
 {{- range $i, $row := .Rows}}{{with $row}}
 <tr data-order="{{$i}}" data-match="{{.Match}}">
-<td class="what">{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> <a href="{{$.CollectorsLink}}#collector-{{.Collector}}" title="the collector {{.Collector}} on the collectors page">{{.Collector}}</a>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
+<td class="what">{{if .Chain}}<details class="chain"><summary>chain</summary>{{.Chain}}</details>{{end}}{{if .LastScrape}}<a href="{{$.SeriesLink}}?targets={{.Name}}" title="the series the endpoint serves of {{.Name}}"><strong>{{.Name}}</strong></a>{{if $.DebugLinks}} <a class="muted" href="{{$.SeriesLink}}?debug={{.Name}}" title="scrape {{.Name}} once now, and report each stage">debug</a>{{end}}{{else}}<strong>{{.Name}}</strong>{{end}}<br><span class="muted">collector</span> <a href="{{$.CollectorsLink}}#collector-{{.Collector}}" title="the collector {{.Collector}} on the collectors page">{{.Collector}}</a>{{if .Target}}<br><span class="muted">target</span> {{template "long" (long "target" .Target)}}{{end}}{{if .LabelText}}<br><span class="muted">labels</span> {{template "long" (long "labels" .LabelText)}}{{end}}{{if .ExportViaOTLP}}<br><span class="muted">exported over OTLP</span>{{end}}</td>
 <td data-value="{{.IntervalSeconds}}">{{duration .Interval}}</td>
 <td data-value="{{.ScrapedAt}}">{{if .LastScrape}}{{template "at" .LastScrape}}<br><span class="muted">{{.Age}} ago, took {{.DurationText}}</span>{{else}}<span class="muted">none yet</span>{{end}}</td>
 <td>{{if .Failing}}<span class="bad">{{.Result}}</span>{{else if eq .Result "success"}}<span class="good">{{.Result}}</span>{{else}}<span class="muted">{{.Result}}</span>{{end}}{{if .Cached}}<br><span class="muted">from the cache</span>{{end}}</td>
@@ -861,6 +877,18 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 </div>
 {{- else}}
 <p class="muted">No static targets are configured.</p>
+{{- end}}
+
+{{- if .Chains}}
+<h2 id="chains">Chained collectors</h2>
+<p>The last trip of each collector with <code>request.then</code>, step by step: green went through, red failed or timed out, amber had failed items skipped, grey dashed was not reached.</p>
+{{- range .Chains}}
+<section class="chain" id="chain-{{.Collector}}">
+<h3><a href="{{$.CollectorsLink}}#collector-{{.Collector}}">{{.Collector}}</a></h3>
+<p class="muted">{{if .At}}last trip {{template "at" .At}}, {{.Age}} ago; {{.Requests}} request{{if ne .Requests 1}}s{{end}} per trip{{else}}no trip yet{{end}}</p>
+{{.Diagram}}
+</section>
+{{- end}}
 {{- end}}
 
 <h2>Recent probes</h2>
@@ -966,3 +994,33 @@ dialog#whole button#whole-close { color: var(--on-accent); background: var(--acc
 // staticStatusContentTemplate is the page's content section alone, which a
 // refresh swaps in.
 var staticStatusContentTemplate = staticStatusTemplate.Lookup("content")
+
+// chainStatusRow is a chained collector's last trip as the status page
+// shows it: when it ended, how many requests it sent, and its workflow
+// diagram.
+type chainStatusRow struct {
+	Collector string        `json:"collector"`
+	At        string        `json:"last_trip,omitempty"`
+	Requests  int           `json:"requests_per_trip"`
+	Age       string        `json:"-"`
+	Diagram   template.HTML `json:"-"`
+}
+
+// chainStatusRows are the chained collectors of cfg, each with its last
+// trip, in the order of the configuration.
+func (s *Server) chainStatusRows(cfg *model.Config, now time.Time) []chainStatusRow {
+	var rows []chainStatusRow
+	for i := range cfg.Collectors {
+		c := &cfg.Collectors[i]
+		if fetch.CollectorPolicy(c).Chain == nil {
+			continue
+		}
+		row := chainStatusRow{Collector: c.Name}
+		if trip, ok := s.chains.ofCollector(c.Name); ok {
+			row.At, row.Age = trip.at.UTC().Format(time.RFC3339), shortDuration(max(now.Sub(trip.at), 0))
+			row.Requests, row.Diagram = trip.requests(), chainDiagram(trip.report, chainDiagramOptions{})
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}

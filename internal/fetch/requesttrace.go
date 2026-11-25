@@ -175,27 +175,6 @@ func spanTraced(ctx context.Context) bool {
 	return ok && t.spans
 }
 
-// withItemTrace returns ctx for a request sent at once with others, as the
-// items of a fan-out are (chain.go). Its requests are recorded in a trace of
-// their own, since what is learned of a request is recorded on the last one
-// recorded. merge adds them to the trip's trace, after the request ended.
-// Without a trace, ctx is returned as it is.
-func withItemTrace(ctx context.Context) (_ context.Context, merge func()) {
-	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
-	if !ok {
-		return ctx, func() {}
-	}
-	item := &RequestTrace{spans: t.spans}
-	return context.WithValue(ctx, requestTraceKey{}, item), func() {
-		item.mu.Lock()
-		requests := item.requests
-		item.mu.Unlock()
-		t.mu.Lock()
-		t.requests = append(t.requests, requests...)
-		t.mu.Unlock()
-	}
-}
-
 // tracePhases records phases on the last request recorded, the one being
 // sent, unless it has them already.
 func tracePhases(ctx context.Context, phases []TracedPhase) {

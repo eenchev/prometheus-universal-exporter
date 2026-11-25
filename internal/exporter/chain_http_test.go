@@ -242,3 +242,28 @@ func chainShown(t *testing.T, answer debugAnswer) string {
 	}
 	return string(shown)
 }
+
+// A chain is one trip to the response cache: a second probe within
+// cache.ttl is answered from it, and sends no request of the chain.
+func TestTheCacheKeepsAWholeChain(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	collector := jenkinsCollector("cached", model.ChainItemSkip, false)
+	collector.Cache = model.CacheConfig{TTL: model.Duration(time.Minute)}
+	server := modeServer(t, collector)
+	for range 2 {
+		if r := probeOnce(t, server, "/probe?collector=cached&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+			t.Fatalf("answered %d: %s", r.Code, r.Body)
+		}
+	}
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{
+		`http_exporter_cache_hits_total{collector="cached"} 1`,
+		`http_exporter_chain_requests_total{collector="cached",step="first"} 1`,
+		`http_exporter_chain_requests_total{collector="cached",step="last_build"} 3`,
+	} {
+		if !strings.Contains(metrics, want+"\n") {
+			t.Errorf("no %s in the self-metrics", want)
+		}
+	}
+}

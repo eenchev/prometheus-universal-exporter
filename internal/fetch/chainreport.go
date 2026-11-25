@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -171,23 +170,10 @@ type chainStepState struct {
 
 type chainStepKey struct{}
 
-// withChainTrip returns ctx for the requests of a chain whose origin is
-// origin.
-func withChainTrip(ctx context.Context, origin *url.URL) context.Context {
-	jar, _ := cookiejar.New(nil)
-	return context.WithValue(ctx, chainTripKey{}, &chainTrip{origin: origin, jar: jar})
-}
-
 // chainTripOf is the chain ctx's requests belong to, nil for none.
 func chainTripOf(ctx context.Context) *chainTrip {
 	trip, _ := ctx.Value(chainTripKey{}).(*chainTrip)
 	return trip
-}
-
-// withChainStep returns ctx for the requests of a step, or of one of its
-// items.
-func withChainStep(ctx context.Context, state *chainStepState) context.Context {
-	return context.WithValue(ctx, chainStepKey{}, state)
 }
 
 // chainStepOf is the step ctx's request is made for, nil for none.

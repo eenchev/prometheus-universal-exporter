@@ -372,3 +372,18 @@ func TestAChainLogsInAgainOncePerTrip(t *testing.T) {
 		t.Fatalf("%d logins, want 3: one more for the trip", n)
 	}
 }
+
+// A probe parameter that only a step's placeholder names is one the
+// collector takes, and is not refused as unused; the parameters a chain
+// fills in itself are not among those a probe can give.
+func TestAStepsPlaceholdersTakeProbeParameters(t *testing.T) {
+	c := chainCollector(t, "/first", map[string]model.ChainExtract{"id": jsonValue(".id")}, []model.ChainStep{{Name: "detail", Path: "/x/{{chain.id}}", Query: map[string]string{"tenant": "{{param_tenant}}"}}}, nil)
+	unused, err := CheckRequestParams(c, RequestOverrides{Params: map[string]string{"param_tenant": "acme"}})
+	if err != nil || len(unused) != 0 {
+		t.Fatalf("unused %v, error %v", unused, err)
+	}
+	params := RequestParams(c)
+	if len(params) != 1 || params[0].Name != "param_tenant" || !params[0].Required {
+		t.Fatalf("the collector takes %+v, want param_tenant alone, required", params)
+	}
+}

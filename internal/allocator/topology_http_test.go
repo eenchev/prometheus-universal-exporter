@@ -40,7 +40,8 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 		`<line class="edge late"`, `<title data-at="`+r2.LastHeartbeat+`">`+r2.LastHeartbeat+`, the last heartbeat; a heartbeat is overdue</title>7s ago, overdue</text>`,
 		`const tip = mark.localName === "title" ? "textContent" : "title";`,
 		`<line class="edge down"`, `>shutting down, 0s ago</text>`, `<g class="node down">`,
-		`r&lt;img src=x&gt;`, "The filled box is the leader, this instance, which runs without peers.")
+		`r&lt;img src=x&gt;`, "The filled box is the leader, this instance, which runs without peers.",
+		"A dashed line is an overdue heartbeat, a member silent, gone or shutting down, or two exporters under one member name.</figcaption>")
 	if strings.Contains(page, "<img src=x>") {
 		t.Error("a member's name is written unescaped")
 	}
@@ -59,6 +60,7 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderPage := ask(leader.a.Handler(""), "/", "").Body.String()
 	requireIn(t, leaderPage, `<g class="node hub master">`, `>this instance, leader</text>`,
 		`<title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
+		"a member silent, gone or shutting down, two exporters under one member name, or a peer whose last check failed, down or not yet checked.</figcaption>",
 		"Diagram: this instance, leader, 1 peer and 2 members;")
 	followerPage := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, followerPage, `<g class="node hub">`, `>this instance, follower</text>`,

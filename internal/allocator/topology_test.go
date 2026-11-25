@@ -2,9 +2,12 @@ package allocator
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/pagekit"
 )
 
 // The diagram draws nothing without a peer or a member, and at most 50
@@ -76,7 +79,8 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 }
 
 // Before the instances have chosen their leader no box is filled, and the
-// caption says so rather than pointing at a filled box. The diagram is a
+// caption says so rather than pointing at a filled box; the window opens
+// on this instance, and on a follower's page on the leader's box. The diagram is a
 // group, not an image, so a screen reader reaches the members' links in
 // it; the hub's tooltip is this instance's whole address.
 func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
@@ -87,19 +91,26 @@ func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
 	if v.HasLeader || v.Hub.Master || v.Peers[0].Master {
 		t.Fatalf("a box is filled before a leader is chosen: %+v", v)
 	}
+	if v.FocusX != v.Hub.MidX() || v.FocusY != v.Hub.Y+v.Hub.H/2 {
+		t.Errorf("with no leader the window opens on %d,%d, not on this instance", v.FocusX, v.FocusY)
+	}
 	var b strings.Builder
 	if err := statusContentTemplate.Execute(&b, statusPageOf(s)); err != nil {
 		t.Fatal(err)
 	}
 	page := b.String()
-	for _, want := range []string{"No box is filled: the instances have not yet chosen their leader.", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
+	for _, want := range []string{"<figcaption>No instance leads yet. Each line", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
 		`<g class="node hub"><title>` + address + `</title>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Contains(page, "The filled box is the leader") {
+	if strings.Contains(page, "The filled box leads") {
 		t.Error("the caption points at a filled box no instance has")
+	}
+	s.Peers.Role, s.Peers.Instances[1].Leader = "follower", true
+	if f := topologyOf(s); f.FocusX != f.Peers[0].MidX() || f.FocusY != f.Peers[0].Y+f.Peers[0].H/2 {
+		t.Errorf("a follower's window opens on %d,%d, not on the leader's box %+v", f.FocusX, f.FocusY, f.Peers[0])
 	}
 }
 
@@ -164,5 +175,37 @@ func TestTheDiagramDrawsTheMembersNotWellFirst(t *testing.T) {
 	}
 	if want := ">and 10 more in the table below, 6 of them not well</text>"; !strings.Contains(b.String(), want) {
 		t.Errorf("missing %q", want)
+	}
+}
+
+// The diagram reads in both themes: its lines, plain or red, and its boxes'
+// outlines and the window's stand out from the page at 3:1 or more, as
+// graphics that carry meaning must (WCAG 1.4.11), and its text, on the page,
+// on a box and on the leader's filled box, at 4.5:1 or more (WCAG 1.4.3).
+func TestTheDiagramReadsInBothThemes(t *testing.T) {
+	colour := func(theme, name string) string {
+		m := regexp.MustCompile(`--` + name + `: (#[0-9a-f]{6});`).FindStringSubmatch(theme)
+		if m == nil {
+			t.Fatalf("no --%s in %s", name, theme)
+		}
+		return m[1]
+	}
+	for _, rule := range []string{".topology line.edge { stroke: var(--muted);", ".topology line.edge.late, .topology line.edge.down { stroke: var(--bad);",
+		".topology .node rect { fill: var(--panel); stroke: var(--field);", ".topology .node.master rect { fill: var(--accent);",
+		".topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }", "border: 1px solid var(--field);"} {
+		if !strings.Contains(statusStyle, rule) {
+			t.Errorf("the diagram's style lacks %q", rule)
+		}
+	}
+	for name, theme := range map[string]string{"light": pagekit.LightColours, "dark": pagekit.DarkColours} {
+		for _, c := range []struct {
+			fg, bg string
+			least  float64
+		}{{"field", "bg", 3}, {"accent", "bg", 3},
+			{"muted", "bg", 4.5}, {"bad", "bg", 4.5}, {"fg", "panel", 4.5}, {"muted", "panel", 4.5}, {"bad", "panel", 4.5}, {"on-accent", "accent", 4.5}} {
+			if r := barContrast(colour(theme, c.fg), colour(theme, c.bg)); r < c.least {
+				t.Errorf("%s theme: --%s on --%s is %.2f:1, under %.1f:1", name, c.fg, c.bg, r, c.least)
+			}
+		}
 	}
 }

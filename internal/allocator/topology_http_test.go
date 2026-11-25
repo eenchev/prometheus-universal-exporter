@@ -40,8 +40,7 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 		`<line class="edge late"`, `<title data-at="`+r2.LastHeartbeat+`">`+r2.LastHeartbeat+`, the last heartbeat; a heartbeat is overdue</title>7s ago, overdue</text>`,
 		`const tip = mark.localName === "title" ? "textContent" : "title";`,
 		`<line class="edge down"`, `>shutting down, 0s ago</text>`, `<g class="node down">`,
-		`r&lt;img src=x&gt;`, "The filled box is the leader, this instance, which runs without peers.",
-		"A dashed line is an overdue heartbeat, a member silent, gone or shutting down, or two exporters under one member name.</figcaption>")
+		`r&lt;img src=x&gt;`, "<figcaption>This instance leads. Each line gives the time since the last heartbeat. Dashed red needs attention; the line says why.</figcaption>")
 	if strings.Contains(page, "<img src=x>") {
 		t.Error("a member's name is written unescaped")
 	}
@@ -60,7 +59,7 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderPage := ask(leader.a.Handler(""), "/", "").Body.String()
 	requireIn(t, leaderPage, `<g class="node hub master">`, `>this instance, leader</text>`,
 		`<title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
-		"a member silent, gone or shutting down, two exporters under one member name, or a peer whose last check failed, down or not yet checked.</figcaption>",
+		"<figcaption>The filled box leads. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
 		"Diagram: this instance, leader, 1 peer and 2 members;")
 	followerPage := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, followerPage, `<g class="node hub">`, `>this instance, follower</text>`,
@@ -68,8 +67,8 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderOnly(leader, follower)
 	partial := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, partial, `aria-label="Diagram: this instance, follower, 1 peer; the tables below list the same."`,
-		"the members are on the leader's page. A dashed line is a peer whose last check failed, down or not yet checked.")
-	if strings.Contains(partial, "member's line") {
+		"<figcaption>The filled box leads. Each line gives the time since the last check; the members are on the leader's page. Dashed red needs attention; the line says why.</figcaption>")
+	if _, caption, _ := strings.Cut(partial, "<figcaption>"); strings.Contains(strings.SplitN(caption, "</figcaption>", 2)[0], "heartbeat") {
 		t.Error("the follower's caption speaks of members' lines it does not draw")
 	}
 }
@@ -90,8 +89,10 @@ func memberOf(t *testing.T, s Status, id string) MemberStatus {
 // zooms: its buttons are hidden until the page's script shows them, so a
 // page without JavaScript has no dead buttons. The script scales the
 // drawing from the size the SVG keeps in data-width and data-height, by
-// steps or around the pointer under Ctrl and the wheel, and keeps the zoom
-// and the scroll over a refresh.
+// steps or around the pointer under Ctrl and the wheel, a wheel's lines
+// counted in pixels, or Safari's pinch, and keeps the zoom and the scroll
+// over a refresh. At first and on Reset the window is scrolled to the
+// leader's box, whose middle the SVG gives.
 func TestTheDiagramScrollsAndZooms(t *testing.T) {
 	a, _ := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), "")), "r1")
 	t.Cleanup(a.BeginShutdown)
@@ -99,14 +100,18 @@ func TestTheDiagramScrollsAndZooms(t *testing.T) {
 	requireIn(t, page,
 		`.topology-window { max-height: 480px; overflow: auto;`,
 		`<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out"`,
-		`<button type="button" data-zoom="reset">Reset</button></div>`,
+		`<button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or pinch</span></div>`,
 		`<div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">`,
-		`data-width="616" data-height="102">`,
+		`data-width="616" data-height="102" data-focus-x="98" data-focus-y="51">`,
 		"const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];",
 		`svg.setAttribute("width", Number(svg.getAttribute("data-width")) * zoom);`,
 		"box.scrollLeft = at[0] * zoom - x;",
 		`const box = event.ctrlKey && event.target.closest(".topology-window");`,
 		"}, {passive: false});",
 		"arrangeJobs(() => keepDiagram(() => {",
-		"    zoomDiagram(1);\n    middle(first);")
+		"const wheelPixels = (event, box) => event.deltaY * [1, 16, box.clientHeight][event.deltaMode];",
+		"zoomDiagram(zoom * Math.exp(-wheelPixels(event, box) * 0.002)",
+		`content.addEventListener("gesturechange", (event) => {`, "zoomDiagram(pinchFrom * event.scale,",
+		`if (step === "reset") {`+"\n      zoomDiagram(1);\n      onLeader(content.querySelector(\".topology-window\"));",
+		"if (!at) return onLeader(after);", "    zoomDiagram(1);\n    onLeader(first);")
 }

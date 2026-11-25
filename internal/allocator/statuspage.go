@@ -452,7 +452,7 @@ figure.topology { margin: 0; }
 /* The diagram is drawn in a window of a fixed height, which scrolls both
    ways, so many members do not push the tables below down the page. The
    page's script zooms it (zoomDiagram). */
-.topology-window { max-height: 480px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.topology-window { max-height: 480px; overflow: auto; border: 1px solid var(--field); border-radius: 8px; }
 .topology-zoom { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
 .topology-zoom[hidden] { display: none; }
 .topology-zoom button { height: 28px; min-width: 32px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--field); border-radius: 6px; cursor: pointer; }
@@ -653,12 +653,15 @@ var statusFrame = `<!DOCTYPE html>
   localTimes(content);
   // The status page's diagram is drawn in a window that scrolls. Its
   // buttons, which the page hides without JavaScript, zoom it a step in or
-  // out, and Ctrl with the wheel, which a trackpad's pinch sends, zooms it
-  // around the pointer, from half its size to twice. A zoom keeps the point
-  // under the pointer, or the window's middle, where it is. The SVG is
-  // drawn at its size times the zoom; its viewBox keeps the drawing sharp.
-  // A refresh swaps the diagram, so the zoom and where the window was
-  // scrolled to are drawn again on the new one (keepDiagram).
+  // out, from half its size to twice, and Ctrl with the mouse wheel, or a
+  // trackpad's pinch, zooms it around the pointer. Browsers send a pinch as
+  // the wheel with Ctrl, and Safari as gesture events. A zoom keeps the
+  // point under the pointer, or the window's middle, where it is. The SVG
+  // is drawn at its size times the zoom; its viewBox keeps the drawing
+  // sharp. The diagram first drawn, and Reset, put the leader's box in the
+  // window's middle, as far as the window scrolls (onLeader). A refresh
+  // swaps the diagram, so the zoom and where the window was scrolled to are
+  // drawn again on the new one (keepDiagram).
   const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];
   let zoom = 1;
   function zoomDiagram(to, x, y) {
@@ -678,26 +681,45 @@ var statusFrame = `<!DOCTYPE html>
     bar.querySelector('[data-zoom="out"]').disabled = zoom <= zoomSteps[0];
     bar.querySelector('[data-zoom="in"]').disabled = zoom >= zoomSteps[zoomSteps.length - 1];
   }
+  function onLeader(box) {
+    const svg = box.querySelector("svg");
+    box.scrollLeft = Number(svg.getAttribute("data-focus-x")) * zoom - box.clientWidth / 2;
+    box.scrollTop = Number(svg.getAttribute("data-focus-y")) * zoom - box.clientHeight / 2;
+  }
   content.addEventListener("click", (event) => {
     const button = event.target.closest(".topology-zoom button");
     if (!button) return;
     const step = button.dataset.zoom;
-    if (step === "reset") zoomDiagram(1);
-    else if (step === "in") zoomDiagram(zoomSteps.find((z) => z > zoom + 0.001) || zoom);
+    if (step === "reset") {
+      zoomDiagram(1);
+      onLeader(content.querySelector(".topology-window"));
+    } else if (step === "in") zoomDiagram(zoomSteps.find((z) => z > zoom + 0.001) || zoom);
     else zoomDiagram(zoomSteps.findLast((z) => z < zoom - 0.001) || zoom);
   });
+  // A wheel's delta is in pixels, lines or pages (deltaMode 0, 1 or 2);
+  // Firefox gives a mouse's in lines.
+  const wheelPixels = (event, box) => event.deltaY * [1, 16, box.clientHeight][event.deltaMode];
   content.addEventListener("wheel", (event) => {
     const box = event.ctrlKey && event.target.closest(".topology-window");
     if (!box) return;
     event.preventDefault();
     const edge = box.getBoundingClientRect();
-    zoomDiagram(zoom * Math.exp(-event.deltaY * 0.002), event.clientX - edge.left, event.clientY - edge.top);
+    zoomDiagram(zoom * Math.exp(-wheelPixels(event, box) * 0.002), event.clientX - edge.left, event.clientY - edge.top);
   }, {passive: false});
-  // A diagram first drawn is scrolled to its middle, where this instance
-  // is, between its peers and its members.
-  function middle(box) {
-    box.scrollTop = (box.scrollHeight - box.clientHeight) / 2;
-  }
+  let pinchFrom = 0;
+  content.addEventListener("gesturestart", (event) => {
+    if (!event.target.closest(".topology-window")) return;
+    event.preventDefault();
+    pinchFrom = zoom;
+  });
+  content.addEventListener("gesturechange", (event) => {
+    const box = pinchFrom && event.target.closest(".topology-window");
+    if (!box) return;
+    event.preventDefault();
+    const edge = box.getBoundingClientRect();
+    zoomDiagram(pinchFrom * event.scale, event.clientX - edge.left, event.clientY - edge.top);
+  });
+  content.addEventListener("gestureend", () => { pinchFrom = 0; });
   function keepDiagram(swap) {
     const before = content.querySelector(".topology-window");
     const at = before && [before.scrollLeft, before.scrollTop];
@@ -707,14 +729,14 @@ var statusFrame = `<!DOCTYPE html>
     const kept = zoom;
     zoom = 1;
     zoomDiagram(kept, 0, 0);
-    if (!at) return middle(after);
+    if (!at) return onLeader(after);
     after.scrollLeft = at[0];
     after.scrollTop = at[1];
   }
   const first = content.querySelector(".topology-window");
   if (first) {
     zoomDiagram(1);
-    middle(first);
+    onLeader(first);
   }
   // A refresh asked while another waits for the URL as it is now is that
   // one: the answer coming is the one asked for, and a slow allocator is
@@ -839,9 +861,9 @@ const statusContent = `{{define "content"}}
 
 <h2 id="diagram">Diagram</h2>
 <figure class="topology">
-<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (Ctrl and the wheel, or pinch, over the diagram)">−</button><output aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (Ctrl and the wheel, or pinch, over the diagram)">+</button><button type="button" data-zoom="reset">Reset</button></div>
+<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (Ctrl and the wheel, or pinch, over the diagram)">−</button><output aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (Ctrl and the wheel, or pinch, over the diagram)">+</button><button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or pinch</span></div>
 <div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">
-<svg role="group" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}" data-width="{{.Width}}" data-height="{{.Height}}">
+<svg role="group" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}" data-width="{{.Width}}" data-height="{{.Height}}" data-focus-x="{{.FocusX}}" data-focus-y="{{.FocusY}}">
 {{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}
 {{- range .Members}}{{template "topology-edge" .Edge}}{{end}}
 {{- with .Hub}}
@@ -856,7 +878,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>{{if .HasLeader}}The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{else}}No box is filled: the instances have not yet chosen their leader.{{end}}{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, two exporters under one member name, or a peer whose last check failed, down or not yet checked{{else}}, or two exporters under one member name{{end}}{{else}}a peer whose last check failed, down or not yet checked{{end}}.</figcaption>
+<figcaption>{{if not .HasLeader}}No instance leads yet. {{else if not $.Peers}}This instance leads. {{else}}The filled box leads. {{end}}Each line gives the time since the {{if not .HasMembers}}last check; the members are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

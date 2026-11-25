@@ -64,6 +64,10 @@ type topologyView struct {
 	// HasLeader says a box is the leader's: none is before the instances
 	// have checked each other.
 	HasLeader bool
+	// FocusX and FocusY are the middle of the leader's box, or of this
+	// instance's while none leads, which the page scrolls the diagram's
+	// window to at first and on Reset.
+	FocusX, FocusY int
 }
 
 // topologyNode is a box of the diagram and the line that joins it to the
@@ -199,8 +203,12 @@ func topologyOf(s Status) *topologyView {
 	v.Label = topologyLabel(s, len(peers), len(members))
 	v.HasMembers = s.Members != nil
 	v.HasLeader = v.Hub.Master
+	v.FocusX, v.FocusY = v.Hub.MidX(), v.Hub.Y+v.Hub.H/2
 	for _, p := range v.Peers {
-		v.HasLeader = v.HasLeader || p.Master
+		if p.Master && !v.HasLeader {
+			v.HasLeader = true
+			v.FocusX, v.FocusY = p.MidX(), p.Y+p.H/2
+		}
 	}
 	return v
 }

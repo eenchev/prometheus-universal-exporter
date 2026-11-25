@@ -2766,7 +2766,18 @@ last that all hold nothing MUST be left out, as a trailing delimiter's
 column is; a row with fewer fields than the header MUST have empty text in
 the columns it lacks; and without a header row rows MAY have any number of
 fields each, and the first line of the body MUST be a row like the others:
-there is no setting that skips lines. The memory the decoded rows take MUST
+no setting but `response.csv.comment` skips lines.
+
+`response.csv.comment` MUST name one character that is not the delimiter, a
+double quote, white space or a control character, and the configuration
+MUST be refused, by the exporter and by the schema alike, otherwise; the
+schema cannot compare it with the delimiter, which the exporter alone
+refuses. With it, every line that begins with that character where a record
+begins MUST be left out, as InfluxDB's annotated CSV needs for its
+`#datatype`, `#group` and `#default` lines. A line that begins with a blank
+before the character, and a line inside a quoted field, MUST NOT be. A
+quote in a comment line MUST NOT open a field. The lines an error names
+MUST be the body's own, comment lines counted. The memory the decoded rows take MUST
 grow with the fields the body holds, not with the header's columns times the
 rows: the empty text of a column a short row lacks MUST be what a rule, a
 script and an error read in it without being stored in each row, so that a

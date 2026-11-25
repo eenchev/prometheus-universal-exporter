@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
@@ -331,7 +332,15 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		delim = rr[0]
 	}
-	rows, err := readCSV(r.Body, delim, cfg.TrimSpace)
+	// Comment lines are taken out before anything else reads the body, so
+	// a quote in one is no quote of a field. Each leaves its line end, so
+	// every line keeps its number.
+	body := r.Body
+	if cfg.Comment != "" {
+		comment, _ := utf8.DecodeRuneInString(cfg.Comment)
+		body = withoutCommentLines(body, comment, delim, cfg.TrimSpace)
+	}
+	rows, err := readCSV(body, delim, cfg.TrimSpace)
 	if err != nil {
 		// The line and the column the reader names are where in the body
 		// it stopped, which is no part of what the failure is to the log.
@@ -391,7 +400,7 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 			// the row.
 			if len(row) > len(heads) {
 				if i := len(heads) + firstValue(row[len(heads):], cfg.TrimSpace); i < len(row) {
-					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(r.Body, delim, cfg.TrimSpace, n+1, i)), model.Position(i+1))
+					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(body, delim, cfg.TrimSpace, n+1, i)), model.Position(i+1))
 				}
 				row = row[:len(heads)]
 				data[n] = row

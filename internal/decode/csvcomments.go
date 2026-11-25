@@ -108,10 +108,10 @@ func recordEnd(body []byte, i int, delimiter rune, trimSpace bool) int {
 		// The rest of the field, to the delimiter or the line end after it.
 		for i < len(body) {
 			r, width := utf8.DecodeRune(body[i:])
-			switch {
-			case r == '\n':
+			switch r {
+			case '\n':
 				return i + 1
-			case r == '\r':
+			case '\r':
 				if i+1 < len(body) && body[i+1] == '\n' {
 					return i + 2
 				}

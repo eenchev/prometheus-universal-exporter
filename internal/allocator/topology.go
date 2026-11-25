@@ -32,6 +32,9 @@ const (
 	topologyMargin  = 8
 	topologyMost    = 50
 	topologyNameMax = 22
+	// topologyLabelGap is the room between a line's text and the box it
+	// leads to.
+	topologyLabelGap = 8
 )
 
 // topologyView is the diagram: its size, its hub (this instance), and a
@@ -51,11 +54,14 @@ type topologyView struct {
 	// to the leader.
 	Label      string
 	HasMembers bool
+	// HasLeader says a box is the leader's: none is before the instances
+	// have checked each other.
+	HasLeader bool
 }
 
 // topologyNode is a box of the diagram and the line that joins it to the
 // hub. Name is its first line, cut to topologyNameMax characters, and
-// FullName what it was cut from. Sub is its second line, and Note the
+// FullName what it was cut from, the hub's its whole address. Sub is its second line, and Note the
 // hub's third, this instance's address. Member is the member's ID, whose
 // view the box opens, "" for the hub and a peer. Master marks the leader,
 // and Down a peer or member not live, or shutting down.
@@ -69,14 +75,16 @@ type topologyNode struct {
 }
 
 // topologyEdge is a line from the hub to a node, and its text, put along
-// it near the node, where the lines are furthest apart. Class is "", late
-// or down. At is the moment of the last heartbeat or check, RFC 3339 in
+// it near the node, where the lines are furthest apart (edgeOf). LX and LY
+// are where the text is anchored and Anchor how, start or end, so that it
+// ends short of the node's box. Class is "", late or down. At is the moment of the last heartbeat or check, RFC 3339 in
 // UTC, "" for a peer never checked, and Tip what the tooltip says after
 // it; the page's script writes the moment in the browser's time
 // (pagekit.LocalTimesScript).
 type topologyEdge struct {
 	X1, Y1, X2, Y2 int
 	LX, LY         int
+	Anchor         string
 	Text, Tip      string
 	At             string
 	Class          string
@@ -129,7 +137,7 @@ func topologyOf(s Status) *topologyView {
 		v.Width = hubX + topologyHubW + topologyMargin
 	}
 	hubY := topologyMargin + (inner-topologyHubH)/2
-	v.Hub = topologyNode{X: hubX, Y: hubY, W: topologyHubW, H: topologyHubH, Name: "Target allocator", FullName: "Target allocator"}
+	v.Hub = topologyNode{X: hubX, Y: hubY, W: topologyHubW, H: topologyHubH, Name: "Target allocator", FullName: s.Instance.Address}
 	v.Hub.Sub, v.Hub.Master = hubRole(s.Peers)
 	v.Hub.Note = cutName(s.Instance.Address)
 	hubMidY := hubY + topologyHubH/2
@@ -171,6 +179,10 @@ func topologyOf(s Status) *topologyView {
 	}
 	v.Label = topologyLabel(s, len(peers), len(members))
 	v.HasMembers = s.Members != nil
+	v.HasLeader = v.Hub.Master
+	for _, p := range v.Peers {
+		v.HasLeader = v.HasLeader || p.Master
+	}
 	return v
 }
 
@@ -189,10 +201,23 @@ func hubRole(p *PeersStatus) (string, bool) {
 	}
 }
 
-// edgeOf is the line from (x1, y1) to (x2, y2), its text at three quarters
-// of the way, above the line.
+// edgeOf is the line from the hub's (x1, y1) to a node's (x2, y2). Its
+// text ends topologyLabelGap short of the node and runs back along the
+// line towards the hub: above a line that rises towards the node, below
+// one that falls, so the line, which nears the hub's height as the text
+// goes, does not cross it.
 func edgeOf(x1, y1, x2, y2 int) *topologyEdge {
-	return &topologyEdge{X1: x1, Y1: y1, X2: x2, Y2: y2, LX: x1 + (x2-x1)*3/4, LY: y1 + (y2-y1)*3/4 - 4}
+	e := &topologyEdge{X1: x1, Y1: y1, X2: x2, Y2: y2, LX: x2 - topologyLabelGap, Anchor: "end"}
+	if x2 < x1 {
+		e.LX, e.Anchor = x2+topologyLabelGap, "start"
+	}
+	at := y1 + (y2-y1)*(e.LX-x1)/(x2-x1)
+	if y2 > y1 {
+		e.LY = at + 13
+	} else {
+		e.LY = at - 5
+	}
+	return e
 }
 
 // memberEdgeText is a member's line's text, what its tooltip says after

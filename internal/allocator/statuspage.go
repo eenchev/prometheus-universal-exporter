@@ -462,7 +462,7 @@ figure.topology figcaption { margin-top: 6px; font-size: 13px; color: var(--mute
 .topology a:focus-visible rect, .topology a:hover rect { stroke: var(--accent); stroke-width: 2; }
 .topology line.edge { stroke: var(--muted); stroke-width: 1.5; }
 .topology line.edge.late, .topology line.edge.down { stroke: var(--bad); stroke-dasharray: 6 4; }
-.topology text.edge-label { fill: var(--muted); font-size: 12px; text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.topology text.edge-label { fill: var(--muted); font-size: 12px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .topology text.edge-label.late, .topology text.edge-label.down { fill: var(--bad); }
 .topology text.more { fill: var(--muted); font-size: 12px; }
 form.filter.jobs { margin: 0 0 8px; }
@@ -722,7 +722,7 @@ const statusParts = `
 {{- define "topology-edge"}}
 <line class="edge{{with .Class}} {{.}}{{end}}" x1="{{.X1}}" y1="{{.Y1}}" x2="{{.X2}}" y2="{{.Y2}}"></line>{{end}}
 {{- define "topology-label"}}
-<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
+<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}" text-anchor="{{.Anchor}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
 {{- define "topology-node"}}
 {{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
@@ -766,11 +766,11 @@ const statusContent = `{{define "content"}}
 <h2 id="diagram">Diagram</h2>
 <figure class="topology">
 <div class="scroll">
-<svg role="img" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}">
+<svg role="group" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}">
 {{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}
 {{- range .Members}}{{template "topology-edge" .Edge}}{{end}}
 {{- with .Hub}}
-<g class="node hub{{if .Master}} master{{end}}"><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
+<g class="node hub{{if .Master}} master{{end}}">{{with .FullName}}<title>{{.}}</title>{{end}}<rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
 {{- end}}
 {{- range .Peers}}{{template "topology-node" .}}{{end}}
 {{- range .Members}}{{template "topology-node" .}}{{end}}
@@ -781,7 +781,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down or not yet checked{{end}}{{else}}a peer down or not yet checked{{end}}.</figcaption>
+<figcaption>{{if .HasLeader}}The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{else}}No box is filled: the instances have not yet chosen their leader.{{end}}{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down or not yet checked{{end}}{{else}}a peer down or not yet checked{{end}}.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

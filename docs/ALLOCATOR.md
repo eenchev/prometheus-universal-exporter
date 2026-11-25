@@ -1302,12 +1302,15 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     on the right, each joined to it by a line;
   - the leader, the instance that asks the discovery sources, is the box
     filled in the accent colour. Without `--peers` this instance is the
-    leader;
+    leader. Before the instances have checked each other, no box is
+    filled;
   - a member's line says how long ago its last heartbeat came, and a peer's
     how long ago this instance last checked it;
   - a line is dashed and red, and its text says why, for an overdue
     heartbeat, a member that is silent, gone or shutting down, and a peer
-    that is down or not yet checked;
+    that is down or not yet checked. The box of a member that is not live
+    or is shutting down, and of a peer that is not live, has a dashed red
+    outline;
   - a member's box opens its view ([A member's targets](#a-members-targets)).
     The diagram draws the first 50 members; the members table lists all;
   - a follower under `--peers.leader-only` draws itself and its peers

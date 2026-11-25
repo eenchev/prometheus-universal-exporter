@@ -2,6 +2,7 @@ package allocator
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +39,18 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 	if v.MoreY <= v.Members[49].Y+v.Members[49].H || v.MoreY > v.Height {
 		t.Errorf("the more text is at %d, the last member ends at %d", v.MoreY, v.Members[49].Y+v.Members[49].H)
 	}
+	// A line's text ends short of the box it leads to, so a long one does
+	// not run into it.
+	for _, n := range v.Members {
+		if n.Edge.Anchor != "end" || n.Edge.LX >= n.X {
+			t.Errorf("the text of %s's line ends at %d, its box begins at %d", n.Name, n.Edge.LX, n.X)
+		}
+	}
+	for _, n := range v.Peers {
+		if n.Edge.Anchor != "start" || n.Edge.LX <= n.X+n.W {
+			t.Errorf("the text of %s's line begins at %d, its box ends at %d", n.Name, n.Edge.LX, n.X+n.W)
+		}
+	}
 	for i := 1; i < len(v.Members); i++ {
 		if gap := v.Members[i].Edge.LY - v.Members[i-1].Edge.LY; gap < 14 {
 			t.Errorf("the texts of lines %d and %d are %dpx apart", i-1, i, gap)
@@ -48,5 +61,33 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 	}
 	if _, tip, class := peerEdgeText(PeerStatus{LastCheck: "2026-01-01T00:00:00Z", Failures: 1}); tip != ", the last check; 1 failed check in a row" || class != "down" {
 		t.Errorf("a peer down after one failed check says %q, %q", tip, class)
+	}
+}
+
+// Before the instances have chosen their leader no box is filled, and the
+// caption says so rather than pointing at a filled box. The diagram is a
+// group, not an image, so a screen reader reaches the members' links in
+// it; the hub's tooltip is this instance's whole address.
+func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
+	address := "allocator-0.allocator.monitoring.svc:9116"
+	s := Status{Instance: InstanceStatus{Address: address}, Peers: &PeersStatus{Instances: []PeerStatus{{Address: "a:1", Self: true}, {Address: "b:1"}}},
+		Members: &MembersStatus{List: []MemberStatus{{ID: "r1", Live: true}}}}
+	v := topologyOf(s)
+	if v.HasLeader || v.Hub.Master || v.Peers[0].Master {
+		t.Fatalf("a box is filled before a leader is chosen: %+v", v)
+	}
+	var b strings.Builder
+	if err := statusContentTemplate.Execute(&b, statusPageOf(s)); err != nil {
+		t.Fatal(err)
+	}
+	page := b.String()
+	for _, want := range []string{"No box is filled: the instances have not yet chosen their leader.", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
+		`<g class="node hub"><title>` + address + `</title>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(page, "The filled box is the leader") {
+		t.Error("the caption points at a filled box no instance has")
 	}
 }

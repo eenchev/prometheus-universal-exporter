@@ -710,8 +710,9 @@ var statusFrame = `<!DOCTYPE html>
 // statusParts are what the status page and the views share: of a member
 // (MemberStatus), how long ago its last heartbeat came, marked when one is
 // overdue, the bundle it has in force beside the one it is to have, and
-// its state; a discovery source's result; and a view's targets, labels
-// and the note over a list.
+// its state; a discovery source's result; a view's targets, labels and the
+// note over a list; and the status page's diagram's lines, their texts and
+// its boxes (topology.go).
 const statusParts = `
 {{- define "heartbeat"}}{{if .Late}}<time class="ago bad" datetime="{{.LastHeartbeat}}" data-note="a heartbeat is overdue" title="a heartbeat is overdue; {{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{else}}<time class="ago" datetime="{{.LastHeartbeat}}" title="{{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
@@ -721,9 +722,9 @@ const statusParts = `
 {{- define "topology-edge"}}
 <line class="edge{{with .Class}} {{.}}{{end}}" x1="{{.X1}}" y1="{{.Y1}}" x2="{{.X2}}" y2="{{.Y2}}"></line>{{end}}
 {{- define "topology-label"}}
-<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}"><title>{{.Tip}}</title>{{.Text}}</text>{{end}}
+<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
 {{- define "topology-node"}}
-{{if .Link}}<a href="{{.Link}}">{{end}}<g class="node{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Link}}</a>{{end}}{{end}}
+{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "list-note"}}
@@ -780,7 +781,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}. A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}. A dashed line is an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down{{end}}.</figcaption>
+<figcaption>The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}.{{if .HasMembers}} A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}.{{else}} A peer's line says how long ago this instance last checked it; the members are on the leader's page.{{end}} A dashed line is {{if .HasMembers}}an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down or not yet checked{{end}}{{else}}a peer down or not yet checked{{end}}.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

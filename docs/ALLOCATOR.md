@@ -1310,6 +1310,8 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     that is down or not yet checked;
   - a member's box opens its view ([A member's targets](#a-members-targets)).
     The diagram draws the first 50 members; the members table lists all;
+  - a follower under `--peers.leader-only` draws itself and its peers
+    alone: the members are on the leader's page;
 - with `--peers`:
   - whether it leads or follows, which instance leads, and whether it runs
     with `--peers.leader-only`;

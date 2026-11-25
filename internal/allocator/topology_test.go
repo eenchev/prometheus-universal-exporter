@@ -8,7 +8,8 @@ import (
 // The diagram draws nothing without a peer or a member, and at most 50
 // members, saying how many more there are. Every box is inside the
 // diagram, the columns do not overlap, and the lines' texts are far
-// enough apart to read.
+// enough apart to read. A peer that failed one check says so in the
+// singular.
 func TestTheDiagramFitsItsNodes(t *testing.T) {
 	if v := topologyOf(Status{Members: &MembersStatus{}}); v != nil {
 		t.Errorf("a diagram of nothing: %+v", v)
@@ -44,5 +45,8 @@ func TestTheDiagramFitsItsNodes(t *testing.T) {
 	}
 	if long := topologyOf(Status{Members: &MembersStatus{List: []MemberStatus{{ID: "a-very-long-member-name-that-goes-on"}}}}); long.Members[0].Name != "a-very-long-member-na…" || long.Members[0].FullName != "a-very-long-member-name-that-goes-on" {
 		t.Errorf("a long name is drawn as %q", long.Members[0].Name)
+	}
+	if _, tip, class := peerEdgeText(PeerStatus{LastCheck: "2026-01-01T00:00:00Z", Failures: 1}); tip != ", the last check; 1 failed check in a row" || class != "down" {
+		t.Errorf("a peer down after one failed check says %q, %q", tip, class)
 	}
 }

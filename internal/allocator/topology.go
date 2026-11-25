@@ -17,7 +17,10 @@ import (
 // table and the peers table say the same in text.
 
 // The diagram's sizes, in pixels: a node's box, the hub's, the gap a line
-// spans, a row's height and the margin. Three columns fit the page's 860px.
+// spans between two columns, and between the hub and the members when there
+// are no peers (topologyAlone), a row's height and the margin. Three columns
+// fit the page's 860px. topologyMost is the most members drawn, and
+// topologyNameMax the most characters of a box's line.
 const (
 	topologyNodeW   = 170
 	topologyNodeH   = 36
@@ -43,32 +46,39 @@ type topologyView struct {
 	// MoreX and MoreY are where the text saying how many more members
 	// there are goes.
 	MoreX, MoreY int
-	// Label is the diagram's text alternative.
-	Label string
+	// Label is the diagram's text alternative. HasMembers says the page
+	// has the members, which a follower under --peers.leader-only leaves
+	// to the leader.
+	Label      string
+	HasMembers bool
 }
 
 // topologyNode is a box of the diagram and the line that joins it to the
 // hub. Name is its first line, cut to topologyNameMax characters, and
 // FullName what it was cut from. Sub is its second line, and Note the
-// hub's third, this instance's address. Link is where it
-// leads, "" for none. Master marks the leader, and Down a peer or member
-// not live.
+// hub's third, this instance's address. Member is the member's ID, whose
+// view the box opens, "" for the hub and a peer. Master marks the leader,
+// and Down a peer or member not live, or shutting down.
 type topologyNode struct {
 	X, Y, W, H     int
 	Name, FullName string
 	Sub, Note      string
-	Link           string
+	Member         string
 	Master, Down   bool
 	Edge           *topologyEdge
 }
 
 // topologyEdge is a line from the hub to a node, and its text, put along
 // it near the node, where the lines are furthest apart. Class is "", late
-// or down; Tip is its tooltip.
+// or down. At is the moment of the last heartbeat or check, RFC 3339 in
+// UTC, "" for a peer never checked, and Tip what the tooltip says after
+// it; the page's script writes the moment in the browser's time
+// (pagekit.LocalTimesScript).
 type topologyEdge struct {
 	X1, Y1, X2, Y2 int
 	LX, LY         int
 	Text, Tip      string
+	At             string
 	Class          string
 }
 
@@ -143,21 +153,24 @@ func topologyOf(s Status) *topologyView {
 		}
 		n.Edge = edgeOf(hubX, hubMidY, n.X+n.W, y+topologyNodeH/2)
 		n.Edge.Text, n.Edge.Tip, n.Edge.Class = peerEdgeText(p)
+		n.Edge.At = p.LastCheck
 		v.Peers = append(v.Peers, n)
 	}
 	for i, m := range shown {
 		y := rowY(i, memberRows)
 		n := topologyNode{X: membersX, Y: y, W: topologyNodeW, H: topologyNodeH, Down: !m.Live || m.ShuttingDown}
 		n.Name, n.FullName, n.Sub = cutName(m.ID), m.ID, cutName(m.Address)
-		n.Link = "?member=" + m.ID
+		n.Member = m.ID
 		n.Edge = edgeOf(hubX+topologyHubW, hubMidY, membersX, y+topologyNodeH/2)
 		n.Edge.Text, n.Edge.Tip, n.Edge.Class = memberEdgeText(m)
+		n.Edge.At = m.LastHeartbeat
 		v.Members = append(v.Members, n)
 	}
 	if v.MoreMembers > 0 {
 		v.MoreX, v.MoreY = membersX+8, rowY(len(shown), memberRows)+topologyNodeH/2+4
 	}
 	v.Label = topologyLabel(s, len(peers), len(members))
+	v.HasMembers = s.Members != nil
 	return v
 }
 
@@ -182,32 +195,34 @@ func edgeOf(x1, y1, x2, y2 int) *topologyEdge {
 	return &topologyEdge{X1: x1, Y1: y1, X2: x2, Y2: y2, LX: x1 + (x2-x1)*3/4, LY: y1 + (y2-y1)*3/4 - 4}
 }
 
-// memberEdgeText is a member's line's text, tooltip and class.
+// memberEdgeText is a member's line's text, what its tooltip says after
+// the moment of the last heartbeat, and its class.
 func memberEdgeText(m MemberStatus) (text, tip, class string) {
 	ago := age(m.LastHeartbeatAgeSeconds) + " ago"
-	tip = "last heartbeat at " + m.LastHeartbeat
+	tip = ", the last heartbeat"
 	switch {
 	case m.ShuttingDown:
-		return "shutting down", tip, "down"
+		return "shutting down", tip + "; the member said it is shutting down", "down"
 	case !m.Live && m.InList:
-		return "silent, " + ago, tip, "down"
+		return "silent, " + ago, tip + "; the member is silent and leaves the member list", "down"
 	case !m.Live:
-		return "gone, " + ago, tip, "down"
+		return "gone, " + ago, tip + "; the member has gone", "down"
 	case m.Late:
-		return ago + ", overdue", "a heartbeat is overdue; " + tip, "late"
+		return ago + ", overdue", tip + "; a heartbeat is overdue", "late"
 	}
 	return ago, tip, ""
 }
 
-// peerEdgeText is a peer's line's text, tooltip and class.
+// peerEdgeText is a peer's line's text, what its tooltip says after the
+// moment of the last check, and its class.
 func peerEdgeText(p PeerStatus) (text, tip, class string) {
 	if p.LastCheck == "" {
 		return "never checked", "this instance has not checked it yet", "down"
 	}
 	ago := age(p.LastCheckAgeSeconds) + " ago"
-	tip = "last checked at " + p.LastCheck
+	tip = ", the last check"
 	if !p.Live {
-		return "down, " + ago, tip + "; " + strconv.Itoa(p.Failures) + " failed checks in a row", "down"
+		return "down, " + ago, tip + "; " + strconv.Itoa(p.Failures) + " failed check" + plural(p.Failures) + " in a row", "down"
 	}
 	return ago, tip, ""
 }
@@ -228,8 +243,10 @@ func topologyLabel(s Status, peers, members int) string {
 	if peers > 0 {
 		label += ", " + strconv.Itoa(peers) + " peer" + plural(peers)
 	}
-	label += " and " + strconv.Itoa(members) + " member" + plural(members) + "; the tables below list the same."
-	return label
+	if s.Members != nil {
+		label += " and " + strconv.Itoa(members) + " member" + plural(members)
+	}
+	return label + "; the tables below list the same."
 }
 
 func plural(n int) string {

@@ -13,7 +13,9 @@ package pagekit
 //     the server wrote it, keeps its text. Its tooltip gives the moment in
 //     the browser's time and in UTC, after its data-note when it has one;
 //   - an element with data-at, a strip's mark, has the moment that begins
-//     its tooltip written in the browser's time, followed by UTC.
+//     its tooltip written in the browser's time, followed by UTC. So does
+//     an SVG <title> with data-at, whose text is its parent's tooltip, as
+//     a line's of the allocator's diagram.
 //
 // How long ago is written as the pages write a duration (Duration): whole
 // seconds, minutes and hours, such as 1h2m, and 0s for none.
@@ -49,9 +51,11 @@ const LocalTimesScript = `
       }
     }
     for (const mark of root.querySelectorAll("[data-at]")) {
-      const at = mark.dataset.at, ms = Date.parse(at);
-      if (Number.isNaN(ms) || !mark.title.startsWith(at)) continue;
-      mark.title = local(ms) + " (" + utc(ms) + ")" + mark.title.slice(at.length);
+      const at = mark.getAttribute("data-at"), ms = Date.parse(at);
+      // An SVG <title> is its parent's tooltip, as its text.
+      const tip = mark.localName === "title" ? "textContent" : "title";
+      if (Number.isNaN(ms) || !mark[tip].startsWith(at)) continue;
+      mark[tip] = local(ms) + " (" + utc(ms) + ")" + mark[tip].slice(at.length);
     }
   }
 `

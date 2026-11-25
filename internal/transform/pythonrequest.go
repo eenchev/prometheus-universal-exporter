@@ -232,6 +232,16 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 		dst = append(dst, `,"last_success":`...)
 		dst = strconv.AppendFloat(dst, at, 'f', -1, 64)
 	}
+	if r.Chain != nil {
+		// The steps of a chain: a few small objects, written as
+		// json.Marshal writes them.
+		steps, err := json.Marshal(r.Chain.JQSteps())
+		if err != nil {
+			return nil, err
+		}
+		dst = append(dst, `,"steps":`...)
+		dst = append(dst, steps...)
+	}
 	dst = append(dst, '}')
 	e.buf = dst
 	if written && len(dst) > e.limit {
@@ -257,7 +267,7 @@ func (e *pythonEncoder) request(mode, script string, d *decode.Decoded, r *fetch
 // for data the encoder does not write itself: a value of a type no decoder
 // makes.
 func pythonRequestMarshalled(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, params map[string]string, clock scrapeClock) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Params: params, ScrapeTime: epochSeconds(clock.now), LastSuccess: epochSeconds(clock.since), Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}}
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Params: params, ScrapeTime: epochSeconds(clock.now), LastSuccess: epochSeconds(clock.since), Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Timings: r.Trip.JQTimings(), TLS: r.Trip.JQTLS(), URL: r.Trip.JQURL(), Redirects: r.Trip.JQRedirects(), HTTPVersion: r.Trip.JQHTTPVersion(), RemoteIP: r.Trip.JQRemoteIP()}, Steps: r.Chain.JQSteps()}
 	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
 		input.DataIsBody = true
 	} else {

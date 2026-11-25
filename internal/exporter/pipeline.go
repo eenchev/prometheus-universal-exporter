@@ -151,6 +151,10 @@ type collected struct {
 	stage  string
 	err    error
 	metric string
+	// step is the step of an http collector's chain that failed, "" for
+	// none (chainreport.go): report_failures labels its failed stage with
+	// it.
+	step string
 	// aborted is set when the trip failed because it was cancelled (cutShort):
 	// the exporter is shutting down (AbortStaticScrapes), or every probe
 	// waiting for the trip went away. Nothing about the target is known, and
@@ -261,6 +265,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		kept = fetch.KeepResponse(response)
 	}
 	accepted := fetch.AcceptedStatus(t.requester, j.overrides, response.StatusCode)
+	if response.Chain != nil {
+		// Each step of a chain judged its own status: the trip's answer
+		// is accepted unless a step's was not.
+		accepted = response.Chain.Failed == ""
+	}
 	if accepted && response.Conditional && !response.NotModified {
 		// A new response in place of the cached one; one whose status
 		// fails the trip revalidated nothing.
@@ -308,6 +317,9 @@ type collectTrip struct {
 	// revalidates says the trip revalidates a cached response
 	// (revalidatesFor).
 	revalidates bool
+	// chain is how the requests of an http collector's chain went, nil
+	// for a trip that made none (chainreport.go).
+	chain *fetch.ChainReport
 	// clock is the reading of the clock the trip's clock placeholders are
 	// filled from.
 	clock fetch.ScrapeClock
@@ -383,6 +395,9 @@ func (t *collectTrip) fetch() (*fetch.HTTPResponse, *collected) {
 		}
 		response, err = t.s.fetchCollector(fetchCtx, j.target, requester, j.overrides, j.headers)
 	}
+	if t.chain = chainReportOf(response, err); t.chain != nil {
+		t.s.noteChain(t.ctx, t.chain, requester, t.rec, j.display, j.target)
+	}
 	// A debug probe's report shows what the target sent: a copy made here,
 	// before the decode converts the body and rewrites its Content-Type.
 	t.trace.record(func(pt *probeTrace) { pt.response = sentResponse(response) })
@@ -431,19 +446,20 @@ func (t *collectTrip) fetchFailed(err error, grpcCode int, grpc bool) collected 
 	if errors.Is(err, fetch.ErrTargetRefused) {
 		err = boundedTripFailure(err)
 		t.rec.update(func(x *serverStats) { x.refused++ })
-		t.s.logTripFailure(t.ctx, t.rec.read, t.j.log, stageTargetPolicy, err)
+		t.s.logTripFailure(t.ctx, t.rec.read, t.j.log, stageTargetPolicy, err, chainFailureAttrs(t.chain)...)
 		t.stages.step(stageTargetPolicy, "refused", t.mark, err.Error())
-		return collected{stage: stageTargetPolicy, err: err, refused: true}
+		return collected{stage: stageTargetPolicy, err: err, refused: true, step: chainFailedStep(t.chain)}
 	}
-	var extra []any
+	extra := chainFailureAttrs(t.chain)
 	var status *fetch.CallStatusError
 	if errors.As(err, &status) {
-		extra = []any{"grpc_code", status.CodeName}
+		extra = append(extra, "grpc_code", status.CodeName)
 	}
 	failure := t.stageFailed(fetch.FetchErrorStage(t.requester, err), err, t.c.ErrorHandling.OnFetchError, extra...)
 	failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
 	failure.fetchFailed = true
 	failure.outOfBudget, failure.budget = ranOutOfBudget(t.ctx, err), t.j.budget
+	failure.step = chainFailedStep(t.chain)
 	return failure
 }
 
@@ -474,13 +490,20 @@ func (t *collectTrip) statusFailed(response *fetch.HTTPResponse) collected {
 		// more time than the probe had (request.retry.retry_after).
 		statusErr = fmt.Errorf("%w, not retried: %s", statusErr, response.NotRetried)
 	}
+	if chain := response.Chain; chain != nil && chain.Failed != "" {
+		// The step, or the fan-out item, that was answered with it.
+		statusErr = fmt.Errorf("%s: %w", chain.Failed, statusErr)
+	}
 	if pages := response.Pages; pages != nil && len(pages.Pages) > 1 {
 		// A page after the first: the pages before it were accepted.
 		statusErr = fmt.Errorf("%w on page %d of request.pagination, %s", statusErr, len(pages.Pages), fetch.RedactURLString(pages.Pages[len(pages.Pages)-1].URL, fetch.MaskCredentialQueryValues))
 	}
-	failure := t.stageFailed("http_status", statusErr, t.c.ErrorHandling.OnFetchError, excerpt...)
+	failure := t.stageFailed("http_status", statusErr, t.c.ErrorHandling.OnFetchError, append(excerpt, chainFailureAttrs(response.Chain)...)...)
 	failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
 	failure.fetchFailed = true
+	if response.Chain != nil {
+		failure.step = response.Chain.FailedStep
+	}
 	return failure
 }
 
@@ -877,4 +900,12 @@ func bodyExcerpt(body []byte) string {
 		text = strings.ToValidUTF8(text[:bodyExcerptBytes], "") + "…"
 	}
 	return text
+}
+
+// chainFailedStep is the step of the chain that failed, "" for none.
+func chainFailedStep(report *fetch.ChainReport) string {
+	if report == nil {
+		return ""
+	}
+	return report.FailedStep
 }

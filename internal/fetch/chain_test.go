@@ -322,3 +322,53 @@ func TestAChainFailsAtTheStepThatFails(t *testing.T) {
 		t.Fatalf("a refused status: %v, %+v", err, response.Chain)
 	}
 }
+
+// A 401 at a later step drops the token, logs in again and sends that
+// request once more, once per trip: a second step that refuses the new
+// token fails with its 401.
+func TestAChainLogsInAgainOncePerTrip(t *testing.T) {
+	freshLogins(t)
+	var issued, logins atomic.Int64
+	refuse := map[string]bool{}
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			logins.Add(1)
+			_, _ = w.Write([]byte(`{"token": "t` + string(rune('0'+issued.Add(1))) + `"}`))
+			return
+		}
+		mu.Lock()
+		refused := refuse[r.URL.Path+" "+r.Header.Get("Authorization")]
+		mu.Unlock()
+		if refused {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id": 1}`))
+	}))
+	t.Cleanup(server.Close)
+	files := secretFiles(t, map[string]string{"password": "p"})
+	login := func(c *model.Collector) {
+		c.Request.Login = &model.LoginConfig{Type: "json", URL: "/login", Token: ".token", FieldFiles: files}
+	}
+	c := chainCollector(t, "/first", map[string]model.ChainExtract{"id": jsonValue(".id")}, []model.ChainStep{{Name: "a", Path: "/a/{{chain.id}}"}, {Name: "b", Path: "/b/{{chain.id}}"}}, login)
+	mu.Lock()
+	refuse["/a/1 Bearer t1"] = true
+	mu.Unlock()
+	if _, err := fetchChained(c, server.URL, RequestOverrides{}); err != nil {
+		t.Fatalf("a 401 at step a: %v", err)
+	}
+	if n := logins.Load(); n != 2 {
+		t.Fatalf("%d logins, want 2: the first and one after the 401", n)
+	}
+	mu.Lock()
+	refuse["/first Bearer t2"], refuse["/b/1 Bearer t3"] = true, true
+	mu.Unlock()
+	response, err := fetchChained(c, server.URL, RequestOverrides{})
+	if err != nil || response.StatusCode != http.StatusUnauthorized || response.Chain.Failed != `step "b"` {
+		t.Fatalf("a second 401 in a trip: %v, %+v", err, response)
+	}
+	if n := logins.Load(); n != 3 {
+		t.Fatalf("%d logins, want 3: one more for the trip", n)
+	}
+}

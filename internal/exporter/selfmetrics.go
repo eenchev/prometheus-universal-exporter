@@ -76,6 +76,9 @@ type statsValues struct {
 type serverStats struct {
 	mu sync.Mutex
 	statsValues
+	// chain counts the steps of an http collector's chain, by step name
+	// (chainreport.go). Only the per-collector statistics keep it.
+	chain map[string]*chainStepStats
 	// ruleFailures counts, per metric name, the series the collector's rules
 	// could not produce and carried on without, under error_mode log or
 	// ignore. Only the per-collector statistics keep it.
@@ -575,6 +578,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": collectors[i].Name}})
 	}
 	out = append(out, s.ruleFailureMetrics()...)
+	out = append(out, s.chainMetrics()...)
 	out = append(out, cacheRevalidationMetrics(names, values, requestTypes)...)
 	out = append(out, hostRateLimitMetrics()...)
 	out = append(out, secretStoreMetrics()...)

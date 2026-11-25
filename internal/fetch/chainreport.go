@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -200,4 +201,49 @@ func chainRedirect(ctx context.Context, u *url.URL) error {
 		return nil
 	}
 	return fmt.Errorf("redirect to %s refused: it leads to another origin than the target's, %s; a chain asks one target only: %w", RedactURL(u, MaskQueryValues), originOf(trip.origin), ErrTargetRefused)
+}
+
+// JQSteps is $steps, and a Python script's steps: each step of the chain
+// that was reached, by name, as an object of its status, headers (their
+// names in lower case, each one's values joined by ", ", as $headers has
+// them), duration_seconds and url, its query values masked; a fan-out step
+// as a list of those, one per item, in order. It is nil, null to a rule,
+// for a response without a chain.
+func (r *ChainReport) JQSteps() any {
+	if r == nil {
+		return nil
+	}
+	steps := make(map[string]any, len(r.Steps))
+	for _, step := range r.Steps {
+		if !step.Reached() {
+			continue
+		}
+		if !step.ForEach {
+			steps[step.Name] = jqStep(step.Status, step.Headers, step.Duration, step.URL)
+			continue
+		}
+		items := make([]any, 0, len(step.Items))
+		for _, item := range step.Items {
+			described := jqStep(item.Status, item.Headers, item.Duration, item.URL)
+			if item.Error != "" {
+				described["error"] = item.Error
+			}
+			items = append(items, described)
+		}
+		steps[step.Name] = items
+	}
+	return steps
+}
+
+// jqStep is one request of $steps.
+func jqStep(status int, header http.Header, duration time.Duration, shown string) map[string]any {
+	headers := make(map[string]any, len(header))
+	for name, values := range header {
+		headers[strings.ToLower(name)] = strings.Join(values, ", ")
+	}
+	var statusValue any
+	if status != 0 {
+		statusValue = status
+	}
+	return map[string]any{"status": statusValue, "headers": headers, "duration_seconds": duration.Seconds(), "url": shown}
 }

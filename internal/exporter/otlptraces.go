@@ -509,7 +509,15 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 		}
 	}
 	resends := 0
+	// The items of a fan-out each traced, a step that makes 1000 requests
+	// would make 1000 spans and more: past maxChainItemSpans items of a
+	// step, an item's requests are left out, and the last span of the
+	// step's that is kept says how many items were not traced.
+	untraced, lastTraced := chainItemsUntraced(requests)
 	for i, r := range requests {
+		if r.Item > maxChainItemSpans {
+			continue
+		}
 		if r.Attempt == 0 && !r.Redirect {
 			resends = 0
 		} else {
@@ -546,10 +554,41 @@ func buildSpans(root spanRoot, stages []spanStage, requests []fetch.TracedReques
 			}
 			span.Attributes = append(span.Attributes, stringAttribute("error.type", errorType))
 		}
+		if n := untraced[r.Step]; n > 0 && lastTraced[r.Step] == i {
+			span.Attributes = append(span.Attributes, intAttribute("pue.chain.items_not_traced", n))
+		}
 		spans = append(spans, span)
 		spans = append(spans, phaseSpans(trace, state, span.SpanID, r.Phases)...)
 	}
 	return spans
+}
+
+// maxChainItemSpans is how many items of a fan-out have their requests'
+// spans in a trace.
+const maxChainItemSpans = 100
+
+// chainItemsUntraced are, by step, how many items of a fan-out are past
+// maxChainItemSpans, and the index of the last request of the step whose
+// span is kept.
+func chainItemsUntraced(requests []fetch.TracedRequest) (untraced map[string]int, lastTraced map[string]int) {
+	most := map[string]int{}
+	lastTraced = map[string]int{}
+	for i, r := range requests {
+		if r.Step == "" {
+			continue
+		}
+		most[r.Step] = max(most[r.Step], r.Item)
+		if r.Item <= maxChainItemSpans {
+			lastTraced[r.Step] = i
+		}
+	}
+	untraced = map[string]int{}
+	for step, n := range most {
+		if n > maxChainItemSpans {
+			untraced[step] = n - maxChainItemSpans
+		}
+	}
+	return untraced, lastTraced
 }
 
 // phaseSpans are the spans of an HTTP request's phases, under its span,
@@ -616,7 +655,7 @@ func stageFailed(outcome string) bool {
 //     redirect.
 //
 // The exporter adds its own: the attempt under request.retry, the page of
-// request.pagination, whether it followed a redirect or made
+// request.pagination, the step of a chain and its fan-out item, whether it followed a redirect or made
 // request.login's login, and the facts its request type gives about how it
 // ended (fetch.TracedRequest.Facts). The outcome as a debug report gives it
 // (fetch.TracedRequest.Outcome) is not included. It may quote what the
@@ -657,6 +696,14 @@ func requestAttributes(r fetch.TracedRequest, resends int) []otlpAnyAttribute {
 	}
 	if r.Page > 0 {
 		attrs = append(attrs, intAttribute("pagination.page", r.Page))
+	}
+	if r.Step != "" {
+		// The step of an http collector's chain the request was made
+		// for, and its fan-out item, from 1.
+		attrs = append(attrs, stringAttribute("pue.chain.step", r.Step))
+		if r.Item > 0 {
+			attrs = append(attrs, intAttribute("pue.chain.item", r.Item))
+		}
 	}
 	if r.Redirect {
 		attrs = append(attrs, boolAttribute("redirect", true))

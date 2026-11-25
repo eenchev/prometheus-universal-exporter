@@ -2723,7 +2723,7 @@ while True:
             if len(text)>1024: text=text[:1024]+'... (%d more characters)'%(len(text)-1024)
             logged.append('\x00pue-log:%s\x00%s\x00'%(level,text))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
-               'metric':metric,'fail':fail,'log':log_line,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'data':p['data'],'metrics':metrics}
+               'metric':metric,'fail':fail,'log':log_line,'parse_bytes':parse_bytes,'parse_duration':parse_duration,'parse_time':parse_time,'parse_percent':parse_percent,'parse_quantity':parse_quantity,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'params':p.get('params') or {},'scrape_time':p.get('scrape_time'),'last_success':p.get('last_success'),'steps':p.get('steps'),'data':p['data'],'metrics':metrics}
         # transform.state: what the script's last run for this target left
         # in state, which the exporter keeps (transform/pythonstate.go).
         keeps='state' in p

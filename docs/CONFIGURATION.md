@@ -2017,9 +2017,9 @@ of every answer, keyed by step name. `$timings`, `$tls`, `$url`,
 | Field | What it is |
 | --- | --- |
 | `status` | The answer's HTTP status, `null` for none. |
-| `headers` | The answer's headers by lower-case name, as `$headers` has them. |
+| `headers` | The answer's headers by lower-case name, as `$headers` has them, a value marked `secret` written as `***`. |
 | `duration_seconds` | How long the step took. |
-| `url` | The URL the step was sent to, its query values masked. |
+| `url` | The URL the step was sent to, the values of query parameters whose names read as credentials masked, and a value marked `secret` written as `***`. |
 | `error` | For a fan-out item that failed, its error. |
 
 A fan-out step is a list of these, one per item, in order. A step that was

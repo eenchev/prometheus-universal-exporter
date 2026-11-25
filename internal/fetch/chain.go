@@ -183,6 +183,7 @@ func (r *chainRun) first() (response *HTTPResponse, done bool, err error) {
 	if err := r.read(report, model.ChainFirst, r.own.Extract, response); err != nil {
 		return nil, true, r.failed(report, -1, 0, "", err)
 	}
+	r.masked(report)
 	if err := r.keep(report, response); err != nil {
 		return nil, true, r.failed(report, -1, 0, "", err)
 	}
@@ -207,11 +208,19 @@ func (r *chainRun) single(step model.ChainStep, report *ChainStepReport) (respon
 	if err := r.read(report, step.Name, step.Extract, response); err != nil {
 		return nil, true, r.failed(report, -1, 0, "", err)
 	}
+	r.masked(report)
 	if err := r.keep(report, response); err != nil {
 		return nil, true, r.failed(report, -1, 0, "", err)
 	}
 	report.State = ChainStepOK
 	return response, false, nil
+}
+
+// masked writes the secret values a step read as *** in what its report
+// shows of its answer: the start of its body and its headers.
+func (r *chainRun) masked(report *ChainStepReport) {
+	report.Excerpt = maskSecrets(r.ctx, report.Excerpt)
+	report.Headers = maskHeaderSecrets(r.ctx, report.Headers)
 }
 
 // answered notes a step's answer in its report.
@@ -262,6 +271,7 @@ func (r *chainRun) where(step string, item, items int, each string) {
 // failed notes in the report that a step failed with err, and returns the
 // trip's error, which starts with the step.
 func (r *chainRun) failed(report *ChainStepReport, item, items int, each string, err error) error {
+	err = r.shownError(err)
 	report.State = ChainStepFailed
 	if ranOut(r.ctx, err) {
 		report.State, report.Deadline = ChainStepTimedOut, "the trip's deadline"
@@ -272,6 +282,35 @@ func (r *chainRun) failed(report *ChainStepReport, item, items int, each string,
 	r.where(report.Name, item, items, each)
 	return &ChainError{Report: r.report, err: err}
 }
+
+// shownError is err as the chain shows it: a placeholder of a value named
+// as the configuration writes it, {{chain.id}} and not the parameter it is
+// filled in through, and each value marked secret written as ***.
+func (r *chainRun) shownError(err error) error {
+	if err == nil {
+		return nil
+	}
+	text := maskSecrets(r.ctx, chainNames.Replace(err.Error()))
+	if text == err.Error() {
+		return err
+	}
+	return &chainShownError{text: text, err: err}
+}
+
+// chainShownError is an error with the text the chain shows of it, which
+// is still the error it wraps (errors.Is).
+type chainShownError struct {
+	text string
+	err  error
+}
+
+func (e *chainShownError) Error() string { return e.text }
+
+func (e *chainShownError) Unwrap() error { return e.err }
+
+// chainNames writes the parameters a chain fills its placeholders through
+// (chaintemplate.go) as the placeholders the configuration writes.
+var chainNames = strings.NewReplacer(chainParamPrefix+"chain_", "chain.", chainParamPrefix+"each__", "each.", chainParamPrefix+"each_index", "each_index", chainParamPrefix+"each", "each")
 
 // ranOut reports whether err is the trip's deadline running out.
 func ranOut(ctx context.Context, err error) bool {
@@ -292,6 +331,15 @@ func (r *chainRun) params() map[string]string {
 		params[chainValueParam(name)] = chainText(value.value)
 	}
 	return params
+}
+
+// reportedText is a value as a report keeps it: *** for a secret one, which
+// is never kept.
+func reportedText(v any, secret bool) string {
+	if secret {
+		return "***"
+	}
+	return chainText(v)
 }
 
 // chainText is a value as a placeholder writes it: text as it is, a number
@@ -326,7 +374,7 @@ func (r *chainRun) send(ctx context.Context, step model.ChainStep, params map[st
 		shown = RedactURL(u, MaskCredentialQueryValues)
 	}
 	response, err := r.ask(ctx, sc, overrides)
-	return response, shown, err
+	return response, maskSecrets(r.ctx, shown), err
 }
 
 // stepRequest is the collector and the overrides a step's request is made
@@ -548,7 +596,10 @@ func (r *chainRun) read(report *ChainStepReport, step string, extract map[string
 			from = response.Trip.URL
 		}
 		r.values[name] = chainValueRead{value: value, from: from, secret: e.Secret}
-		report.Values = append(report.Values, ChainValueReport{Name: name, Text: chainText(value), Secret: e.Secret, Found: found})
+		if e.Secret && found {
+			chainTripOf(r.ctx).keepSecret(value)
+		}
+		report.Values = append(report.Values, ChainValueReport{Name: name, Text: reportedText(value, e.Secret), Secret: e.Secret, Found: found})
 	}
 	return nil
 }
@@ -741,6 +792,10 @@ type chainItem struct {
 // item makes one item of a fan-out.
 func (r *chainRun) item(ctx context.Context, step model.ChainStep, i, items int, entry any, requests *atomic.Int64) chainItem {
 	item := chainItem{report: ChainItemReport{Index: i, Each: chainText(entry), Entry: entry}, merge: func() {}}
+	if r.values[step.ForEach].secret {
+		// The entries of a secret list are shown as *** too.
+		item.report.Each = "***"
+	}
 	params := r.params()
 	chainEachParams(params, entry, i)
 	state := &chainStepState{name: step.Name, item: i + 1, requests: requests}
@@ -755,6 +810,7 @@ func (r *chainRun) item(ctx context.Context, step model.ChainStep, i, items int,
 		return item
 	}
 	if err != nil {
+		err = r.shownError(err)
 		item.fails, item.err, item.report.Error = true, err, model.CutTo(err.Error(), model.MaxFailureBytes, false)
 		return item
 	}
@@ -819,14 +875,17 @@ func (r *chainRun) fannedOut(step model.ChainStep, report *ChainStepReport, item
 	if len(report.Items) > 0 {
 		report.URL = report.Items[0].URL
 	}
-	if r.ctx.Err() != nil {
-		// The deadline came before every item was answered.
-		done := 0
-		for i := range items {
-			if items[i].started && !items[i].fails {
-				done++
-			}
+	done, cut := 0, false
+	for i := range items {
+		if items[i].started && !items[i].fails && !items[i].cancelled {
+			done++
+		} else if !items[i].started || ranOut(r.ctx, items[i].err) {
+			cut = true
 		}
+	}
+	if r.ctx.Err() != nil && cut {
+		// The deadline came before every item was answered; one that
+		// comes after does not fail the fan-out.
 		report.State, report.Deadline = ChainStepTimedOut, "the trip's deadline"
 		err := fmt.Errorf("the trip's deadline came after %d of %d items: %w", done, len(list), r.ctx.Err())
 		report.Error = err.Error()
@@ -847,7 +906,10 @@ func (r *chainRun) fannedOut(step model.ChainStep, report *ChainStepReport, item
 	}
 	for name, list := range values {
 		r.values[name] = chainValueRead{value: list, secret: step.Extract[name].Secret}
-		report.Values = append(report.Values, ChainValueReport{Name: name, Text: chainText(list), Secret: step.Extract[name].Secret, Found: true})
+		if step.Extract[name].Secret {
+			chainTripOf(r.ctx).keepSecret(list)
+		}
+		report.Values = append(report.Values, ChainValueReport{Name: name, Text: reportedText(list, step.Extract[name].Secret), Secret: step.Extract[name].Secret, Found: true})
 	}
 	sortValueReports(report.Values)
 	if r.c.Answer == model.ChainAnswerAll {

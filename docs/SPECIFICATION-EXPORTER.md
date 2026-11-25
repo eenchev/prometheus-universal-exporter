@@ -1171,8 +1171,10 @@ or empty MUST fail the step naming the step and the value, unless it is
 `optional`, when it MUST be the empty text. A value MUST be written into
 its place escaped as that place needs, as a probe parameter's is: one path
 segment in `path`, a query value in `query`, as written in a header, by its
-filter in `body`. No value MAY be written to the log, and a `secret` one
-MUST be shown as `***` in a debug report and never quoted in an error.
+filter in `body`. No value MAY be written to the log but in the URL of a
+request logged at debug level, and a `secret` one MUST be shown as `***`
+wherever a URL, a header, an answer's start, an error, a span or a debug
+report would show it.
 
 Every request of a chain, redirects included, MUST go to the target's
 origin. A link a step sends as its `url` MUST be resolved against the URL of

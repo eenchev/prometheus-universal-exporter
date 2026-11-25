@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -385,5 +386,37 @@ func TestAStepsPlaceholdersTakeProbeParameters(t *testing.T) {
 	params := RequestParams(c)
 	if len(params) != 1 || params[0].Name != "param_tenant" || !params[0].Required {
 		t.Fatalf("the collector takes %+v, want param_tenant alone, required", params)
+	}
+}
+
+// A value marked secret is never shown: not in the URL of a step's report
+// or its trace, not in an error, not in the start of an answer or a header
+// the report shows. A probe parameter named as a chain's own is refused as
+// unused, not taken.
+func TestAChainNeverShowsASecretValue(t *testing.T) {
+	const secret = "s3cret-session"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			w.Header().Set("X-Session", secret)
+			_, _ = w.Write([]byte(`{"session": "` + secret + `"}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	c := chainCollector(t, "/start", map[string]model.ChainExtract{"session": {Header: "X-Session", Secret: true}}, []model.ChainStep{{Name: "detail", Path: "/x/{{chain.session}}", Query: map[string]string{"s": "{{chain.session}}"}}}, nil)
+	ctx, trace := WithRequestTrace(context.Background())
+	response, err := FetchCollector(ctx, server.URL, c, RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := fmt.Sprintf("%+v %+v", response.Chain, trace.Requests())
+	if strings.Contains(shown, secret) || !strings.Contains(response.Chain.Steps[1].URL, "/x/***") {
+		t.Fatalf("the secret is shown:\n%s", shown)
+	}
+	c.Request.FollowRedirects = true
+	unused, err := CheckRequestParams(c, RequestOverrides{Params: map[string]string{"param__chain_session": "x"}})
+	if err != nil || len(unused) != 1 {
+		t.Fatalf("a probe parameter of the chain's own: unused %v, error %v", unused, err)
 	}
 }

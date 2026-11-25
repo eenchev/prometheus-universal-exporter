@@ -193,6 +193,8 @@ func TestTheDebugReportOfAChain(t *testing.T) {
 		"  first       ok          GET "+target.URL+"/api/json -> 200 in ",
 		`              read: jobs=["api","web","db"]`,
 		"  last_build  FAILED      3 items, 1 failed, in ",
+		"(step last_build, item 2) -> 404 Not Found",
+		"/api/json (step first) -> 200 OK",
 		`              item 2 (web): GET `+target.URL+`/job/web/lastBuild/api/json -> received HTTP status 404`,
 	)
 
@@ -265,5 +267,30 @@ func TestTheCacheKeepsAWholeChain(t *testing.T) {
 		if !strings.Contains(metrics, want+"\n") {
 			t.Errorf("no %s in the self-metrics", want)
 		}
+	}
+}
+
+// A reload that changes a chained collector forgets the last trip the
+// status page draws, which was of the old definition.
+func TestAReloadForgetsAChainsLastTrip(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	before := jenkinsCollector("chained", model.ChainItemSkip, false)
+	server := modeServer(t, before)
+	if r := probeOnce(t, server, "/probe?collector=chained&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	if _, ok := server.chains.ofCollector("chained"); !ok {
+		t.Fatal("the trip was not kept")
+	}
+	after := jenkinsCollector("chained", model.ChainItemSkip, false)
+	own := after.Request.Own.(fetch.HTTPConfig)
+	own.Then = []model.ChainStep{{Name: "last_build", ForEach: "jobs", Path: "/job/{{each}}/lastBuild/api/json", MaxItems: 1}}
+	after.Request.Own = own
+	reloadTo(t, server, after)
+	// The server follows the new configuration at its next read of it.
+	selfMetrics(t, server)
+	if _, ok := server.chains.ofCollector("chained"); ok {
+		t.Fatal("the trip of the old definition is still drawn")
 	}
 }

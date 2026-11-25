@@ -239,8 +239,10 @@ func traceRequestAt(ctx context.Context, method, url string, header http.Header,
 	if !ok {
 		return tracedAt{}
 	}
+	// A value of a chain marked secret is never shown (chain.go).
+	url = maskSecrets(ctx, url)
 	if !t.spans {
-		header = header.Clone()
+		header = maskHeaderSecrets(ctx, header).Clone()
 		if header == nil {
 			header = http.Header{}
 		}

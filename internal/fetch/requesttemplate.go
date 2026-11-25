@@ -555,7 +555,11 @@ func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, o
 			return nil, f.err
 		}
 		for _, p := range f.placeholders {
-			used[p.Name] = true
+			// A parameter a chain fills in itself is none a probe gives
+			// (chaintemplate.go).
+			if !strings.HasPrefix(p.Name, chainParamPrefix) {
+				used[p.Name] = true
+			}
 		}
 	}
 	if path {

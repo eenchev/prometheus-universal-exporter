@@ -44,3 +44,21 @@ func withItemTrace(ctx context.Context) (_ context.Context, merge func()) {
 		t.mu.Unlock()
 	}
 }
+
+// keepSecret notes the text of a value marked secret, and of each entry of
+// a list one.
+func (t *chainTrip) keepSecret(value any) {
+	if list, ok := value.([]any); ok {
+		for _, entry := range list {
+			t.keepSecret(entry)
+		}
+		return
+	}
+	text := chainText(value)
+	if text == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.secrets = append(t.secrets, text)
+}

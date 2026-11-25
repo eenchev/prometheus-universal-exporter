@@ -64,7 +64,7 @@ func TestTheWorkflowDiagramDrawsEveryState(t *testing.T) {
 		t.Errorf("the status page's diagram shows values or links:\n%s", names)
 	}
 	cached := string(chainDiagram(everyChainState(), chainDiagramOptions{cached: time.Date(2026, 11, 25, 10, 2, 15, 0, time.UTC)}))
-	if strings.Count(cached, "<rect") != 1 || !strings.Contains(cached, "from the cache, fetched 10:02:15") || !strings.Contains(cached, "chain-cached") {
+	if strings.Count(cached, "<rect") != 1 || !strings.Contains(cached, "from the cache, fetched 10:02:15") || !strings.Contains(cached, "a chain of 5 requests, none sent for this answer") || !strings.Contains(cached, "chain-cached") {
 		t.Errorf("a trip from the cache is not one grey block:\n%s", cached)
 	}
 }

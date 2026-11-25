@@ -860,6 +860,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		if req.Page > 0 {
 			via = fmt.Sprintf(" (page %d)", req.Page)
 		}
+		via += chainVia(req)
 		if req.Redirect {
 			via += " (redirect)"
 		}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -85,8 +86,8 @@ type ChainStepReport struct {
 	Trip *HTTPTrip
 }
 
-// ChainValueReport is a value a step read: its name, and its text, which
-// a report shows as *** for a secret value.
+// ChainValueReport is a value a step read: its name, and its text, *** for
+// a secret value.
 type ChainValueReport struct {
 	Name   string
 	Text   string
@@ -156,6 +157,50 @@ type chainTrip struct {
 	// relogged is set once a step's answer made the login log in again:
 	// once per trip.
 	relogged atomic.Bool
+	// secrets are the texts of the values marked secret read so far, which
+	// a URL, a header or an error shows as *** (maskSecrets).
+	mu      sync.Mutex
+	secrets []string
+}
+
+// maskSecrets is s with each secret value of the chain ctx's request
+// belongs to written as ***, as it is, path-escaped and query-escaped; s
+// as it is outside a chain.
+func maskSecrets(ctx context.Context, s string) string {
+	trip := chainTripOf(ctx)
+	if trip == nil {
+		return s
+	}
+	trip.mu.Lock()
+	defer trip.mu.Unlock()
+	for _, secret := range trip.secrets {
+		for _, form := range []string{secret, url.PathEscape(secret), url.QueryEscape(secret)} {
+			s = strings.ReplaceAll(s, form, "***")
+		}
+	}
+	return s
+}
+
+// maskHeaderSecrets is header with the secret values in its values masked
+// (maskSecrets), header itself when there is none to mask.
+func maskHeaderSecrets(ctx context.Context, header http.Header) http.Header {
+	trip := chainTripOf(ctx)
+	if trip == nil || header == nil {
+		return header
+	}
+	trip.mu.Lock()
+	none := len(trip.secrets) == 0
+	trip.mu.Unlock()
+	if none {
+		return header
+	}
+	masked := make(http.Header, len(header))
+	for name, values := range header {
+		for _, value := range values {
+			masked[name] = append(masked[name], maskSecrets(ctx, value))
+		}
+	}
+	return masked
 }
 
 type chainTripKey struct{}
@@ -209,7 +254,8 @@ func chainRedirect(ctx context.Context, u *url.URL) error {
 // JQSteps is $steps, and a Python script's steps: each step of the chain
 // that was reached, by name, as an object of its status, headers (their
 // names in lower case, each one's values joined by ", ", as $headers has
-// them), duration_seconds and url, its query values masked; a fan-out step
+// them), duration_seconds and url, the values of its query parameters
+// named as credentials masked (MaskCredentialQueryValues); a fan-out step
 // as a list of those, one per item, in order. It is nil, null to a rule,
 // for a response without a chain.
 func (r *ChainReport) JQSteps() any {

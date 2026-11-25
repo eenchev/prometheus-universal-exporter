@@ -248,7 +248,7 @@ func chainBlocks(report *fetch.ChainReport, options chainDiagramOptions) []chain
 	if !options.cached.IsZero() {
 		return []chainBlock{{class: "cached", word: "from the cache", lines: []string{
 			"from the cache, fetched " + options.cached.Format("15:04:05"),
-			fmt.Sprintf("%d steps; no request was made", len(report.Steps)),
+			fmt.Sprintf("a chain of %d requests, none sent for this answer", len(report.Steps)),
 		}}}
 	}
 	blocks := make([]chainBlock, 0, len(report.Steps))
@@ -435,6 +435,18 @@ func chainLines(report *fetch.ChainReport) []string {
 		}
 	}
 	return out
+}
+
+// chainVia is what the Requests section of a debug report adds to a
+// request a chain made: its step, and its fan-out item.
+func chainVia(req fetch.TracedRequest) string {
+	switch {
+	case req.Step == "":
+		return ""
+	case req.Item > 0:
+		return fmt.Sprintf(" (step %s, item %d)", req.Step, req.Item)
+	}
+	return " (step " + req.Step + ")"
 }
 
 // failedAfter counts the items from i on that failed.

@@ -118,10 +118,11 @@ An `http` collector with [`request.then`](REQUESTS.md#chained-requests)
 has four more families, labelled `collector` and `step`: the step's name,
 or `first` for the collector's own request. A collector has at most 13
 steps, so the series stay few; the URLs of a fan-out never become label
-values. The collector's own series keep describing the trip:
-`http_exporter_scrape_http_status_code` and
-`http_exporter_scrape_response_bytes` describe the response, the last
-step's answer under `answer: last` and the document under `answer: all`.
+values. The collector's own series keep describing the trip, through its
+response: under `answer: last`, `http_exporter_scrape_http_status_code`
+and `http_exporter_scrape_response_bytes` are the last step's status and
+size; under `answer: all`, the first request's status and the size of the
+document.
 
 | Metric | Type | Meaning |
 | --- | --- | --- |

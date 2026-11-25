@@ -2686,7 +2686,7 @@ keyed by step name:
 | `method` | `GET`, or `POST` with a body | `GET`, `HEAD`, `POST`, `PUT` or `PATCH`. |
 | `path` | the first request's path | A path on the target, joined to it as `request.path` is. It names no scheme and no host. |
 | `url` | none | One placeholder of a link a step read, alone, such as `"{{chain.next}}"`, in place of `path`. |
-| `query` | none | The step's query parameters. The collector's `request.query` is the first request's alone. |
+| `query` | none | The step's query parameters, after the query the target's URL has, which every step with a `path` sends. The collector's `request.query` is the first request's alone. With `url`, they are added to the link's query. |
 | `headers` | the collector's | Added to the collector's headers, each replacing one of the same name. Not `Authorization`, nor the header a login sends its token in. |
 | `body`, `form`, `json` | none | At most one: a body written as `request.body` is, a form, or a JSON object of text values. |
 | `accept_status` | the collector's | The statuses that count as an answer for this step. |
@@ -2716,8 +2716,12 @@ login](AUTHENTICATION.md) reads one, from exactly one place:
 
 A value that is not found, or is empty, fails the step that reads it:
 `step "first": value "id" was not found in the answer`. With `optional:
-true` it is the empty text instead. With `secret: true` the debug report
-shows it as `***`. No value is ever written to the log.
+true` it is the empty text instead. With `secret: true` it is shown as
+`***` wherever the exporter shows it: in the debug report and the
+workflow diagram, in a step's URL and headers, in an error, and in a
+request's span. No value is ever written to the log, secret or not, but
+for the URL of a request at debug level, in which only a secret one is
+masked.
 
 A later step sends a value as `{{chain.<name>}}`, in its `path`, `query`,
 `headers`, `body`, `form` and `json` values, and its `url`. A value is
@@ -2742,7 +2746,9 @@ port of the first request's URL.
   the configuration loads.
 - A step's `url` is a link read from an answer, resolved against the URL of
   that answer. A link to another origin fails the step in the
-  `target_policy` stage: `step "detail": the link "https://x.com/a" leads
+  `target_policy` stage, unless it names the virtual host the request's
+  `Host` header asks for, which is asked of the target's address with that
+  `Host`, as a [next page](#pagination) is: `step "detail": the link "https://x.com/a" leads
   to another origin than the target's, https://api.example; a chain asks
   one target only`.
 - In a collector with `request.then`, every request, the first included,
@@ -2787,7 +2793,8 @@ request. `max_response_bytes` bounds each answer, and the document of
 
 Every step sends the collector's credentials, signed with
 `request.signature` or `request.aws_sigv4` when the collector signs. A
-`request.login` logs in once per trip, as for one request. A `401`, or a
+`request.login` sends every step the token it keeps, as it does for one
+request, and logs in only when that token has expired. A `401`, or a
 status in `login.relogin_on`, at any step logs in again and sends that
 request once more, at most once per trip. The steps of a trip share a
 cookie jar: a cookie that one answer sets is sent with the later steps. The
@@ -2822,7 +2829,9 @@ name. jq and yq read each request as `$steps`, and a Python script as
 
 A [debug probe](CONFIGURATION.md#debug-probes) lists the chain, one line
 per step, with the values each read; a value marked `secret` shows as
-`***`. The debug page and the status page draw it as a workflow: a block
+`***`. Each of its requests names its step, and a fan-out item its place:
+`GET https://ci.example/job/web/lastBuild/api/json (step last_build, item
+2) -> 404 Not Found`. The debug page and the status page draw it as a workflow: a block
 per step, with arrows between them. A step that went through is green; one
 that failed or timed out is red, with its error inside; a fan-out is a
 stacked block, amber when its failed items were skipped; a step not reached

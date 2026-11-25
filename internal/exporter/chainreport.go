@@ -230,10 +230,12 @@ type chainTrips struct {
 	byTarget    map[string]chainTrip
 }
 
-// chainTrip is a trip's chain report and when it ended.
+// chainTrip is a trip's chain report, when it ended, and the collector it
+// was made with.
 type chainTrip struct {
-	report *fetch.ChainReport
-	at     time.Time
+	report    *fetch.ChainReport
+	at        time.Time
+	collector string
 }
 
 // note keeps report as the collector's last trip, and the static target's
@@ -244,9 +246,25 @@ func (c *chainTrips) note(collector, staticName string, report *fetch.ChainRepor
 	if c.byCollector == nil {
 		c.byCollector, c.byTarget = map[string]chainTrip{}, map[string]chainTrip{}
 	}
-	c.byCollector[collector] = chainTrip{report: report, at: at}
+	trip := chainTrip{report: report, at: at, collector: collector}
+	c.byCollector[collector] = trip
 	if staticName != "" {
-		c.byTarget[staticName] = chainTrip{report: report, at: at}
+		c.byTarget[staticName] = trip
+	}
+}
+
+// forget drops the last trips of the collectors named, and of the static
+// targets that scraped with them.
+func (c *chainTrips) forget(collectors map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for name := range collectors {
+		delete(c.byCollector, name)
+	}
+	for name, trip := range c.byTarget {
+		if collectors[trip.collector] {
+			delete(c.byTarget, name)
+		}
 	}
 }
 

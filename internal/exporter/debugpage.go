@@ -294,6 +294,8 @@ type debugShownRequest struct {
 	Method      string   `json:"method"`
 	URL         string   `json:"url"`
 	Page        int      `json:"page,omitempty"`
+	Step        string   `json:"step,omitempty"`
+	Item        int      `json:"item,omitempty"`
 	Redirect    bool     `json:"redirect,omitempty"`
 	Login       bool     `json:"login,omitempty"`
 	Outcome     string   `json:"outcome,omitempty"`
@@ -330,7 +332,7 @@ func debugAnswerOf(report *debugReport) debugAnswer {
 	for _, req := range t.requests.Requests() {
 		shown := debugShownRequest{
 			Method: req.Method, URL: shownStart(fetch.RedactRequestURL(req.URL, configured), debugURLLimit),
-			Page: req.Page, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
+			Page: req.Page, Step: req.Step, Item: req.Item, Redirect: req.Redirect, Login: req.Login, Outcome: req.Outcome, Headers: headerLines(req.Header),
 			Withheld: req.Withheld, WithheldWhy: req.WithheldWhy, Wait: req.Wait,
 		}
 		if req.Outcome != "" {

@@ -53,6 +53,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- **A diagram on the target allocator's status page.** The page draws the
+  instance, its peers and the exporter replicas that heartbeat to it. The
+  leader is the filled box, and each line says how long ago the replica's
+  last heartbeat came, or how long ago the instance last checked the peer.
+  A late or missing replica, or a peer that is down, has a dashed red line.
+  See [Status page](docs/ALLOCATOR.md#status-page).
+
 - **Querying InfluxDB.** An `http` collector can send InfluxDB an InfluxQL
   or a Flux query and read the answer: the JSON of `/query` with the `jq`
   transform, and the annotated CSV of `/api/v2/query` with the `csv`

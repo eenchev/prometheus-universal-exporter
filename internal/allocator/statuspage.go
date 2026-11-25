@@ -195,10 +195,12 @@ type filterForm struct {
 }
 
 // statusPage is what the page's template renders: the status, with the
-// spread laid out for its table and bars.
+// spread laid out for its table and bars, and the diagram of this
+// instance, its peers and its members (topologyOf), nil for none.
 type statusPage struct {
 	Status
-	View spreadView
+	View     spreadView
+	Topology *topologyView
 }
 
 // spreadView is the spread as the table shows it: a row for each member,
@@ -232,7 +234,7 @@ type spreadRow struct {
 }
 
 func statusPageOf(s Status) statusPage {
-	page := statusPage{Status: s}
+	page := statusPage{Status: s, Topology: topologyOf(s)}
 	sp := s.Spread
 	if sp == nil {
 		return page
@@ -443,6 +445,26 @@ th.group { text-align: center; border-bottom: 1px solid var(--line); }
    does not push the table past the page's edge. */
 td.sources { min-width: 10em; }
 td.sources span.source { overflow-wrap: anywhere; }
+/* The diagram (topology.go) is drawn at its own size and scrolls on a
+   narrow screen, so its text stays legible. The leader is filled in the
+   accent colour; a line that is not well is dashed as well as red. */
+figure.topology { margin: 0; }
+figure.topology svg { display: block; max-width: none; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+figure.topology figcaption { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.topology .node rect { fill: var(--panel); stroke: var(--field); stroke-width: 1; }
+.topology .node text { fill: var(--fg); text-anchor: middle; }
+.topology .node text.name { font-weight: 600; }
+.topology .node text.sub { fill: var(--muted); font-size: 12px; }
+.topology .node.master rect { fill: var(--accent); stroke: var(--accent); }
+.topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }
+.topology .node.hub rect { stroke-width: 2; }
+.topology .node.down rect { stroke: var(--bad); stroke-dasharray: 4 3; }
+.topology a:focus-visible rect, .topology a:hover rect { stroke: var(--accent); stroke-width: 2; }
+.topology line.edge { stroke: var(--muted); stroke-width: 1.5; }
+.topology line.edge.late, .topology line.edge.down { stroke: var(--bad); stroke-dasharray: 6 4; }
+.topology text.edge-label { fill: var(--muted); font-size: 12px; text-anchor: middle; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.topology text.edge-label.late, .topology text.edge-label.down { fill: var(--bad); }
+.topology text.more { fill: var(--muted); font-size: 12px; }
 form.filter.jobs { margin: 0 0 8px; }
 form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: border-box; }
 /* On a phone the label is "Instance" over "ID", so the column is no wider
@@ -696,6 +718,12 @@ const statusParts = `
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{if .SameName}}, <span class="bad" title="Two exporters heartbeat under this member name, and each scrapes its share: give each a name of its own with --allocator.member">two exporters under this name</span>{{end}}{{end}}
 {{- define "capacity"}}{{if and .InList (ne .CapacityInList .Capacity)}}<span title="the member list places it by {{weight .CapacityInList}} until its heartbeats' {{weight .Capacity}} has held for the settle time">{{weight .CapacityInList}} <span class="bad">→</span> {{weight .Capacity}}</span>{{else}}{{weight .Capacity}}{{end}}{{end}}
 {{- define "result"}}{{if eq . "ok"}}<span class="good">ok</span>{{else if eq . "failing"}}<span class="bad">failing</span>{{else}}<span class="muted">not answered yet</span>{{end}}{{end}}
+{{- define "topology-edge"}}
+<line class="edge{{with .Class}} {{.}}{{end}}" x1="{{.X1}}" y1="{{.Y1}}" x2="{{.X2}}" y2="{{.Y2}}"></line>{{end}}
+{{- define "topology-label"}}
+<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}"><title>{{.Tip}}</title>{{.Text}}</text>{{end}}
+{{- define "topology-node"}}
+{{if .Link}}<a href="{{.Link}}">{{end}}<g class="node{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Link}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "list-note"}}
@@ -732,6 +760,29 @@ const statusContent = `{{define "content"}}
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
+{{- with .Topology}}
+
+<h2 id="diagram">Diagram</h2>
+<figure class="topology">
+<div class="scroll">
+<svg role="img" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}">
+{{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}
+{{- range .Members}}{{template "topology-edge" .Edge}}{{end}}
+{{- with .Hub}}
+<g class="node hub{{if .Master}} master{{end}}"><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
+{{- end}}
+{{- range .Peers}}{{template "topology-node" .}}{{end}}
+{{- range .Members}}{{template "topology-node" .}}{{end}}
+{{- range .Peers}}{{template "topology-label" .Edge}}{{end}}
+{{- range .Members}}{{template "topology-label" .Edge}}{{end}}
+{{- if .MoreMembers}}
+<text x="{{.MoreX}}" y="{{.MoreY}}" class="more">and {{.MoreMembers}} more, in the table below</text>
+{{- end}}
+</svg>
+</div>
+<figcaption>The filled box is the leader{{if not $.Peers}}, this instance, which runs without peers{{end}}. A member's line says how long ago its last heartbeat came{{if $.Peers}}, and a peer's how long ago this instance last checked it{{end}}. A dashed line is an overdue heartbeat, a member silent, gone or shutting down{{if $.Peers}}, or a peer down{{end}}.</figcaption>
+</figure>
+{{- end}}
 {{- with .Peers}}
 
 <h2>Peers</h2>

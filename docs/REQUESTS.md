@@ -2690,6 +2690,7 @@ keyed by step name:
 | `headers` | the collector's | Added to the collector's headers, each replacing one of the same name. Not `Authorization`, nor the header a login sends its token in. |
 | `body`, `form`, `json` | none | At most one: a body written as `request.body` is, a form, or a JSON object of text values. |
 | `accept_status` | the collector's | The statuses that count as an answer for this step. |
+| `forwarded_headers` | `true` | `false` sends the step none of the forwarded headers — the `header_<name>` probe parameters and those `request.forward_headers` lets through — but a forwarded `Authorization`, the collector's credential, and a forwarded `Host`, which keeps the step on the first request's virtual host. |
 | `extract` | none | The values read from this step's answer. |
 | `for_each` | none | The name of a list value read earlier: one request per entry. |
 | `concurrency` | `4` | With `for_each`: how many of its requests run at once, 1 to 16. |
@@ -2810,8 +2811,9 @@ target cannot set `then`, `extract` or `answer`.
 
 A probe's parameters that change the request, such as `path`, `method` and
 `body`, change the first request alone. `param_<name>` values fill every
-step, and forwarded headers, `header_<name>` among them, go with every
-step. The cache, shared trips and `failure_backoff` work on the whole
+step. Forwarded headers, `header_<name>` among them, go with every step
+but one that sets `forwarded_headers: false`, such as a step of an API
+that refuses a header the first request needs. The cache, shared trips and `failure_backoff` work on the whole
 chain, which is one trip.
 
 ### Errors, self-metrics and the debug report

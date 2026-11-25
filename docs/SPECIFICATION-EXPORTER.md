@@ -1146,8 +1146,8 @@ target nor a probe parameter MAY set or change `then`, `extract` or
 A step's keys are `name` (required, `^[a-z_][a-z0-9_]*$`, unique, not
 `first`), `method` (`GET`, `HEAD`, `POST`, `PUT` or `PATCH`; `GET`, or
 `POST` with a body, when left out), `path` or `url`, `query`, `headers`,
-at most one of `body`, `form` and `json`, `accept_status`, `extract`, and
-for a fan-out `for_each`, `concurrency` (1 to 16, 4), `max_items` (1 to
+at most one of `body`, `form` and `json`, `accept_status`, `extract`,
+`forwarded_headers` (`true`), and for a fan-out `for_each`, `concurrency` (1 to 16, 4), `max_items` (1 to
 1000, 100) and `on_item_error` (`fail` or `skip`, `fail`). The load MUST
 refuse, naming the collector, the step and the key: a step past the
 twelfth; a name taken twice or not of the pattern; a `path` with a scheme
@@ -1202,7 +1202,9 @@ The chain MUST share one budget, the trip's deadline; a probe's `timeout`
 MUST bound the chain. A step that fails MUST fail the trip in the stage its
 request's failure has, its error starting with `step "<name>"`, and for a
 fan-out item with its place, entry and the number of items. Every request
-MUST carry the collector's credentials and be signed as the collector signs;
+MUST carry the collector's credentials and be signed as the collector signs,
+and the forwarded headers, but a step with `forwarded_headers: false` MUST
+carry of those a forwarded `Authorization` and `Host` alone;
 a login MUST log in again for a refused token at most once per trip; the
 steps of a trip MUST share a cookie jar that starts empty. A chain MUST be
 one trip to the cache, shared probes and `failure_backoff`, and its result

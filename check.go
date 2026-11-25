@@ -509,16 +509,18 @@ type chainPlan struct {
 // url; for a fan-out what it goes over and its bounds; the values it reads
 // and those it sends.
 type chainStepPlan struct {
-	Name        string   `json:"name"`
-	Method      string   `json:"method"`
-	Path        string   `json:"path,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	ForEach     string   `json:"for_each,omitempty"`
-	Concurrency int      `json:"concurrency,omitempty"`
-	MaxItems    int      `json:"max_items,omitempty"`
-	OnItemError string   `json:"on_item_error,omitempty"`
-	Reads       []string `json:"reads,omitempty"`
-	Sends       []string `json:"sends,omitempty"`
+	Name        string `json:"name"`
+	Method      string `json:"method"`
+	Path        string `json:"path,omitempty"`
+	URL         string `json:"url,omitempty"`
+	ForEach     string `json:"for_each,omitempty"`
+	Concurrency int    `json:"concurrency,omitempty"`
+	MaxItems    int    `json:"max_items,omitempty"`
+	OnItemError string `json:"on_item_error,omitempty"`
+	// ForwardedHeaders is the step's forwarded_headers when it sets it.
+	ForwardedHeaders *bool    `json:"forwarded_headers,omitempty"`
+	Reads            []string `json:"reads,omitempty"`
+	Sends            []string `json:"sends,omitempty"`
 }
 
 // chainSent finds the values a step's text sends, {{chain.<name>}}.
@@ -553,7 +555,7 @@ func chainPlanOf(c *model.Collector, steps []model.ChainStep) *chainPlan {
 		}
 		plan.Steps = append(plan.Steps, chainStepPlan{
 			Name: step.Name, Method: step.Method, Path: step.Path, URL: step.URL,
-			ForEach: step.ForEach, Concurrency: step.Concurrency, MaxItems: step.MaxItems, OnItemError: step.OnItemError,
+			ForEach: step.ForEach, Concurrency: step.Concurrency, MaxItems: step.MaxItems, OnItemError: step.OnItemError, ForwardedHeaders: step.ForwardedHeaders,
 			Reads: model.SortedKeys(step.Extract), Sends: sends,
 		})
 	}

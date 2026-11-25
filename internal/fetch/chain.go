@@ -64,9 +64,9 @@ type chainRun struct {
 
 // ask sends a request of the chain, c's with overrides, and returns its
 // answer: the target's, or the one pasted for the step.
-func (r *chainRun) ask(ctx context.Context, c *model.Collector, overrides RequestOverrides) (*HTTPResponse, error) {
+func (r *chainRun) ask(ctx context.Context, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
 	if r.pasted == nil {
-		return fetch(ctx, r.target, c, overrides, r.forwarded)
+		return fetch(ctx, r.target, c, overrides, forwarded)
 	}
 	countChainRequest(ctx)
 	step := chainStepOf(ctx).name
@@ -170,7 +170,7 @@ func (r *chainRun) first() (response *HTTPResponse, done bool, err error) {
 	report := &r.report.Steps[0]
 	state := &chainStepState{name: model.ChainFirst, requests: new(atomic.Int64)}
 	report.Started = time.Now()
-	response, err = r.ask(withChainStep(r.ctx, state), r.c, r.overrides)
+	response, err = r.ask(withChainStep(r.ctx, state), r.c, r.overrides, r.forwarded)
 	report.Duration, report.Requests = time.Since(report.Started), int(state.requests.Load())
 	report.URL = RedactURL(r.origin, MaskCredentialQueryValues)
 	if err != nil {
@@ -373,8 +373,26 @@ func (r *chainRun) send(ctx context.Context, step model.ChainStep, params map[st
 	if u, err := requestURL(r.target, sc, overrides); err == nil {
 		shown = RedactURL(u, MaskCredentialQueryValues)
 	}
-	response, err := r.ask(ctx, sc, overrides)
+	response, err := r.ask(ctx, sc, overrides, stepForwarded(step, r.forwarded))
 	return response, maskSecrets(r.ctx, shown), err
+}
+
+// stepForwarded are the forwarded headers a step sends: every one, or with
+// forwarded_headers: false only those that are no header of the probe's
+// choosing: a forwarded Authorization (forward_authorization), the
+// collector's credential, and a forwarded Host, which keeps the step on the
+// first request's virtual host.
+func stepForwarded(step model.ChainStep, forwarded http.Header) http.Header {
+	if step.ForwardedHeaders == nil || *step.ForwardedHeaders || forwarded == nil {
+		return forwarded
+	}
+	kept := http.Header{}
+	for name, values := range forwarded {
+		if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Host") {
+			kept[name] = values
+		}
+	}
+	return kept
 }
 
 // stepRequest is the collector and the overrides a step's request is made

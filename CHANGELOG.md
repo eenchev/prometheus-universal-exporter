@@ -61,7 +61,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   and `max_items`. The trip's response is the last step's answer, or with
   `answer: all` one JSON document of every answer. Every request and
   redirect keeps to the target's origin. Four self-metrics count the steps
-  by name, jq reads each step as `$steps` and Python as `steps`, and the
+  by name, jq reads each step as `$steps` and Python as `steps`, a step
+  with `forwarded_headers: false` is sent none of the probe's forwarded
+  headers but `Authorization` and `Host`, and the
   debug page and the status page draw the chain as a workflow, with the
   failed or timed-out step in red. See
   [Chained requests](docs/REQUESTS.md#chained-requests).

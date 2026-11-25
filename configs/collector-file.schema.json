@@ -7451,6 +7451,10 @@
                       "description": "The step's body as a form, each field's value with placeholders.",
                       "type": "object"
                     },
+                    "forwarded_headers": {
+                      "description": "Whether the step is sent the forwarded headers: header_\u003cname\u003e probe parameters and those request.forward_headers lets through. true, the default, sends them; false sends none of them, but a forwarded Authorization (request.forward_authorization), the collector's credential, and a forwarded Host, which keeps the step on the first request's virtual host.",
+                      "type": "boolean"
+                    },
                     "headers": {
                       "additionalProperties": {
                         "type": [

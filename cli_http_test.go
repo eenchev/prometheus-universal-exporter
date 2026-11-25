@@ -900,12 +900,12 @@ func TestDryRunReportsAChain(t *testing.T) {
 	chained := func(then string) string {
 		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: chained\n    request:\n      type: http\n      path: /api/json\n      extract: {jobs: {json: '[.jobs[].name]'}}\n      then: "+then+"\n    answer: all\n    transform: {type: jq}\n    metrics: [{name: v, expression: length}]\n")
 	}
-	check := runCheckCLI(t, "--config.file="+chained("[{name: last_build, for_each: jobs, path: '/job/{{each}}'}]"))
+	check := runCheckCLI(t, "--config.file="+chained("[{name: last_build, for_each: jobs, path: '/job/{{each}}', forwarded_headers: false}]"))
 	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
 	policy, _ := policies["chained"].(map[string]any)
 	want := map[string]any{"answer": "all", "steps": []any{
 		map[string]any{"name": "first", "method": "GET", "path": "/api/json", "reads": []any{"jobs"}},
-		map[string]any{"name": "last_build", "method": "GET", "path": "/job/{{each}}", "for_each": "jobs", "concurrency": float64(4), "max_items": float64(100), "on_item_error": "fail", "sends": []any{"jobs"}},
+		map[string]any{"name": "last_build", "method": "GET", "path": "/job/{{each}}", "for_each": "jobs", "concurrency": float64(4), "max_items": float64(100), "on_item_error": "fail", "forwarded_headers": false, "sends": []any{"jobs"}},
 	}}
 	if check.code != 0 || !reflect.DeepEqual(policy["chain"], want) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)

@@ -52,11 +52,12 @@ func TestSchemaAndExporterAgreeOnChains(t *testing.T) {
 		return extract + "then:\n  - name: last_build\n    for_each: jobs\n    path: /job/{{each}}/api/json\n" + chainIndent(body, "    ")
 	}
 	accepted := map[string]struct{ request, extra string }{
-		"a step":                 {step("path: /item/{{chain.id}}"), ""},
-		"a fan-out under all":    {fanOut("concurrency: 16\nmax_items: 1000\non_item_error: skip"), "answer: all"},
-		"a step and a link":      {"extract:\n  next: {json: .next}\nthen:\n  - name: detail\n    url: '{{chain.next}}'", "answer: last"},
-		"a json body and a post": {step("method: put\njson: {id: '{{chain.id}}'}"), ""},
-		"a secret header value":  {"extract:\n  token: {header: X-Token, secret: true}\nthen:\n  - name: detail\n    headers: {X-Session: '{{chain.token}}'}", ""},
+		"a step":                     {step("path: /item/{{chain.id}}"), ""},
+		"a fan-out under all":        {fanOut("concurrency: 16\nmax_items: 1000\non_item_error: skip"), "answer: all"},
+		"a step and a link":          {"extract:\n  next: {json: .next}\nthen:\n  - name: detail\n    url: '{{chain.next}}'", "answer: last"},
+		"a json body and a post":     {step("method: put\njson: {id: '{{chain.id}}'}"), ""},
+		"forwarded headers left out": {step("path: '/x/{{chain.id}}'\nforwarded_headers: false"), ""},
+		"a secret header value":      {"extract:\n  token: {header: X-Token, secret: true}\nthen:\n  - name: detail\n    headers: {X-Session: '{{chain.token}}'}", ""},
 	}
 	for name, d := range accepted {
 		agree(t, schema, name, chainDocument(d.request, d.extra), true)

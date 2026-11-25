@@ -420,3 +420,32 @@ func TestAChainNeverShowsASecretValue(t *testing.T) {
 		t.Fatalf("a probe parameter of the chain's own: unused %v, error %v", unused, err)
 	}
 }
+
+// A step is sent the forwarded headers, as the first request is, unless it
+// sets forwarded_headers: false, when it is sent only a forwarded
+// Authorization and Host.
+func TestAStepMayLeaveTheForwardedHeadersOut(t *testing.T) {
+	seen := map[string]string{}
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path] = r.Header.Get("X-Tenant") + "|" + r.Header.Get("Authorization") + "|" + r.Host
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"id": 1}`))
+	}))
+	t.Cleanup(server.Close)
+	off := false
+	c := chainCollector(t, "/first", map[string]model.ChainExtract{"id": jsonValue(".id")}, []model.ChainStep{
+		{Name: "sends", Path: "/sends/{{chain.id}}"},
+		{Name: "leaves", Path: "/leaves/{{chain.id}}", ForwardedHeaders: &off},
+	}, nil)
+	host := strings.TrimPrefix(server.URL, "http://")
+	forwarded := http.Header{"X-Tenant": {"acme"}, "Authorization": {"Bearer f"}, "Host": {host}}
+	if _, err := FetchCollector(context.Background(), server.URL, c, RequestOverrides{}, forwarded); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"/first": "acme|Bearer f|" + host, "/sends/1": "acme|Bearer f|" + host, "/leaves/1": "|Bearer f|" + host}
+	if fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Fatalf("the requests carried %v, want %v", seen, want)
+	}
+}

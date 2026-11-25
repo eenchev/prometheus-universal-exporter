@@ -505,10 +505,11 @@ func chainKeyRules() map[string]map[string]any {
 			"anyOf":       []any{map[string]any{"maxItems": 1}, map[string]any{"items": map[string]any{"not": map[string]any{"const": AcceptAnyStatus}}}},
 			"description": "The statuses that count as an answer for this step, written as request.accept_status is; the collector's when left out.",
 		},
-		"then[].for_each":      {"description": "The name of a list value an earlier step read with json: one request per entry, with {{each}}, {{each.<field>}} and {{each_index}}. At most one step of a chain fans out."},
-		"then[].concurrency":   {"minimum": 1, "maximum": model.MaxChainConcurrency, "description": "With for_each: how many of the step's requests run at once, 1 to 16, 4 when left out."},
-		"then[].max_items":     {"minimum": 1, "maximum": model.MaxChainMaxItems, "description": "With for_each: how many entries are asked for, 1 to 1000, 100 when left out. The rest are left out, counted in http_exporter_chain_items_cut_total; the trip still succeeds."},
-		"then[].on_item_error": {"enum": SchemaOptionalEnum(model.ChainItemErrors), "description": "With for_each: fail, the default, fails the trip at an item's failure; skip keeps the item in the answer document as an error and goes on."},
+		"then[].forwarded_headers": {"description": "Whether the step is sent the forwarded headers: header_<name> probe parameters and those request.forward_headers lets through. true, the default, sends them; false sends none of them, but a forwarded Authorization (request.forward_authorization), the collector's credential, and a forwarded Host, which keeps the step on the first request's virtual host."},
+		"then[].for_each":          {"description": "The name of a list value an earlier step read with json: one request per entry, with {{each}}, {{each.<field>}} and {{each_index}}. At most one step of a chain fans out."},
+		"then[].concurrency":       {"minimum": 1, "maximum": model.MaxChainConcurrency, "description": "With for_each: how many of the step's requests run at once, 1 to 16, 4 when left out."},
+		"then[].max_items":         {"minimum": 1, "maximum": model.MaxChainMaxItems, "description": "With for_each: how many entries are asked for, 1 to 1000, 100 when left out. The rest are left out, counted in http_exporter_chain_items_cut_total; the trip still succeeds."},
+		"then[].on_item_error":     {"enum": SchemaOptionalEnum(model.ChainItemErrors), "description": "With for_each: fail, the default, fails the trip at an item's failure; skip keeps the item in the answer document as an error and goes on."},
 	}
 	for key, rule := range steps {
 		rules[key] = rule

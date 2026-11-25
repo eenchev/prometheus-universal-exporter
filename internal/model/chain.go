@@ -25,6 +25,11 @@ type ChainStep struct {
 	Body string            `yaml:"body" json:"body,omitempty"`
 	Form map[string]string `yaml:"form" json:"form,omitempty"`
 	JSON map[string]string `yaml:"json" json:"json,omitempty"`
+	// ForwardedHeaders, nil or true, sends the step the forwarded headers,
+	// header_<name> probe parameters and request.forward_headers among
+	// them; false sends it none of them but a forwarded Authorization and
+	// Host.
+	ForwardedHeaders *bool `yaml:"forwarded_headers" json:"forwarded_headers,omitempty"`
 	// AcceptStatus replaces the collector's request.accept_status for the
 	// step.
 	AcceptStatus []string `yaml:"accept_status" json:"accept_status,omitempty"`

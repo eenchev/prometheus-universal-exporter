@@ -413,9 +413,9 @@ div.notice.warning { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var
 div.notice.warning p { margin: 0; }
 div.notice.warning ul { margin: 6px 0 0; padding-left: 20px; }
 code.shard-key { overflow-wrap: anywhere; }
-:root { --bar-static: #c2410c; --bar-probe: #2563eb; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; } }
-:root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; }
+:root { --bar-static: #c2410c; --bar-probe: #2563eb; --node-allocator: #7c3aed; --node-allocator-bg: #f3effe; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; --node-allocator: #a78bfa; --node-allocator-bg: #2a2342; } }
+:root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; --node-allocator: #a78bfa; --node-allocator-bg: #2a2342; }
 td.bar { width: 32%; min-width: 120px; }
 /* On the first line of the row, beside the counts, however the member's
    id wraps: 12px centred in a 21px line. A segment's width is its share
@@ -447,7 +447,8 @@ td.sources { min-width: 10em; }
 td.sources span.source { overflow-wrap: anywhere; }
 /* The diagram (topology.go) is drawn at its own size times the zoom, so its
    text stays legible, in a window that scrolls. The leader is filled in the
-   accent colour; a line that is not well is dashed as well as red. */
+   accent colour, the other allocator instances in purple and the members in
+   the panel's grey; a line that is not well is dashed as well as red. */
 figure.topology { margin: 0; }
 /* The diagram is drawn in a window of a fixed height, which scrolls both
    ways, so many members do not push the tables below down the page. The
@@ -464,6 +465,7 @@ figure.topology figcaption { margin-top: 6px; font-size: 13px; color: var(--mute
 .topology .node text { fill: var(--fg); text-anchor: middle; }
 .topology .node text.name { font-weight: 600; }
 .topology .node text.sub { fill: var(--muted); font-size: 12px; }
+.topology .node.allocator rect { fill: var(--node-allocator-bg); stroke: var(--node-allocator); stroke-width: 1.5; }
 .topology .node.master rect { fill: var(--accent); stroke: var(--accent); }
 .topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }
 .topology .node.hub rect { stroke-width: 2; }
@@ -820,7 +822,7 @@ const statusParts = `
 {{- define "topology-label"}}
 <text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}" text-anchor="{{.Anchor}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
 {{- define "topology-node"}}
-{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
+{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Allocator}} allocator{{end}}{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "list-note"}}
@@ -867,7 +869,7 @@ const statusContent = `{{define "content"}}
 {{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}
 {{- range .Members}}{{template "topology-edge" .Edge}}{{end}}
 {{- with .Hub}}
-<g class="node hub{{if .Master}} master{{end}}">{{with .FullName}}<title>{{.}}</title>{{end}}<rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
+<g class="node hub{{if .Master}} master{{else}} allocator{{end}}">{{with .FullName}}<title>{{.}}</title>{{end}}<rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
 {{- end}}
 {{- range .Peers}}{{template "topology-node" .}}{{end}}
 {{- range .Members}}{{template "topology-node" .}}{{end}}
@@ -878,7 +880,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>{{if not .HasLeader}}No instance leads yet. {{else if not $.Peers}}This instance leads. {{else}}The filled box leads. {{end}}Each line gives the time since the {{if not .HasMembers}}last check; the members are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
+<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}. Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

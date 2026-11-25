@@ -76,13 +76,15 @@ type topologyView struct {
 // allocator" and its FullName this instance's whole address. Sub is its
 // second line, and Note the hub's third, this instance's address cut to
 // fit. Member is the member's ID, whose view the box opens, "" for the hub
-// and a peer. Master marks the leader, and Down a peer or member not live,
+// and a peer. Allocator marks a peer, an allocator instance drawn apart
+// from the members, Master the leader, and Down a peer or member not live,
 // or shutting down.
 type topologyNode struct {
 	X, Y, W, H     int
 	Name, FullName string
 	Sub, Note      string
 	Member         string
+	Allocator      bool
 	Master, Down   bool
 	Edge           *topologyEdge
 }
@@ -171,7 +173,7 @@ func topologyOf(s Status) *topologyView {
 	}
 	for i, p := range peers {
 		y := rowY(i, len(peers))
-		n := topologyNode{X: topologyMargin, Y: y, W: topologyNodeW, H: topologyNodeH, Master: p.Leader, Down: !p.Live}
+		n := topologyNode{X: topologyMargin, Y: y, W: topologyNodeW, H: topologyNodeH, Allocator: true, Master: p.Leader, Down: !p.Live}
 		n.Name, n.FullName = cutName(p.Address), p.Address
 		n.Sub = "follower"
 		if p.Leader {

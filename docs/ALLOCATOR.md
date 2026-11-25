@@ -1309,7 +1309,8 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
   - the leader, the instance that asks the discovery sources, is the box
     filled in the accent colour. Without `--peers` this instance is the
     leader. Before the instances have checked each other, no box is
-    filled;
+    filled. The other allocator instances are purple boxes, and the members
+    grey ones;
   - a member's line says how long ago its last heartbeat came, and a peer's
     how long ago this instance last checked it;
   - a line is dashed and red, and its text says why, for an overdue

@@ -99,8 +99,8 @@ func TestTheDiagramSaysWhenNoInstanceLeads(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := b.String()
-	for _, want := range []string{"<figcaption>No instance leads yet. Each line", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
-		`<g class="node hub"><title>` + address + `</title>`} {
+	for _, want := range []string{"<figcaption>No instance leads yet; purple boxes are allocator instances, grey ones the exporters. Each line", `<svg role="group" aria-label="Diagram: this instance, choosing, 1 peer and 1 member;`,
+		`<g class="node hub allocator"><title>` + address + `</title>`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -178,10 +178,11 @@ func TestTheDiagramDrawsTheMembersNotWellFirst(t *testing.T) {
 	}
 }
 
-// The diagram reads in both themes: its lines, plain or red, and its boxes'
-// outlines and the window's stand out from the page at 3:1 or more, as
-// graphics that carry meaning must (WCAG 1.4.11), and its text, on the page,
-// on a box and on the leader's filled box, at 4.5:1 or more (WCAG 1.4.3).
+// The diagram reads in both themes: its lines, plain or red, its boxes'
+// outlines, the allocator instances' purple among them, and the window's
+// stand out from the page at 3:1 or more, as graphics that carry meaning
+// must (WCAG 1.4.11), and its text, on the page, on a box, on a purple box
+// and on the leader's filled box, at 4.5:1 or more (WCAG 1.4.3).
 func TestTheDiagramReadsInBothThemes(t *testing.T) {
 	colour := func(theme, name string) string {
 		m := regexp.MustCompile(`--` + name + `: (#[0-9a-f]{6});`).FindStringSubmatch(theme)
@@ -192,9 +193,26 @@ func TestTheDiagramReadsInBothThemes(t *testing.T) {
 	}
 	for _, rule := range []string{".topology line.edge { stroke: var(--muted);", ".topology line.edge.late, .topology line.edge.down { stroke: var(--bad);",
 		".topology .node rect { fill: var(--panel); stroke: var(--field);", ".topology .node.master rect { fill: var(--accent);",
-		".topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }", "border: 1px solid var(--field);"} {
+		".topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }", ".topology .node.allocator rect { fill: var(--node-allocator-bg); stroke: var(--node-allocator);", "border: 1px solid var(--field);"} {
 		if !strings.Contains(statusStyle, rule) {
 			t.Errorf("the diagram's style lacks %q", rule)
+		}
+	}
+	// The allocator's own colours are the status page's, light and then
+	// dark twice (statusStyle), each read beside the page's of its theme.
+	own := regexp.MustCompile(`--node-allocator: (#[0-9a-f]{6}); --node-allocator-bg: (#[0-9a-f]{6});`).FindAllStringSubmatch(statusStyle, -1)
+	if len(own) != 3 || own[1][0] != own[2][0] {
+		t.Fatalf("the allocator boxes' colours are %v; want light, then dark twice", own)
+	}
+	for i, theme := range []string{pagekit.LightColours, pagekit.DarkColours} {
+		stroke, fill := own[i][1], own[i][2]
+		for _, c := range []struct {
+			fg, bg string
+			least  float64
+		}{{stroke, colour(theme, "bg"), 3}, {stroke, fill, 3}, {colour(theme, "fg"), fill, 4.5}, {colour(theme, "muted"), fill, 4.5}} {
+			if r := barContrast(c.fg, c.bg); r < c.least {
+				t.Errorf("theme %d: %s on %s is %.2f:1, under %.1f:1", i, c.fg, c.bg, r, c.least)
+			}
 		}
 	}
 	for name, theme := range map[string]string{"light": pagekit.LightColours, "dark": pagekit.DarkColours} {

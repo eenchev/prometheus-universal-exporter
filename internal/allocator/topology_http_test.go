@@ -40,14 +40,15 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 		`<line class="edge late"`, `<title data-at="`+r2.LastHeartbeat+`">`+r2.LastHeartbeat+`, the last heartbeat; a heartbeat is overdue</title>7s ago, overdue</text>`,
 		`const tip = mark.localName === "title" ? "textContent" : "title";`,
 		`<line class="edge down"`, `>shutting down, 0s ago</text>`, `<g class="node down">`,
-		`r&lt;img src=x&gt;`, "<figcaption>This instance leads. Each line gives the time since the last heartbeat. Dashed red needs attention; the line says why.</figcaption>")
+		`r&lt;img src=x&gt;`, "<figcaption>This instance leads; the grey boxes are the exporters. Each line gives the time since the last heartbeat. Dashed red needs attention; the line says why.</figcaption>")
 	if strings.Contains(page, "<img src=x>") {
 		t.Error("a member's name is written unescaped")
 	}
 }
 
 // Among peers the leader is the filled box: on the leader's page this
-// instance, on a follower's the peer that leads. A peer's line says how
+// instance, on a follower's the peer that leads. The other allocator
+// instances are drawn apart from the members, in the allocator's colour. A peer's line says how
 // long ago this instance last checked it. A follower under
 // --peers.leader-only draws itself and its peers alone, and says the
 // members are on the leader's page.
@@ -58,16 +59,16 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	}
 	leaderPage := ask(leader.a.Handler(""), "/", "").Body.String()
 	requireIn(t, leaderPage, `<g class="node hub master">`, `>this instance, leader</text>`,
-		`<title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
-		"<figcaption>The filled box leads. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
+		`<g class="node allocator"><title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
+		"<figcaption>The filled box leads; purple boxes are the other allocator instances, grey ones the exporters. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
 		"Diagram: this instance, leader, 1 peer and 2 members;")
 	followerPage := ask(follower.a.Handler(""), "/", "").Body.String()
-	requireIn(t, followerPage, `<g class="node hub">`, `>this instance, follower</text>`,
-		`<g class="node master"><title>`+leader.addr.String()+`</title>`, `>leader</text>`)
+	requireIn(t, followerPage, `<g class="node hub allocator">`, `>this instance, follower</text>`,
+		`<g class="node allocator master"><title>`+leader.addr.String()+`</title>`, `>leader</text>`)
 	leaderOnly(leader, follower)
 	partial := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, partial, `aria-label="Diagram: this instance, follower, 1 peer; the tables below list the same."`,
-		"<figcaption>The filled box leads. Each line gives the time since the last check; the members are on the leader's page. Dashed red needs attention; the line says why.</figcaption>")
+		"<figcaption>The filled box leads; purple boxes are the other allocator instances. Each line gives the time since the last check; the exporters are on the leader's page. Dashed red needs attention; the line says why.</figcaption>")
 	if _, caption, _ := strings.Cut(partial, "<figcaption>"); strings.Contains(strings.SplitN(caption, "</figcaption>", 2)[0], "heartbeat") {
 		t.Error("the follower's caption speaks of members' lines it does not draw")
 	}

@@ -1300,12 +1300,13 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
 - a diagram of this instance, its peers and its members:
   - this instance is in the middle, its peers on the left and the members
     on the right, each joined to it by a line;
-  - the diagram is drawn in a window 480 pixels high, which scrolls both
-    ways. With JavaScript, the window opens with the leader's box in its
-    middle, as far as it scrolls; the − and + buttons above it, and Ctrl
-    with the mouse wheel or a trackpad's pinch over it, zoom it from 50% to
-    200%; and Reset puts it back at 100% on the leader. A refresh keeps the
-    zoom and where the window is scrolled to. The wheel alone scrolls;
+  - the diagram is drawn in a window at most 480 pixels high, which
+    scrolls both ways. With JavaScript, the window opens with the leader's
+    box in its middle, as far as it scrolls; the − and + buttons above it,
+    and Ctrl with the mouse wheel or a trackpad's pinch over it, zoom it
+    from 50% to 200%; and Reset puts it back at 100% on the leader. A
+    refresh keeps the zoom and where the window is scrolled to. The wheel
+    alone scrolls;
   - the leader, the instance that asks the discovery sources, is the box
     filled in the accent colour. Without `--peers` this instance is the
     leader. Before the instances have checked each other, no box is
@@ -1313,9 +1314,10 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     when it follows, are purple boxes, and the members grey ones;
   - a member's line says how long ago its last heartbeat to this instance
     came, and a peer's how long ago this instance last checked it. A member
-    heartbeats every instance ([Members and allocation](#members-and-allocation)),
-    so a follower's page draws the members joined to the follower, with
-    the heartbeats that it receives, as the leader's does to the leader;
+    heartbeats every instance
+    ([Members and allocation](#members-and-allocation)), so a follower's
+    page draws the members joined to the follower, with the heartbeats that
+    it receives, as the leader's does to the leader;
   - a line is dashed and red, and its text says why, for an overdue
     heartbeat, a member that is silent, gone or shutting down or whose name
     two exporters heartbeat under, and a peer whose last check failed, that

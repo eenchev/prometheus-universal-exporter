@@ -104,7 +104,9 @@ func TestTheDiagramScrollsAndZooms(t *testing.T) {
 	requireIn(t, page,
 		`.topology-window { max-height: 480px; overflow: auto;`,
 		`<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out"`,
-		`<button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or pinch</span></div>`,
+		`<button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or a trackpad's pinch</span></div>`,
+		// On a phone the hint wraps, and "Reset" is not broken in two.
+		".topology-zoom { display: flex; flex-wrap: wrap;", ".topology-zoom button { flex: none; white-space: nowrap; overflow-wrap: normal;",
 		`<div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">`,
 		`data-width="616" data-height="102" data-focus-x="98" data-focus-y="51">`,
 		"const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];",

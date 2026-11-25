@@ -454,9 +454,11 @@ figure.topology { margin: 0; }
    ways, so many members do not push the tables below down the page. The
    page's script zooms it (zoomDiagram). */
 .topology-window { max-height: 480px; overflow: auto; border: 1px solid var(--field); border-radius: 8px; }
-.topology-zoom { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
+/* On a phone the hint wraps below the buttons, and a button's word is kept
+   whole, where the page's overflow-wrap would break "Reset" in two. */
+.topology-zoom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
 .topology-zoom[hidden] { display: none; }
-.topology-zoom button { height: 28px; min-width: 32px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--field); border-radius: 6px; cursor: pointer; }
+.topology-zoom button { flex: none; white-space: nowrap; overflow-wrap: normal; height: 28px; min-width: 32px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--field); border-radius: 6px; cursor: pointer; }
 .topology-zoom button:disabled { color: var(--muted); cursor: default; }
 .topology-zoom output { min-width: 4em; text-align: center; color: var(--muted); }
 figure.topology svg { display: block; max-width: none; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -865,7 +867,7 @@ const statusContent = `{{define "content"}}
 
 <h2 id="diagram">Diagram</h2>
 <figure class="topology">
-<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (Ctrl and the wheel, or pinch, over the diagram)">−</button><output aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (Ctrl and the wheel, or pinch, over the diagram)">+</button><button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or pinch</span></div>
+<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (Ctrl and the wheel, or pinch, over the diagram)">−</button><output aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (Ctrl and the wheel, or pinch, over the diagram)">+</button><button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or a trackpad's pinch</span></div>
 <div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">
 <svg role="group" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}" data-width="{{.Width}}" data-height="{{.Height}}" data-focus-x="{{.FocusX}}" data-focus-y="{{.FocusY}}">
 {{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}

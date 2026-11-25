@@ -59,7 +59,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   last heartbeat came, or how long ago the instance last checked the peer.
   A replica that is late, silent or shutting down, two replicas under one
   member name, or a peer that is down or whose last check failed, has a
-  dashed red line.
+  dashed red line. The diagram scrolls in a window of a fixed height and
+  zooms with its buttons, or with Ctrl and the mouse wheel or a pinch.
   See [Status page](docs/ALLOCATOR.md#status-page).
 
 - **Querying InfluxDB.** An `http` collector can send InfluxDB an InfluxQL

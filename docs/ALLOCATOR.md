@@ -1300,6 +1300,11 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
 - a diagram of this instance, its peers and its members:
   - this instance is in the middle, its peers on the left and the members
     on the right, each joined to it by a line;
+  - the diagram is drawn in a window 480 pixels high, which scrolls both
+    ways and opens on this instance. With JavaScript, the − and + buttons
+    above it, and Ctrl with the mouse wheel or a trackpad's pinch over it,
+    zoom it from 50% to 200%, and Reset puts it back at 100%. A refresh
+    keeps the zoom and where the window is scrolled to;
   - the leader, the instance that asks the discovery sources, is the box
     filled in the accent colour. Without `--peers` this instance is the
     leader. Before the instances have checked each other, no box is

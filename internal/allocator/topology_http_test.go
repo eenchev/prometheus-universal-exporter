@@ -85,3 +85,28 @@ func memberOf(t *testing.T, s Status, id string) MemberStatus {
 	t.Fatalf("no member %q", id)
 	return MemberStatus{}
 }
+
+// The diagram is drawn in a window of a fixed height that scrolls, and
+// zooms: its buttons are hidden until the page's script shows them, so a
+// page without JavaScript has no dead buttons. The script scales the
+// drawing from the size the SVG keeps in data-width and data-height, by
+// steps or around the pointer under Ctrl and the wheel, and keeps the zoom
+// and the scroll over a refresh.
+func TestTheDiagramScrollsAndZooms(t *testing.T) {
+	a, _ := settledAllocator(t, mustLoad(t, writeInputs(t, testConfig, staticTargets(3), "")), "r1")
+	t.Cleanup(a.BeginShutdown)
+	page := ask(a.Handler(""), "/", "").Body.String()
+	requireIn(t, page,
+		`.topology-window { max-height: 480px; overflow: auto;`,
+		`<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out"`,
+		`<button type="button" data-zoom="reset">Reset</button></div>`,
+		`<div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">`,
+		`data-width="616" data-height="102">`,
+		"const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];",
+		`svg.setAttribute("width", Number(svg.getAttribute("data-width")) * zoom);`,
+		"box.scrollLeft = at[0] * zoom - x;",
+		`const box = event.ctrlKey && event.target.closest(".topology-window");`,
+		"}, {passive: false});",
+		"arrangeJobs(() => keepDiagram(() => {",
+		"    zoomDiagram(1);\n    middle(first);")
+}

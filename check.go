@@ -208,6 +208,10 @@ type requestPolicy struct {
 	// filled in: max_pages above all, which bounds what one trip asks of
 	// the target.
 	Pagination *model.PaginationConfig `json:"pagination,omitempty"`
+	// Chain is an http collector's request.then as it will be made, in
+	// order, its defaults filled in: each step, the values it reads and
+	// those it sends (chainPlanOf).
+	Chain *chainPlan `json:"chain,omitempty"`
 	// Login is request.login as it will be applied: where it goes, where the
 	// token is read from and how it is sent (with its header and prefix
 	// filled in), and the files that its secrets are read from, never their
@@ -325,7 +329,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 		}
 		p.RetryAfter = c.Request.Retry.RetryAfter
 		p.UnixSocket, p.Proxy, p.ProxyBasicAuthFile = own.UnixSocket, requestProxy(c, own.UnixSocket), c.Request.ProxyBasicAuthFile
-		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil || p.RateLimit != nil || p.UnixSocket != "" || p.Proxy != "" {
+		p.Chain = chainPlanOf(c, own.Chain)
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 || p.Pagination != nil || p.Chain != nil || p.RetryStatuses != nil || p.RetryAfter || p.Login != nil || p.RateLimit != nil || p.UnixSocket != "" || p.Proxy != "" {
 			out[c.Name] = p
 		}
 	}
@@ -491,4 +496,68 @@ func validateWatchInterval(watch bool, interval time.Duration) error {
 		return fmt.Errorf("--config.watch-interval must be positive with --config.watch, got %s", interval)
 	}
 	return nil
+}
+
+// chainPlan is a chain as --dry-run reports it: what the collector's
+// answer is, and each request in order, the first one included.
+type chainPlan struct {
+	Answer string          `json:"answer"`
+	Steps  []chainStepPlan `json:"steps"`
+}
+
+// chainStepPlan is one request of a chain: its name, method and path or
+// url; for a fan-out what it goes over and its bounds; the values it reads
+// and those it sends.
+type chainStepPlan struct {
+	Name        string `json:"name"`
+	Method      string `json:"method"`
+	Path        string `json:"path,omitempty"`
+	URL         string `json:"url,omitempty"`
+	ForEach     string `json:"for_each,omitempty"`
+	Concurrency int    `json:"concurrency,omitempty"`
+	MaxItems    int    `json:"max_items,omitempty"`
+	OnItemError string `json:"on_item_error,omitempty"`
+	// ForwardedHeaders is the step's forwarded_headers when it sets it.
+	ForwardedHeaders *bool    `json:"forwarded_headers,omitempty"`
+	Reads            []string `json:"reads,omitempty"`
+	Sends            []string `json:"sends,omitempty"`
+}
+
+// chainSent finds the values a step's text sends, {{chain.<name>}}.
+var chainSent = regexp.MustCompile(`\{\{\s*chain\.([A-Za-z_][A-Za-z0-9_]*)`)
+
+// chainPlanOf is c's chain, steps being its request.then, nil for none.
+func chainPlanOf(c *model.Collector, steps []model.ChainStep) *chainPlan {
+	if steps == nil {
+		return nil
+	}
+	first := chainStepPlan{Name: model.ChainFirst, Method: fetch.ConfiguredMethod(c), Path: c.Request.Path}
+	plan := &chainPlan{Answer: c.Answer}
+	first.Reads = fetch.CollectorPolicy(c).ChainReads
+	plan.Steps = append(plan.Steps, first)
+	for _, step := range steps {
+		texts := []string{step.Path, step.URL, step.Body}
+		for _, values := range []map[string]string{step.Query, step.Headers, step.Form, step.JSON} {
+			for _, name := range model.SortedKeys(values) {
+				texts = append(texts, values[name])
+			}
+		}
+		var sends []string
+		for _, text := range texts {
+			for _, m := range chainSent.FindAllStringSubmatch(text, -1) {
+				if !slices.Contains(sends, m[1]) {
+					sends = append(sends, m[1])
+				}
+			}
+		}
+		if step.ForEach != "" && !slices.Contains(sends, step.ForEach) {
+			sends = append(sends, step.ForEach)
+		}
+		plan.Steps = append(plan.Steps, chainStepPlan{
+			Name: step.Name, Method: step.Method, Path: step.Path, URL: step.URL,
+			ForEach: step.ForEach, Concurrency: step.Concurrency, MaxItems: step.MaxItems, OnItemError: step.OnItemError, ForwardedHeaders: step.ForwardedHeaders,
+			Reads: model.SortedKeys(step.Extract), Sends: sends,
+		})
+	}
+	return plan
 }

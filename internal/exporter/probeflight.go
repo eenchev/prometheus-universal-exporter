@@ -75,6 +75,9 @@ type probeResult struct {
 	// result and of one that carried on past it: what report_failures
 	// answers (probereport.go).
 	stage string
+	// step is the step of an http collector's chain that failed, which
+	// report_failures labels the failed stage with; "" for none.
+	step string
 	// carriedOn says the probe failed in stage and error_handling carried
 	// on past it, of a collector with report_failures, to which the probe
 	// is a failure: answered as a probe carrying on is, with ok false.

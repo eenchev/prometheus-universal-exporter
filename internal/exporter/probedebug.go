@@ -162,6 +162,9 @@ type probeTrace struct {
 	// otlpRecords are the run's log lines as OTLP log records, for a run
 	// of the debug page while the log export is on; nil otherwise.
 	otlpRecords *debugLogRecords
+	// chain is how the requests of a chained collector's trip went, nil
+	// for a trip that made no chain (chaindiagram.go).
+	chain *fetch.ChainReport
 }
 
 // sentResponse is a copy of a response as it was fetched. A report shows it
@@ -362,6 +365,9 @@ type debugProbe struct {
 	// pasted is the response a run of the debug page decodes instead of
 	// fetching one: no request is made (collectJob.pasted).
 	pasted *fetch.HTTPResponse
+	// pastedSteps are the answers pasted for the steps of a chain, by step
+	// name (collectJob.pastedSteps).
+	pastedSteps map[string]*fetch.HTTPResponse
 	// requester, when set, is the configured collector whose request block
 	// fetches the target while collector decodes and transforms what it
 	// fetched (collectJob.requester); nil when collector makes its own.
@@ -593,7 +599,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe)
 		collector: p.collector, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
 		scrape: p.static != nil, log: debugLog(p),
-		pasted: p.pasted, requester: p.requester,
+		pasted: p.pasted, pastedSteps: p.pastedSteps, requester: p.requester,
 		// It starts from the last success the same trip would, and keeps
 		// none of its own (collect).
 		lastSuccess: lastSuccessKey(p.collector, p.static, p.target, p.overrides),
@@ -854,6 +860,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		if req.Page > 0 {
 			via = fmt.Sprintf(" (page %d)", req.Page)
 		}
+		via += chainVia(req)
 		if req.Redirect {
 			via += " (redirect)"
 		}
@@ -882,6 +889,16 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	if requester := p.slotOf(); requester != nil && len(requests) > 0 {
 		if retries := fetch.RetriesOf(requester, p.overrides); retries != "" {
 			fmt.Fprintf(&b, "  Retries: %s.\n", retries)
+		}
+	}
+
+	if t.chain != nil {
+		// The chain step by step, with what each read: the text form of
+		// the workflow diagram (chaindiagram.go).
+		b.WriteString("\nChain\n")
+		for _, line := range chainLines(t.chain) {
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 

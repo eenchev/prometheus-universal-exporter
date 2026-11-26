@@ -82,7 +82,9 @@ func revalidationFrom(ctx context.Context) *CachedResponse {
 // § 13.1.2). A graphite request too long for a URL is sent as a POST
 // (requesttype_graphite.go).
 func Revalidable(c *model.Collector, overrides RequestOverrides) bool {
-	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || CollectorPolicy(c).Pagination != nil {
+	// One answer's validators cannot speak for the pages of a paginated
+	// answer, nor for the answers of a chain.
+	if rt := requestTypeOf(c); rt == nil || !rt.Revalidates || CollectorPolicy(c).Pagination != nil || CollectorPolicy(c).Chain != nil {
 		return false
 	}
 	// A request with a clock placeholder asks for something else as the

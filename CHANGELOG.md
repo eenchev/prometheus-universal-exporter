@@ -53,6 +53,20 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- **Chained requests.** An `http` collector can make up to 13 requests per
+  trip, all to its one target: its own, then up to 12 steps under
+  `request.then`. A step sends values read from earlier answers
+  (`request.extract`, sent as `{{chain.<name>}}`), and a step with
+  `for_each` makes one request per entry of a list, within `concurrency`
+  and `max_items`. The trip's response is the last step's answer, or with
+  `answer: all` one JSON document of every answer. Every request and
+  redirect keeps to the target's origin. Four self-metrics count the steps
+  by name, jq reads each step as `$steps` and Python as `steps`, a step
+  with `forwarded_headers: false` is sent none of the probe's forwarded
+  headers but `Authorization` and `Host`, and the
+  debug page and the status page draw the chain as a workflow, with the
+  failed or timed-out step in red. See
+  [Chained requests](docs/REQUESTS.md#chained-requests).
 - **A diagram on the target allocator's status page.** The page draws the
   instance, its peers and the exporter replicas that heartbeat to it. The
   leader is the filled box, the other allocator instances purple and the
@@ -64,7 +78,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   dashed red line. The diagram scrolls in a window of a fixed height and
   zooms with its buttons, or with Ctrl and the mouse wheel or a pinch.
   See [Status page](docs/ALLOCATOR.md#status-page).
-
 - **Querying InfluxDB.** An `http` collector can send InfluxDB an InfluxQL
   or a Flux query and read the answer: the JSON of `/query` with the `jq`
   transform, and the annotated CSV of `/api/v2/query` with the `csv`

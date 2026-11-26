@@ -372,6 +372,10 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 			if err := checkRedirect(ctx, req.URL); err != nil {
 				return err
 			}
+			// A chain's redirects stay on the target's origin.
+			if err := chainRedirect(ctx, req.URL); err != nil {
+				return err
+			}
 			if err := hop.refusal(req); err != nil {
 				return err
 			}

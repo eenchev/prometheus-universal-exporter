@@ -643,6 +643,8 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 	s.failures.forgetStaticTargetsLocked(moved)
 	dropped := s.cache.dropCollectorsLocked(stale)
 	s.backoffs.forgetLocked(stale)
+	// The last trips the status page draws are the old definitions'.
+	s.chains.forget(stale)
 	// The recent probes of the status page (recentprobes.go) go with them,
 	// under the lock a probe records under once it has asked whether its
 	// collector stands.

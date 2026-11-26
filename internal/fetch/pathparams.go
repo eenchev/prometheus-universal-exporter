@@ -39,6 +39,11 @@ import (
 // namespaces cannot collide with target, collector, path, method and the rest.
 const PathParamPrefix = "param_"
 
+// chainParamPrefix starts every parameter a chain fills in itself
+// (chaintemplate.go). A placeholder of the collector's own written with it
+// is refused at load, and a probe's parameter with it is not passed on.
+const chainParamPrefix = PathParamPrefix + "_"
+
 // PathParamName matches the name of a path parameter, PathParamPrefix
 // followed by letters, digits and underscores.
 var PathParamName = regexp.MustCompile(`^param_[A-Za-z0-9_]+$`)

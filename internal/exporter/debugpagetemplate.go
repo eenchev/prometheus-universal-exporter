@@ -361,6 +361,11 @@ p.danger strong { color: var(--bad); }
 </div>
 <label for="body">Body</label>
 <textarea id="body" rows="14" spellcheck="false" autocomplete="off" placeholder="{{.Form.Answer}}" data-example="{{.ExampleBody}}">{{if not .Chosen}}{{.ExampleBody}}{{end}}</textarea>
+<div id="steps-part" role="group" aria-labelledby="steps-title" hidden>
+<div class="kv-title" id="steps-title">The answers of the chain's steps</div>
+<p class="note">The body above is the first request's answer. Paste each step's answer, JSON with status 200; a fan-out step's is used for every item. The report shows the URLs the chain would ask.</p>
+<div id="steps-rows"></div>
+</div>
 </div>
 {{- if .Full}}
 <div data-mode="fetch" hidden>
@@ -515,6 +520,11 @@ p.danger strong { color: var(--bad); }
 <div id="notes-part" hidden>
 <h3>Logged</h3>
 <pre id="notes"></pre>
+</div>
+<div id="chain-part" hidden>
+<svg id="svg-namespace" hidden></svg>
+<h3>Chain</h3>
+<div id="chain"></div>
 </div>
 <div id="requests-part" hidden>
 <h3>Requests</h3>
@@ -840,7 +850,63 @@ function showParams(through) {
   if (params.rows.length === 0 && takes.size > 0) params.add();
   params.validate();
 }
+// The names of the steps of a chain, in the request.then of a collector's
+// YAML, as - name: x, a step's name key under its dash, or - {name: x}, or
+// in a list written on the line of then:, then: [{name: x}, {name: y}].
+function stepNamesOf(text) {
+  const names = [];
+  let thenAt = -1, dashAt = -1;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)#.*$/, "");
+    if (line.trim() === "") continue;
+    const indent = line.length - line.trimStart().length;
+    if (thenAt < 0) {
+      // then: [{name: a, ...}, {name: b, ...}], a list in flow style.
+      const flow = /^\s*then\s*:\s*\[(.*)$/.exec(line);
+      if (flow) {
+        for (const m of flow[1].matchAll(/(?:^|[{,]\s*)name\s*:\s*["']?([a-z_][a-z0-9_]*)/g)) if (!names.includes(m[1])) names.push(m[1]);
+        return names;
+      }
+      if (/^\s*then\s*:\s*$/.test(line)) thenAt = indent;
+      continue;
+    }
+    const dash = /^\s*-\s/.test(line);
+    if (indent < thenAt || (indent === thenAt && !dash)) break;
+    let named = /^\s*-\s+\{?\s*name\s*:\s*["']?([a-z_][a-z0-9_]*)/.exec(line);
+    if (dash) dashAt = indent;
+    if (!named && indent === dashAt + 2) named = /^\s*name\s*:\s*["']?([a-z_][a-z0-9_]*)["']?\s*$/.exec(line);
+    if (named && !names.includes(named[1])) names.push(named[1]);
+  }
+  return names;
+}
+// The text areas of the steps' answers, one a step named in the editor's
+// YAML; what was pasted in one is kept while its step is there.
+const stepAnswers = new Map();
+function showSteps() {
+  const rows = $("steps-rows");
+  if (!rows) return;
+  for (const area of rows.querySelectorAll("textarea")) stepAnswers.set(area.dataset.step, area.value);
+  const names = stepNamesOf(editorArea.value);
+  $("steps-part").hidden = names.length === 0;
+  if (names.join("\n") === rows.dataset.names) return;
+  rows.dataset.names = names.join("\n");
+  rows.replaceChildren();
+  for (const name of names) {
+    const label = document.createElement("label");
+    label.htmlFor = "step-" + name;
+    label.textContent = "Step " + name;
+    const area = document.createElement("textarea");
+    area.id = "step-" + name;
+    area.dataset.step = name;
+    area.rows = 5;
+    area.spellcheck = false;
+    area.autocomplete = "off";
+    area.value = stepAnswers.get(name) || "";
+    rows.append(label, area);
+  }
+}
 function showForm() {
+  showSteps();
   const reads = readerForm();
   $("content-type-part").hidden = !reads.content_type;
   $("status-part").hidden = !reads.http_answer;
@@ -1374,6 +1440,7 @@ function setEditor(text) {
   yamlView.scrollTop = 0;
   yamlView.scrollLeft = 0;
   followScroll();
+  showSteps();
 }
 editorArea.addEventListener("scroll", followScroll);
 yamlView.addEventListener("scroll", followScroll);
@@ -1777,6 +1844,7 @@ $("collector").addEventListener("input", () => {
     typeFrame = 0;
     const now = requestTypeOf(written);
     if (now !== writtenType) { writtenType = now; showForm(); }
+    showSteps();
   });
 });
 // The copy leaves out what the playground would refuse, the lines that name
@@ -1846,6 +1914,9 @@ async function run() {
       request.content_type = reads.content_type ? $("content-type").value : "";
       request.status = reads.http_answer ? Number($("status").value) || 0 : 0;
       request.headers = reads.http_answer ? filled(headers, "header", (name) => name.toLowerCase()) : {};
+      const steps = {};
+      for (const area of $("steps-rows").querySelectorAll("textarea")) if (area.value !== "") steps[area.dataset.step] = area.value;
+      if (Object.keys(steps).length > 0) request.steps = steps;
     }
   } catch (error) {
     statusLine.className = "status failed";
@@ -2519,6 +2590,37 @@ for (const button of document.querySelectorAll(".otlp-test button")) {
 // sent is the playground's YAML the run sent, undefined for a configured
 // collector's run: the lines a refusal of it names are marked in the editor,
 // and link to it, while the editor still holds what was sent.
+// The workflow diagram of a chain is made of the elements the run sent,
+// each attribute and text set as such, and each step's details below it,
+// under the id its block links to.
+// The SVG namespace is read off an svg element of the page, which the
+// browser put in it.
+const svgNS = $("svg-namespace").namespaceURI;
+function diagramElement(spec, svg) {
+  const inSVG = svg || spec.tag === "svg";
+  const element = inSVG ? document.createElementNS(svgNS, spec.tag) : document.createElement(spec.tag);
+  for (const [name, value] of spec.attrs || []) if (name !== "xmlns") element.setAttribute(name, value);
+  if (spec.text) element.textContent = spec.text;
+  for (const child of spec.children || []) element.append(diagramElement(child, inSVG));
+  return element;
+}
+function showChain(chain) {
+  const box = $("chain");
+  box.replaceChildren();
+  $("chain-part").hidden = !chain;
+  if (!chain) return;
+  for (const spec of chain.diagram || []) box.append(diagramElement(spec, false));
+  for (const step of chain.steps || []) {
+    const section = document.createElement("section");
+    section.id = step.id;
+    const title = document.createElement("h4");
+    title.textContent = step.title;
+    const lines = document.createElement("pre");
+    lines.textContent = step.lines.join("\n");
+    section.append(title, lines);
+    box.append(section);
+  }
+}
 function show(answer, response, took, sent) {
   const statusLine = $("status-line");
   const series = $("series");
@@ -2535,7 +2637,7 @@ function show(answer, response, took, sent) {
     markLines(ours ? linesNamed(answer.error) : []);
     fillTable({});
     showOTLP(null, false);
-    for (const part of ["lint-part", "notes-part", "requests-part", "response-part"]) $(part).hidden = true;
+    for (const part of ["lint-part", "notes-part", "requests-part", "response-part", "chain-part"]) $(part).hidden = true;
     $("report").textContent = "";
     return;
   }
@@ -2558,10 +2660,12 @@ function show(answer, response, took, sent) {
   const notes = answer.notes || [];
   $("notes-part").hidden = notes.length === 0;
   $("notes").textContent = notes.join("\n");
+  showChain(answer.chain);
   const requests = answer.requests || [];
   $("requests-part").hidden = requests.length === 0;
   $("requests").textContent = requests.map((r) =>
-    r.method + " " + r.url + (r.page ? " (page " + r.page + ")" : "") + (r.redirect ? " (redirect)" : "") + (r.login ? " (login)" : "") +
+    r.method + " " + r.url + (r.page ? " (page " + r.page + ")" : "") +
+    (r.step ? " (step " + r.step + (r.item ? ", item " + r.item : "") + ")" : "") + (r.redirect ? " (redirect)" : "") + (r.login ? " (login)" : "") +
     (r.outcome ? " -> " + r.outcome + " in " + r.took : "") +
     (r.headers || []).map((h) => "\n  " + h).join("") +
     (r.withheld ? "\n  not sent: " + r.withheld.join(", ") + " — " + r.withheld_why : "") +

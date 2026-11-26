@@ -445,7 +445,7 @@ func httpSchemaKeys() []schemaKey {
 			keys[i].configuration = targetsConfiguration
 		}
 	}
-	return keys
+	return append(keys, chainSchemaKeys()...)
 }
 
 // defaultsSchemaKeys are the rows of the keys of defaults, which both the

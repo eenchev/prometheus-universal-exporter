@@ -1,0 +1,343 @@
+//go:build !select_request_types || request_type_http
+
+package exporter
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+)
+
+// jenkinsTarget answers a Jenkins-like list of jobs and each job's last
+// build, web's with 404.
+func jenkinsTarget(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/json":
+			_, _ = w.Write([]byte(`{"jobs":[{"name":"api"},{"name":"web"},{"name":"db"}]}`))
+		case "/job/api/lastBuild/api/json":
+			_, _ = w.Write([]byte(`{"duration":81000}`))
+		case "/job/db/lastBuild/api/json":
+			_, _ = w.Write([]byte(`{"duration":5000}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// jenkinsCollector fans out over the jobs of jenkinsTarget under answer:
+// all, with on_item_error as given, reading each build's duration and the
+// first answer's status from $steps.
+func jenkinsCollector(name, onItemError string, reportFailures bool) model.Collector {
+	return model.Collector{
+		Name: name,
+		Request: model.RequestConfig{Type: fetch.RequestTypeHTTP, Path: "/api/json", Own: fetch.HTTPConfig{
+			Extract: map[string]model.ChainExtract{"jobs": {JSON: "[.jobs[].name]"}},
+			Then:    []model.ChainStep{{Name: "last_build", ForEach: "jobs", Path: "/job/{{each}}/lastBuild/api/json", OnItemError: onItemError}},
+		}},
+		Answer:         model.ChainAnswerAll,
+		ReportFailures: reportFailures,
+		Transform:      model.TransformConfig{Type: "jq"},
+		Limits:         model.Limits{MaxResponseBytes: 1 << 20},
+		Metrics: []model.MetricRule{
+			{Name: "jenkins_last_build_seconds", Type: model.GaugeMetricType, Items: ".last_build[] | select(.body)", Expression: ".body.duration / 1000", Labels: []model.LabelRule{{Name: "job", Expression: ".each"}}},
+			{Name: "jenkins_first_status", Type: model.GaugeMetricType, Expression: "$steps.first.status"},
+			{Name: "jenkins_builds_asked", Type: model.GaugeMetricType, Expression: "$steps.last_build | length"},
+		},
+	}
+}
+
+// A probe of a chained collector reads the document of every answer and
+// $steps; the chain's self-metrics count each step by its name. An item
+// that fails under skip is counted and logged once, summed; under fail it
+// fails the probe in the http_status stage, its error and log line naming
+// the step and the item, and report_failures labels the failed stage with
+// the step.
+func TestAProbeOfAChain(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	server := modeServer(t, jenkinsCollector("skipping", model.ChainItemSkip, false), jenkinsCollector("failing", "", false), jenkinsCollector("reporting", "", true))
+	probeURL := func(collector string) string {
+		return "/probe?collector=" + collector + "&target=" + url.QueryEscape(target.URL)
+	}
+
+	r := probeOnce(t, server, probeURL("skipping"), nil)
+	body := r.Body.String()
+	if r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, body)
+	}
+	for _, want := range []string{`jenkins_last_build_seconds{job="api"} 81`, `jenkins_last_build_seconds{job="db"} 5`, "jenkins_first_status 200", "jenkins_builds_asked 3"} {
+		if !strings.Contains(body, want+"\n") {
+			t.Errorf("no %q in\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `job="web"`) {
+		t.Errorf("the skipped item made a series:\n%s", body)
+	}
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{
+		`http_exporter_chain_requests_total{collector="skipping",step="first"} 1`,
+		`http_exporter_chain_requests_total{collector="skipping",step="last_build"} 3`,
+		`http_exporter_chain_step_failures_total{collector="skipping",step="last_build"} 1`,
+		`http_exporter_chain_step_failures_total{collector="skipping",step="first"} 0`,
+		`http_exporter_chain_items{collector="skipping",step="last_build"} 3`,
+		`http_exporter_chain_items_cut_total{collector="skipping",step="last_build"} 0`,
+		`http_exporter_scrape_http_status_code{collector="skipping"} 200`,
+	} {
+		if !strings.Contains(metrics, want+"\n") {
+			t.Errorf("no %s in the self-metrics", want)
+		}
+	}
+	if strings.Contains(metrics, `http_exporter_chain_items{collector="skipping",step="first"}`) {
+		t.Error("a step that does not fan out has a series of items")
+	}
+	if strings.Contains(metrics, "http_exporter_chain_step_duration_seconds") {
+		t.Error("the step durations are there without verbose mode")
+	}
+	if n := strings.Count(logs.String(), `step \"last_build\": 1 of 3 items failed and were skipped`); n != 1 {
+		t.Errorf("%d lines summing the skipped items:\n%s", n, logs)
+	}
+
+	r = probeOnce(t, server, probeURL("failing"), nil)
+	if want := `collector failing http_status failed: step "last_build" item 2 of 3 ("web"): received HTTP status 404`; r.Code != http.StatusBadGateway || !strings.HasPrefix(r.Body.String(), want) {
+		t.Fatalf("answered %d: %s\nwant %s", r.Code, r.Body, want)
+	}
+	if !strings.Contains(logs.String(), `"step":"last_build","item":2,"items":3`) {
+		t.Errorf("the failure was not logged with its step and item:\n%s", logs)
+	}
+
+	r = probeOnce(t, server, probeURL("reporting"), nil)
+	if want := `http_exporter_probe_failed_stage{stage="http_status",step="last_build"} 1`; r.Code != http.StatusOK || !strings.Contains(r.Body.String(), want+"\n") {
+		t.Fatalf("answered %d, without %s: %s", r.Code, want, r.Body)
+	}
+}
+
+// A Python script reads the steps of a chain as steps, and verbose mode adds
+// a histogram of each step's duration, by its name.
+func TestAChainsStepsInPythonAndItsVerboseHistogram(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	collector := jenkinsCollector("scripted", model.ChainItemSkip, false)
+	collector.Transform = model.TransformConfig{Type: "python", Script: "metric('jenkins_first_status', value=steps['first']['status'])\nmetric('jenkins_builds_asked', value=len(steps['last_build']))"}
+	collector.Metrics = nil
+	collector.Limits.ScriptTimeout = model.Duration(time.Minute)
+	server := verboseServer(t, true, collector)
+	r := probeOnce(t, server, "/probe?collector=scripted&target="+url.QueryEscape(target.URL), nil)
+	for _, want := range []string{"jenkins_first_status 200", "jenkins_builds_asked 3"} {
+		if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), want+"\n") {
+			t.Fatalf("answered %d without %q: %s\n%s", r.Code, want, r.Body, logs)
+		}
+	}
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{
+		`http_exporter_chain_step_duration_seconds_count{collector="scripted",step="first"} 1`,
+		`http_exporter_chain_step_duration_seconds_count{collector="scripted",step="last_build"} 1`,
+	} {
+		if !strings.Contains(metrics, want+"\n") {
+			t.Errorf("no %s in the self-metrics", want)
+		}
+	}
+}
+
+// Each request of a chain is a CLIENT span with the step it was made for,
+// pue.chain.step, and a fan-out item's with its place, pue.chain.item.
+func TestEachRequestOfAChainIsASpanOfItsStep(t *testing.T) {
+	target := jenkinsTarget(t)
+	receiver := newLogReceiver(t)
+	server := tracesServer(t, receiver, time.Hour, func(c *model.Config) {
+		c.OTLP.Traces.SampleRatio = 1
+		c.Collectors = append(c.Collectors, jenkinsCollector("traced", model.ChainItemSkip, false))
+	}, nil)
+	if answer := probeOnce(t, server, "/probe?collector=traced&target="+url.QueryEscape(target.URL), nil); answer.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", answer.Code, answer.Body)
+	}
+	exportTracesNow(server)
+	var steps []string
+	for _, span := range receiver.spans(t) {
+		if span.Kind != otlpSpanKindClient {
+			continue
+		}
+		attrs := spanAttributes(span.otlpSpan)
+		steps = append(steps, attrs["pue.chain.step"]+" "+attrs["pue.chain.item"])
+	}
+	slices.Sort(steps)
+	if want := []string{"first ", "last_build 1", "last_build 2", "last_build 3"}; !slices.Equal(steps, want) {
+		t.Fatalf("the requests' spans are %v, want %v", steps, want)
+	}
+}
+
+// A debug probe of a chain reports it step by step; the debug page runs a
+// chain on answers pasted for its steps, showing the URLs it would ask and
+// the workflow diagram with the failed step red, and the steps after it
+// not reached.
+func TestTheDebugReportOfAChain(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	server := modeServer(t, jenkinsCollector("failing", "", false))
+	server.SetDebug(DebugFull)
+	r := debugProbeGet(t, server, "collector=failing&debug=true&target="+url.QueryEscape(target.URL))
+	assertContains(t, r.Body.String(),
+		"\nChain\n",
+		"  first       ok          GET "+target.URL+"/api/json -> 200 in ",
+		`              read: jobs=["api","web","db"]`,
+		"  last_build  FAILED      3 items, 1 failed, in ",
+		"(step last_build, item 2) -> 404 Not Found",
+		"/api/json (step first) -> 200 OK",
+		`              item 2 (web): GET `+target.URL+`/job/web/lastBuild/api/json -> received HTTP status 404`,
+	)
+
+	page := debugPageServer(t, &model.Config{Collectors: []model.Collector{jenkinsCollector("pasted", "", false)}})
+	run := pastedTo("pasted", `{"jobs":[{"name":"api"},{"name":"web"}]}`)
+	run["steps"] = map[string]string{"last_build": `{"duration": 1000}`}
+	answer := postRun(t, page, run, http.StatusOK)
+	if !answer.OK || !strings.Contains(answer.Series, `jenkins_last_build_seconds{job="web"} 1`) {
+		t.Fatalf("the run on pasted answers: %+v", answer)
+	}
+	shown := chainShown(t, answer)
+	for _, want := range []string{`"tag":"svg"`, `["class","chain-block chain-ok"]`, "http://target.invalid/job/web/lastBuild/api/json", `"id":"chain-step-last_build"`} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("no %q in the chain shown:\n%s", want, shown)
+		}
+	}
+	delete(run, "steps")
+	answer = postRun(t, page, run, http.StatusOK)
+	if shown = chainShown(t, answer); answer.OK || !strings.Contains(shown, `["class","chain-block chain-failed"]`) || !strings.Contains(shown, "no answer was pasted for it") {
+		t.Fatalf("a step with no answer pasted: %s", shown)
+	}
+}
+
+// The status page draws each chained collector's last trip, with the
+// requests it sent, and each chained static target's last scrape; the
+// collectors page says how many requests a chain makes.
+func TestTheStatusPagesDrawAChainsLastTrip(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	cfg := &model.Config{Collectors: []model.Collector{jenkinsCollector("chained", model.ChainItemSkip, false)}}
+	server := landingServer(t, cfg)
+	if r := probeOnce(t, server, "/probe?collector=chained&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	status := getPath(server, http.MethodGet, server.staticTargetsStatusEndpoint()).Body.String()
+	assertContains(t, status, `<h2 id="chains">Chained collectors</h2>`, `id="chain-chained"`, "4 requests per trip", "<svg", "failed items skipped")
+	collectors := getPath(server, http.MethodGet, "/collectors").Body.String()
+	assertContains(t, collectors, "a chain of 2 requests; the last trip sent 4 requests")
+	// What is kept of the trip is what the diagram shows, not the answers.
+	if trip, ok := server.chains.ofCollector("chained"); !ok || trip.report.Steps[1].Items[0].Body != nil || trip.report.Steps[0].Excerpt != "" {
+		t.Fatal("the status page keeps the answers of the last trip")
+	}
+}
+
+// chainShown is the chain a debug page's run answered, as its JSON.
+func chainShown(t *testing.T, answer debugAnswer) string {
+	t.Helper()
+	shown, err := json.Marshal(answer.Chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(shown)
+}
+
+// A chain is one trip to the response cache: a second probe within
+// cache.ttl is answered from it, and sends no request of the chain.
+func TestTheCacheKeepsAWholeChain(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	collector := jenkinsCollector("cached", model.ChainItemSkip, false)
+	collector.Cache = model.CacheConfig{TTL: model.Duration(time.Minute)}
+	server := modeServer(t, collector)
+	for range 2 {
+		if r := probeOnce(t, server, "/probe?collector=cached&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+			t.Fatalf("answered %d: %s", r.Code, r.Body)
+		}
+	}
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{
+		`http_exporter_cache_hits_total{collector="cached"} 1`,
+		`http_exporter_chain_requests_total{collector="cached",step="first"} 1`,
+		`http_exporter_chain_requests_total{collector="cached",step="last_build"} 3`,
+	} {
+		if !strings.Contains(metrics, want+"\n") {
+			t.Errorf("no %s in the self-metrics", want)
+		}
+	}
+}
+
+// A reload that changes a chained collector forgets the last trip the
+// status page draws, which was of the old definition.
+func TestAReloadForgetsAChainsLastTrip(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	before := jenkinsCollector("chained", model.ChainItemSkip, false)
+	server := modeServer(t, before)
+	if r := probeOnce(t, server, "/probe?collector=chained&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	if _, ok := server.chains.ofCollector("chained"); !ok {
+		t.Fatal("the trip was not kept")
+	}
+	after := jenkinsCollector("chained", model.ChainItemSkip, false)
+	own := after.Request.Own.(fetch.HTTPConfig)
+	own.Then = []model.ChainStep{{Name: "last_build", ForEach: "jobs", Path: "/job/{{each}}/lastBuild/api/json", MaxItems: 1}}
+	after.Request.Own = own
+	reloadTo(t, server, after)
+	// The server follows the new configuration at its next read of it.
+	selfMetrics(t, server)
+	if _, ok := server.chains.ofCollector("chained"); ok {
+		t.Fatal("the trip of the old definition is still drawn")
+	}
+}
+
+// At debug level, each request of a chain is logged by the exporter's own
+// logger, with its step, method, URL, status and duration.
+func TestEachRequestOfAChainIsLoggedAtDebugLevel(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := jenkinsTarget(t)
+	server := modeServer(t, jenkinsCollector("logged", model.ChainItemSkip, false))
+	var lines bytes.Buffer
+	server.logger = slog.New(slog.NewJSONHandler(&lines, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if r := probeOnce(t, server, "/probe?collector=logged&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("answered %d: %s", r.Code, r.Body)
+	}
+	if n := strings.Count(lines.String(), `"msg":"chain request"`); n != 4 || !strings.Contains(lines.String(), `"step":"last_build","item":2,"items":3,"method":"GET"`) {
+		t.Fatalf("%d request lines:\n%s", n, lines.String())
+	}
+}
+
+// A chain run on pasted answers shows its URLs under a scheme the
+// collector allows: https for a collector that takes https alone.
+func TestAPastedChainKeepsToTheCollectorsSchemes(t *testing.T) {
+	collector := jenkinsCollector("secure", "", false)
+	collector.Request.AllowedSchemes = []string{"https"}
+	page := debugPageServer(t, &model.Config{Collectors: []model.Collector{collector}})
+	run := pastedTo("secure", `{"jobs":[{"name":"api"}]}`)
+	run["steps"] = map[string]string{"last_build": `{"duration": 1000}`}
+	answer := postRun(t, page, run, http.StatusOK)
+	if shown := chainShown(t, answer); !answer.OK || !strings.Contains(shown, "https://target.invalid/job/api/lastBuild/api/json") {
+		t.Fatalf("the run on pasted answers: %s\n%s", answer.Verdict, shown)
+	}
+}
+
+// The debug page finds the steps of a chain to give each a text area of its
+// own, written as a block list or as a list on the line of then:.
+func TestTheDebugPageFindsTheStepsOfAChain(t *testing.T) {
+	page := getPage(t, debugPageServer(t, &model.Config{Collectors: []model.Collector{jenkinsCollector("pasted", "", false)}}), "/debug")
+	requireContains(t, page,
+		`if (/^\s*then\s*:\s*$/.test(line)) thenAt = indent;`,
+		`const flow = /^\s*then\s*:\s*\[(.*)$/.exec(line);`,
+		`<div id="steps-part" role="group" aria-labelledby="steps-title" hidden>`,
+		`if (Object.keys(steps).length > 0) request.steps = steps;`)
+}

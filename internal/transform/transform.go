@@ -1355,7 +1355,10 @@ type responseVariablesKey struct{}
 type responseVariables struct {
 	status, headers any
 	trip            *fetch.HTTPTrip
-	once            sync.Once
+	// chain is how the requests of an http collector's chain went, which
+	// $steps describes; nil for none.
+	chain *fetch.ChainReport
+	once  sync.Once
 	// read are all the variables but $params, the trip's made, once once
 	// is done.
 	read expr.JQBindings
@@ -1419,7 +1422,7 @@ func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.C
 		}
 		return context.WithValue(ctx, responseVariablesKey{}, &responseVariables{given: given, told: told, scrapeTime: epochSeconds(clock.now), lastSuccess: epochSeconds(clock.since)})
 	}
-	vars := &responseVariables{status: r.Status(), trip: r.Trip, given: given, told: told}
+	vars := &responseVariables{status: r.Status(), trip: r.Trip, chain: r.Chain, given: given, told: told}
 	if timed {
 		vars.scrapeTime, vars.lastSuccess = epochSeconds(clock.now), epochSeconds(clock.since)
 	}
@@ -1451,7 +1454,7 @@ func (v *responseVariables) values(program *expr.JQProgram, root any) []any {
 	}
 	v.once.Do(func() {
 		trip := v.trip
-		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects(), HTTPVersion: trip.JQHTTPVersion(), RemoteIP: trip.JQRemoteIP()}
+		v.read = expr.JQBindings{Status: v.status, Headers: v.headers, Timings: trip.JQTimings(), TLS: trip.JQTLS(), URL: trip.JQURL(), Redirects: trip.JQRedirects(), HTTPVersion: trip.JQHTTPVersion(), RemoteIP: trip.JQRemoteIP(), Steps: v.chain.JQSteps()}
 	})
 	read := v.read
 	read.Params, read.ScrapeTime, read.LastSuccess = params, v.scrapeTime, v.lastSuccess

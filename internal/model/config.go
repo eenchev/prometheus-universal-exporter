@@ -145,12 +145,16 @@ type Collector struct {
 	Name string `yaml:"name"`
 	// MetricsPrefix, when set, is joined with "_" to the front of every metric
 	// the collector exports; see transform/metricsprefix.go.
-	MetricsPrefix string          `yaml:"metrics_prefix"`
-	Request       RequestConfig   `yaml:"request"`
-	Response      ResponseConfig  `yaml:"response"`
-	Decoder       DecoderConfig   `yaml:"decoder"`
-	Transform     TransformConfig `yaml:"transform"`
-	Metrics       []MetricRule    `yaml:"metrics"`
+	MetricsPrefix string        `yaml:"metrics_prefix"`
+	Request       RequestConfig `yaml:"request"`
+	// Answer is what an http collector with request.then reads: last, the
+	// last step's answer, or all, one JSON document of every answer
+	// (ChainAnswerLast when left out). See fetch/chain.go.
+	Answer    string          `yaml:"answer"`
+	Response  ResponseConfig  `yaml:"response"`
+	Decoder   DecoderConfig   `yaml:"decoder"`
+	Transform TransformConfig `yaml:"transform"`
+	Metrics   []MetricRule    `yaml:"metrics"`
 	// Derived computes series from the collector's own series once its
 	// transform made them; see transform/derived.go.
 	Derived       []DerivedRule `yaml:"derived,omitempty"`

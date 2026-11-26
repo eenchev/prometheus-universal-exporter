@@ -92,8 +92,9 @@ type Cluster struct {
 	// to an API, framed as an answer with the request's correlation ID.
 	Answer func(broker int32, api int16) []byte
 
-	asked []Asked
-	conns []net.Conn
+	asked  []Asked
+	conns  []net.Conn
+	closed bool
 }
 
 // Broker is a broker of the cluster.
@@ -184,9 +185,14 @@ func New(t testing.TB, n int, secure bool) *Cluster {
 					conns.Wait()
 					return
 				}
+				// Kept before it is served, so that the cleanup, once it has
+				// closed the connections, has none left to wait for.
+				if !c.track(conn) {
+					_ = conn.Close()
+					continue
+				}
 				conns.Go(func() {
 					defer conn.Close()
-					c.track(conn)
 					c.serve(id, conn)
 				})
 			}
@@ -202,17 +208,24 @@ func New(t testing.TB, n int, secure bool) *Cluster {
 	return c
 }
 
-// track keeps conn, to close it when the test ends.
-func (c *Cluster) track(conn net.Conn) {
+// track keeps conn, to close it when the test ends, and says false once
+// the connections have been closed, when conn is to be closed at once.
+func (c *Cluster) track(conn net.Conn) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
 	c.conns = append(c.conns, conn)
+	return true
 }
 
-// closeAll closes every connection still open.
+// closeAll closes every connection still open, and every one accepted
+// after.
 func (c *Cluster) closeAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.closed = true
 	for _, conn := range c.conns {
 		_ = conn.Close()
 	}

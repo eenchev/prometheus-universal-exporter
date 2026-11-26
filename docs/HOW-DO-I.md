@@ -36,6 +36,7 @@ that covers it, usually with an example to copy. New here? Start with
 | Check that a SIP server or PBX answers | [SIP](SIP.md), in a build with the opt-in type |
 | Read how deep a RabbitMQ queue is when its management API is closed | [AMQP](AMQP.md), in a build with the opt-in type |
 | Watch a NATS server, and a JetStream consumer's lag | [NATS](NATS.md), in a build with the opt-in type |
+| Watch a Kafka cluster and its consumer groups' lag, as kafka_exporter does | [Kafka](KAFKA.md), in a build with the opt-in type |
 | Remember something from one scrape to the next in a script | [State between runs](PYTHON.md#state-between-runs) |
 | Read series from Graphite | [Graphite](GRAPHITE.md) |
 | Read Kubernetes objects | [Kubernetes objects](KUBERNETES.md) |

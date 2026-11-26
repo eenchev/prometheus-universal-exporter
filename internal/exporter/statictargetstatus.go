@@ -628,7 +628,11 @@ var staticStatusTemplate = pageTemplate("static-status", `<!DOCTYPE html>
 `+pageIcon+"\n"+themeHead+`
 <style>`+pageStyle+`
 main { max-width: 1200px; }
-.scroll { overflow-x: auto; }
+/* A table wider than the page scrolls within its box. The box holds the
+   text kept out of sight for screen readers, absolutely positioned, too:
+   without position: relative such text in a column beyond the page's edge,
+   as an open chain's wider cell pushes the strips there, widens the page. */
+.scroll { overflow-x: auto; position: relative; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 th { background: var(--panel); white-space: nowrap; }
@@ -638,6 +642,11 @@ th { background: var(--panel); white-space: nowrap; }
    bounded, so the short columns keep their words whole. */
 td { overflow-wrap: normal; }
 td.what { overflow-wrap: anywhere; min-width: 14em; max-width: 26em; }
+/* A chain's diagram is 560px wide, wider than the cell that holds it: an
+   open one widens its cell, and where the table has no room left it
+   scrolls within the cell rather than run over the next columns. */
+td.what:has(> details.chain[open]) { max-width: none; }
+td.what details.chain { overflow-x: auto; }
 td.err { font-family: ui-monospace, monospace; font-size: 13px; min-width: 18em; max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
 table.facts td, table.facts td.err { overflow-wrap: anywhere; min-width: 0; }
 .bad { color: var(--bad); font-weight: 600; }

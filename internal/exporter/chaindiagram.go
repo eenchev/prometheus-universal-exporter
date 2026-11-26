@@ -230,20 +230,25 @@ func blockHeight(block chainBlock) int {
 }
 
 // chainDiagramStyle draws the states in the colours of the page's theme,
-// --good, --bad and --muted, and its text colour; amber is the diagram's
-// own.
+// --good, --bad and --muted, and its text colour. Where a page sets no
+// theme, the text and the block a stack's cards hide behind are the
+// browser's own text and background, Canvas and CanvasText, which always
+// read against each other. Amber is the diagram's own: #9a6700 in a light
+// theme and #d29922 in a dark one (light-dark), each 4.5:1 or more against
+// the page and the panel, where one amber for both stood out from neither
+// a white page nor a dark one; a browser without light-dark keeps #9a6700.
 const chainDiagramStyle = `
 .chain-block{fill:var(--panel,transparent);stroke-width:2}
 .chain-ok{stroke:var(--good,#1a7f37)}
 .chain-failed{stroke:var(--bad,#cf222e);fill:var(--danger-bg,rgba(207,34,46,.12))}
-.chain-warned{stroke:#bf8700;fill:rgba(191,135,0,.12)}
+.chain-warned{stroke:#9a6700;stroke:light-dark(#9a6700,#d29922);fill:rgba(191,135,0,.12)}
 .chain-unreached{stroke:var(--muted,#8c959f);stroke-dasharray:6 4}
 .chain-cached{stroke:var(--muted,#8c959f);fill:rgba(140,149,159,.12)}
 .chain-stack{opacity:.55}
-.chain-base{fill:var(--bg,#fff);stroke:none}
-.chain-text{fill:var(--fg,currentColor);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+.chain-base{fill:var(--bg,Canvas);stroke:none}
+.chain-text{fill:var(--fg,CanvasText);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
 .chain-title{font-weight:bold}
-.chain-note{fill:#bf8700}
+.chain-note{fill:#9a6700;fill:light-dark(#9a6700,#d29922)}
 .chain-arrow{stroke:var(--fg,currentColor);stroke-width:1.5}
 .chain-arrowhead{fill:var(--fg,currentColor)}
 `

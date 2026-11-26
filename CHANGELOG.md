@@ -319,6 +319,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- The static targets status page could scroll sideways on a narrow
+  screen though its table scrolls in a box of its own: the text a recent
+  scrape's marks keep for screen readers, out of sight, sat beyond the
+  page's edge. It now stays within the table's box.
 - Allocator mode: a heartbeat made just after a bundle went in force, as
   the one a replica sends at once when it shuts down, named the generation
   before it, or none, so the Target Allocator's status could show a

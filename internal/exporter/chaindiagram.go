@@ -3,6 +3,7 @@ package exporter
 import (
 	"fmt"
 	"html/template"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -491,10 +492,11 @@ type debugChainStep struct {
 }
 
 // chainDetails are the details of each step of report below its diagram in
-// the debug page's report: what it sent, what came back, the start of the
-// answer and the values it read; for a fan-out, each item, those that
-// failed first. configured says which query values the configuration set,
-// which are shown (fetch.ConfiguredQuery).
+// the debug page's report: what it sent and its status, an error, the values
+// it read, then its answer laid out as the page's Response is, its headers,
+// a blank line and the start of its body; for a fan-out, each item, those
+// that failed first. configured says which query values the configuration
+// set, which are shown (fetch.ConfiguredQuery).
 func chainDetails(report *fetch.ChainReport, configured func(name, value string) bool) []debugChainStep {
 	var out []debugChainStep
 	for _, step := range report.Steps {
@@ -502,13 +504,12 @@ func chainDetails(report *fetch.ChainReport, configured func(name, value string)
 			continue
 		}
 		var lines []string
-		if !step.ForEach && step.Status == 0 {
+		answered := !step.ForEach && step.Status != 0
+		if !step.ForEach && !answered {
 			lines = append(lines, fmt.Sprintf("%s %s -> no answer", step.Method, fetch.RedactRequestURL(step.URL, configured)))
-		} else if !step.ForEach {
-			lines = append(lines, fmt.Sprintf("%s %s -> %d in %s, %d bytes", step.Method, fetch.RedactRequestURL(step.URL, configured), step.Status, step.Duration.Round(time.Millisecond), step.Bytes))
-			for _, header := range headerLines(step.Headers) {
-				lines = append(lines, "  "+header)
-			}
+		} else if answered {
+			status := strings.TrimSpace(fmt.Sprintf("%d %s", step.Status, http.StatusText(step.Status)))
+			lines = append(lines, fmt.Sprintf("%s %s -> %s in %s, %d bytes", step.Method, fetch.RedactRequestURL(step.URL, configured), status, step.Duration.Round(time.Millisecond), step.Bytes))
 		}
 		if step.Error != "" {
 			lines = append(lines, "error: "+step.Error)
@@ -516,8 +517,14 @@ func chainDetails(report *fetch.ChainReport, configured func(name, value string)
 		if len(step.Values) > 0 {
 			lines = append(lines, "read: "+shownValues(step.Values, true))
 		}
-		if step.Excerpt != "" {
-			lines = append(lines, "answer: "+shownStart(step.Excerpt, 512))
+		if answered {
+			if headers := headerLines(step.Headers); len(headers) > 0 {
+				lines = append(lines, "")
+				lines = append(lines, headers...)
+			}
+			if step.Excerpt != "" {
+				lines = append(lines, "", shownStart(step.Excerpt, 512))
+			}
 		}
 		if step.ItemsCut > 0 {
 			lines = append(lines, fmt.Sprintf("cut at %d of %d (max_items)", step.ItemsTotal-step.ItemsCut, step.ItemsTotal))

@@ -26,6 +26,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- Debug page: a chain step's details lay its answer out as the *Response*
+  panel does, its headers then, after a blank line, its body, where the
+  headers were indented as request headers are and the body was labelled
+  `answer:`. The status reads `200 OK`, as in the other panels.
 - `sql` with `keepalive.check: ping`: a keepalive round that started too
   late to take an idle connection within its interval, as on a busy
   exporter, counted a failure in `http_exporter_sql_keepalive_failures_total`

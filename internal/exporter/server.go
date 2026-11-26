@@ -303,21 +303,39 @@ func (s *Server) statsSince(generation uint64, name string) *serverStats {
 
 // statsSinceLocked is statsSince under statsMu.
 func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
+	return s.statsSinceLockedWith(generation, name, nil)
+}
+
+// statsSinceLockedWith is statsSinceLocked, given fresh, statistics made
+// before the lock was taken, to use for those it would make. fresh nil, it
+// makes them itself.
+func (s *Server) statsSinceLockedWith(generation uint64, name string, fresh *serverStats) *serverStats {
 	x := s.stats[name]
 	if x != nil && x.since <= generation {
 		return x
 	}
+	if fresh == nil {
+		fresh = newServerStats(time.Now())
+	}
 	if x == nil {
 		if since, named := s.since[name]; named && since <= generation {
-			x = newServerStats(time.Now())
-			x.since = since
-			s.stats[name] = x
-			return x
+			fresh.since = since
+			s.stats[name] = fresh
+			return fresh
 		}
 	}
-	x = newServerStats(time.Now())
-	x.retired.Store(true)
-	return x
+	fresh.retired.Store(true)
+	return fresh
+}
+
+// statsFoundLocked is the statistics statsSinceLocked would return for
+// name, nil where it would make some: then the caller makes them without
+// the lock, and hands them to statsSinceLockedWith.
+func (s *Server) statsFoundLocked(generation uint64, name string) *serverStats {
+	if x := s.stats[name]; x != nil && x.since <= generation {
+		return x
+	}
+	return nil
 }
 
 // Handler routes the exporter's endpoints: the landing page at /, the

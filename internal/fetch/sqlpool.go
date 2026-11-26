@@ -657,8 +657,8 @@ type sqlKeepaliveRound struct {
 // many as there are places free. The connections are pinged at once, so one
 // that does not answer takes none of the others' interval. They are given
 // back as a scrape's are (giveBack). The round is skipped when it takes none:
-// no place is free, or no idle connection is left by the time it takes one,
-// since it makes none.
+// no place is free, no idle connection is left by the time it takes one,
+// since it makes none, or its interval is over before it takes one.
 func keepaliveOnce(c *sqlPoolCache, p *sqlPool, interval time.Duration) (round sqlKeepaliveRound) {
 	ctx, cancel := context.WithTimeout(noConnect(context.Background()), interval)
 	defer cancel()
@@ -686,7 +686,10 @@ take:
 			if sem != nil {
 				<-sem
 			}
-			if !errors.Is(err, errSQLNoIdle) {
+			// No idle connection left is no failure, and neither is the
+			// round's own time running out before it took one, as on a busy
+			// process: either way the database was not asked anything.
+			if !errors.Is(err, errSQLNoIdle) && ctx.Err() == nil {
 				round.failed++
 			}
 			break

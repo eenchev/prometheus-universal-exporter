@@ -472,6 +472,9 @@ figure.topology figcaption { margin-top: 6px; font-size: 13px; color: var(--mute
 .topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }
 .topology .node.hub rect { stroke-width: 2; }
 .topology .node.down rect { stroke: var(--bad); stroke-dasharray: 4 3; }
+.topology .node text.share { font-size: 12px; }
+.topology .node.over rect { stroke: var(--bad); stroke-width: 2; }
+.topology .node.over text.share { fill: var(--bad); font-weight: 600; }
 .topology a:focus-visible rect, .topology a:hover rect { stroke: var(--accent); stroke-width: 2; }
 .topology line.edge { stroke: var(--muted); stroke-width: 1.5; }
 .topology line.edge.late, .topology line.edge.down { stroke: var(--bad); stroke-dasharray: 6 4; }
@@ -826,7 +829,7 @@ const statusParts = `
 {{- define "topology-label"}}
 <text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}" text-anchor="{{.Anchor}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
 {{- define "topology-node"}}
-{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Allocator}} allocator{{end}}{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
+{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Allocator}} allocator{{end}}{{if .Master}} master{{end}}{{if .Down}} down{{end}}{{if .Over}} over{{end}}"><title>{{.FullName}}{{with .ShareTip}}: {{.}}{{end}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text>{{with .Share}}<text x="{{$.MidX}}" y="{{$.ShareY}}" class="share">{{.}}</text>{{end}}</g>{{if .Member}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "list-note"}}
@@ -884,7 +887,7 @@ const statusContent = `{{define "content"}}
 {{- end}}
 </svg>
 </div>
-<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}.{{if and $.Peers .HasMembers}} Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives.{{end}} Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
+<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}.{{if and $.Peers .HasMembers}} Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives.{{end}} Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.{{if .HasShares}} An exporter's last line is its targets and its share of their weight, in red when it is overloaded.{{end}}</figcaption>
 </figure>
 {{- end}}
 {{- with .Peers}}

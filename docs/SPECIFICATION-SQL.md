@@ -360,8 +360,9 @@ of objects, one a row, of its columns by name. Its keys:
   scrape has had for `idle_timeout` MUST be closed, not pinged. Each ping
   MUST hold one of the target's places at `max_per_target` while it pings,
   taken without waiting, the connections pinged no more than the places
-  free, and the pings MUST be skipped for the interval when the scrapes
-  hold every place; they MUST NOT make a connection, and MUST be given the
+  free, and the pings MUST be skipped for the interval, nothing counted,
+  when the scrapes hold every place or the interval is over before an idle
+  connection is taken; they MUST NOT make a connection, and MUST be given the
   interval to answer in, one that does not answer by then counted as a
   failed ping. A connection taken from a pool's idle ones whose
   transaction fails to begin was ended while it was kept, as by

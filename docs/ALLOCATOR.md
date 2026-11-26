@@ -1324,6 +1324,14 @@ its start (the `id` of `instance` in `/v1/status`) its instance ID. It shows
     is down or that is not yet checked. The box of a member that is not live
     or is shutting down, and of a peer that is not live, has a dashed red
     outline;
+  - when the page shows how the targets are spread, a member's box has a
+    third line: how many static and probe targets the member holds, and
+    what share of the weight of all static and probe targets they carry,
+    such as `12 targets · 34%`. The box and that line of an overloaded
+    member, as the spread's table below marks it, are red, and the line
+    ends in `over`. The box's tooltip adds the member's fair share and the
+    targets it keeps draining. The spread's table gives the same in
+    full;
   - a member's box opens its view ([A member's targets](#a-members-targets)).
     Of more than 50 members, the diagram draws 50, those whose line is
     dashed first, and says how many more there are and how many of them are

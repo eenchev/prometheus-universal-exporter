@@ -2844,8 +2844,11 @@ per step, with arrows between them. A step that went through is green; one
 that failed or timed out is red, with its error inside; a fan-out is a
 stacked block, amber when its failed items were skipped; a step not reached
 is grey and dashed. Each block also says its state in words. On the debug
-page, each block links to its step's details, and a pasted response takes
-one text area per step for the answers of the steps; `--dry-run` lists each
+page, each block links to its step's details: its request, status and
+time, the values it read, then its answer as the *Response* panel shows
+one, its headers, a blank line and the start of its body; a fan-out lists
+its items instead. A pasted response takes one text area per step for the
+answers of the steps; `--dry-run` lists each
 step with the values it reads and sends.
 
 ## Rate limiting

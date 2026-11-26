@@ -1,6 +1,8 @@
 package exporter
 
 import (
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +142,40 @@ func TestTheWorkflowDiagramKeepsItsTextInsideTheBlocks(t *testing.T) {
 	}
 	if lines := blocks[2].lines; !strings.HasSuffix(lines[len(lines)-1], "…") || len(lines) != 5 {
 		t.Errorf("the timed-out step's error is not cut over three lines: %q", lines)
+	}
+}
+
+// A step's details on the debug page lay its answer out as the page's
+// Response does: the status as "200 OK", the answer's headers unindented
+// after the request line and the values read, then a blank line and the
+// start of the body, with no label. A step with no headers or body, a
+// fan-out and a step that had no answer show neither.
+func TestAStepsDetailsLayItsAnswerOutAsTheResponseIs(t *testing.T) {
+	report := everyChainState()
+	report.Steps[0].Headers = http.Header{"Content-Type": {"application/json"}, "X-Ratelimit-Remaining": {"43"}}
+	report.Steps[0].Excerpt = `{"jobs":[{"name":"api"},{"name":"web"}]}`
+	report.Steps[0].Bytes = 40
+	details := chainDetails(report, func(string, string) bool { return false })
+	want := []string{
+		"GET https://api.example/jobs?token=<redacted> -> 200 OK in 12ms, 40 bytes",
+		`read: jobs=["api","web"], token=***`,
+		"",
+		"Content-Type: application/json",
+		"X-Ratelimit-Remaining: 43",
+		"",
+		`{"jobs":[{"name":"api"},{"name":"web"}]}`,
+	}
+	if got := details[0].Lines; !slices.Equal(got, want) {
+		t.Errorf("the first step's details are\n%q\nwant\n%q", got, want)
+	}
+	if got := details[2].Lines; !slices.Equal(got, []string{"POST https://api.example/detail -> 500 Internal Server Error in 0s, 0 bytes", "error: received HTTP status 500"}) {
+		t.Errorf("a step with neither headers nor body: %q", got)
+	}
+	for _, step := range details {
+		for _, line := range step.Lines {
+			if strings.HasPrefix(line, "answer: ") || strings.HasPrefix(line, "  ") {
+				t.Errorf("step %s has the line %q", step.ID, line)
+			}
+		}
 	}
 }

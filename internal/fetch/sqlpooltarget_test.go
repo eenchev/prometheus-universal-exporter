@@ -111,6 +111,29 @@ func TestASQLKeepalivePingMakesNoConnection(t *testing.T) {
 	}
 }
 
+// A keepalive round whose interval is over before it takes an idle
+// connection, as when the process is too busy to run it in time, is
+// skipped: the database was asked nothing, so it is no keepalive failure.
+func TestASQLKeepaliveRoundLateToTakeAConnectionIsNoFailure(t *testing.T) {
+	f := newSQLFixture(t)
+	f.db.Results["q"] = sqltest.Result{Columns: []string{"v"}, Rows: [][]driver.Value{{int64(1)}}}
+	c := f.collector(t, "db", SQLDriverPostgres, "q")
+	if _, err := FetchCollector(context.Background(), "db.example", c, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	p := sqlPoolsOf("db")["db.example//metrics"]
+	if p.db.Stats().Idle != 1 {
+		t.Fatalf("%d idle connections, want 1", p.db.Stats().Idle)
+	}
+	round := keepaliveOnce(sqlPools, p, time.Nanosecond)
+	if round != (sqlKeepaliveRound{skipped: true}) || f.db.Pings() != 0 {
+		t.Errorf("round %+v, %d pings", round, f.db.Pings())
+	}
+	if p.db.Stats().Idle != 1 {
+		t.Errorf("%d idle connections after the round, want the 1 kept", p.db.Stats().Idle)
+	}
+}
+
 // The pools of the databases a collector reaches on one server are one
 // target's: one server probed with three databases counts once in
 // http_exporter_sql_targets and in max_targets, and another target at the

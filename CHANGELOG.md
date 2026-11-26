@@ -18,6 +18,23 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 - Nothing; you can upgrade without changes.
 
+### New
+
+- The allocator's status page diagram gives each exporter's targets and its
+  share of their weight on its box, such as `12 targets · 34%`, and draws an
+  overloaded exporter's box in red.
+
+### Fixed
+
+- Debug page: a chain step's details lay its answer out as the *Response*
+  panel does, its headers then, after a blank line, its body, where the
+  headers were indented as request headers are and the body was labelled
+  `answer:`. The status reads `200 OK`, as in the other panels.
+- `sql` with `keepalive.check: ping`: a keepalive round that started too
+  late to take an idle connection within its interval, as on a busy
+  exporter, counted a failure in `http_exporter_sql_keepalive_failures_total`
+  though no ping was sent. It is now skipped.
+
 ## chart 2.2.0
 
 ### What changed for you

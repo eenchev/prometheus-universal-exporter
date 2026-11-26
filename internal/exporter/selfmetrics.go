@@ -396,7 +396,10 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 // lock is taken, the names are read from the configuration by index (a
 // collector is too large to copy for its name), and the slices and the map
 // are made at their size. The map is filled once the lock is released
-// (BenchmarkCollectorStats reports how long it is held).
+// (BenchmarkCollectorStats reports how long it is held). The first read
+// after a reload that brought collectors in finds no statistics for them:
+// it makes theirs with the lock released, and takes it again to keep them,
+// so making them, the bulk of that read, is not done under it.
 func (s *Server) collectorStats() (names []string, values map[string]statsValues, stats map[string]*serverStats) {
 	followed := s.reconcile()
 	collectors := followed.config.Collectors
@@ -407,19 +410,47 @@ func (s *Server) collectorStats() (names []string, values map[string]statsValues
 	found := make([]*serverStats, len(names))
 	stats = make(map[string]*serverStats, len(names))
 	hook := statsReadHook.Load()
-	if hook != nil {
-		(*hook)(true)
+	lock := func() {
+		if hook != nil {
+			(*hook)(true)
+		}
+		s.statsMu.Lock()
 	}
-	s.statsMu.Lock()
+	unlock := func() {
+		s.statsMu.Unlock()
+		if hook != nil {
+			(*hook)(false)
+		}
+	}
+	missing := 0
+	lock()
 	for i, name := range names {
+		if found[i] = s.statsFoundLocked(followed.generation, name); found[i] == nil {
+			missing++
+		}
+	}
+	unlock()
+	if missing > 0 {
 		// A collector first heard of here has its statistics made now; one
 		// another reload removed since the configuration was read is shown
-		// in this answer with none kept for it (statsSince).
-		found[i] = s.statsSinceLocked(followed.generation, name)
-	}
-	s.statsMu.Unlock()
-	if hook != nil {
-		(*hook)(false)
+		// in this answer with none kept for it (statsSince). They are made
+		// without the lock. A probe may have made some meanwhile, and those
+		// are kept instead: statsSinceLockedWith returns the statistics the
+		// map holds by then.
+		fresh := make([]*serverStats, len(names))
+		now := time.Now()
+		for i := range names {
+			if found[i] == nil {
+				fresh[i] = newServerStats(now)
+			}
+		}
+		lock()
+		for i, name := range names {
+			if found[i] == nil {
+				found[i] = s.statsSinceLockedWith(followed.generation, name, fresh[i])
+			}
+		}
+		unlock()
 	}
 	for i, name := range names {
 		stats[name] = found[i]
@@ -432,9 +463,10 @@ func (s *Server) collectorStats() (names []string, values map[string]statsValues
 	return names, values, stats
 }
 
-// statsReadHook, set by tests, is called with true when the read of every
-// collector's statistics is about to take the statistics lock, and with false
-// when it has released it, so a benchmark can tell how long the lock is held.
+// statsReadHook, set by tests, is called with true each time the read of
+// every collector's statistics is about to take the statistics lock, and with
+// false each time it has released it, so a benchmark can tell how long the
+// lock is held.
 var statsReadHook atomic.Pointer[func(held bool)]
 
 // selfMetricSet is every self-metric, grouped by family: each per-collector

@@ -906,6 +906,59 @@ func TestAnAnswerWithoutAChangeIsNotAskedAgainAtOnce(t *testing.T) {
 	}
 }
 
+// A wake that brings no news, as from a heartbeat reply checked against the
+// bundle loop's last bundle just before the loop fetched the one it names,
+// does not cut short the wait after an answer without a change; one whose
+// reply named a bundle not yet fetched does.
+func TestAWakeWithoutNewsDoesNotCutTheWaitShort(t *testing.T) {
+	a := newFakeAllocator(t)
+	a.noWait = true
+	const least = 300 * time.Millisecond
+	unchanged := make(chan time.Time, 256)
+	c := startClient(t, a, func(o *Options) {
+		o.MinBackoff = least
+		o.Event = func(e Event) {
+			if e.Kind == EventUnchanged {
+				unchanged <- time.Now()
+			}
+		}
+	})
+	generation := a.serveFiles(map[string]string{"config.yaml": "c\n"})
+	var at time.Time
+	select {
+	case at = <-unchanged:
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for an answer without a change")
+	}
+	// The reply named the bundle the loop has, and woke it all the same.
+	c.mu.Lock()
+	c.heard = generation
+	c.mu.Unlock()
+	signal(c.wake)
+	select {
+	case next := <-unchanged:
+		if gap := next.Sub(at); gap < least {
+			t.Fatalf("a wake without news asked again after %s, before the least backoff of %s", gap, least)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the next answer without a change")
+	}
+	// A reply naming a bundle the loop has not fetched wakes it at once.
+	at = time.Now()
+	c.mu.Lock()
+	c.heard = "newer"
+	c.mu.Unlock()
+	signal(c.wake)
+	select {
+	case next := <-unchanged:
+		if gap := next.Sub(at); gap >= least {
+			t.Errorf("a wake with news waited %s, the whole least backoff", gap)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for the request a wake with news makes")
+	}
+}
+
 // A heartbeat whose reply names the generation the bundle loop fetched while
 // the reply was on its way does not wake the loop: the bundle is no news,
 // and a wake would cut short the wait after an answer without a change.

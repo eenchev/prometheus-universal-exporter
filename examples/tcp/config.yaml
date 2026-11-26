@@ -8,13 +8,15 @@
 # Each probe's target is the service, host:port, whose port has no default:
 #
 #   curl 'http://localhost:8080/probe?collector=memcached&target=localhost:11211'
+#   curl 'http://localhost:8080/probe?collector=memcached_slabs&target=localhost:11211'
 #   curl 'http://localhost:8080/probe?collector=zookeeper&target=localhost:2181'
+#   curl 'http://localhost:8080/probe?collector=zookeeper_ruok&target=localhost:2181'
 #   curl 'http://localhost:8080/probe?collector=haproxy&target=localhost:9999'
 #
 # To try them on a laptop:
 #
 #   docker run -d -p 11211:11211 memcached:1.6
-#   docker run -d -p 2181:2181 -e ZOO_4LW_COMMANDS_WHITELIST=mntr zookeeper:3.9
+#   docker run -d -p 2181:2181 -e ZOO_4LW_COMMANDS_WHITELIST=mntr,ruok zookeeper:3.9
 #
 # and an HAProxy whose global section opens its runtime API on a TCP port,
 # read-only at the user level:
@@ -108,6 +110,44 @@ collectors:
         description: The share of gets that found their item, since the server started
         ratio: [memcached_get_hits_total, memcached_gets]
 
+  # memcached answers `stats slabs` with a line for each statistic of each
+  # slab class, written <class>:<name>, then a few totals, then END. Each
+  # rule reads one statistic of every class, the group named slab giving
+  # the label, and the totals, which have no class, are left out.
+  #
+  #   STAT 1:chunk_size 96
+  #   STAT 1:total_chunks 10922
+  #   STAT 1:used_chunks 5
+  #   ...
+  #   STAT active_slabs 2
+  #   STAT total_malloced 2097152
+  #   END
+  - name: memcached_slabs
+    request:
+      type: tcp
+      send: "stats slabs\r\n"
+      terminator: "END\r\n"
+    transform:
+      type: regex
+    metrics:
+      - name: memcached_slab_chunk_size_bytes
+        description: The size of a chunk of the slab class
+        expression: '(?m)^STAT (?P<slab>\d+):chunk_size (?P<value>\d+)\r$'
+        labels: &slab
+          - name: slab
+            expression: slab
+      - name: memcached_slab_chunks
+        description: Chunks the slab class has
+        expression: '(?m)^STAT (?P<slab>\d+):total_chunks (?P<value>\d+)\r$'
+        labels: *slab
+      - name: memcached_slab_used_chunks
+        description: Chunks of the slab class that hold an item
+        expression: '(?m)^STAT (?P<slab>\d+):used_chunks (?P<value>\d+)\r$'
+        labels: *slab
+      - name: memcached_slabs_malloced_bytes
+        description: Bytes the slab classes have taken from the system
+        expression: '(?m)^STAT total_malloced (\d+)\r$'
+
   # ZooKeeper answers the four-letter word mntr, which its
   # 4lw.commands.whitelist must name, with a line of a name, a tab and a
   # value for each statistic, then closes the connection, so the collector
@@ -155,6 +195,25 @@ collectors:
         description: Followers in sync with the leader
         expression: '(?m)^zk_synced_followers\t(\d+)$'
         required: false
+
+  # ZooKeeper answers ruok, which the whitelist must name too, with imok
+  # when it is running, and closes the connection. It says nothing of the
+  # quorum: a server out of it is still imok, and answers mntr with "This
+  # ZooKeeper instance is not currently serving requests", which makes the
+  # zookeeper collector's rules find nothing.
+  - name: zookeeper_ruok
+    request:
+      type: tcp
+      send: ruok
+    transform:
+      type: regex
+    metrics:
+      - name: zookeeper_ok
+        description: 1 when the server answers ruok with imok
+        expression: '(?s)^(.*)$'
+        value_map:
+          imok: 1
+          "*": 0
 
   # HAProxy answers `show stat` on its runtime API with CSV, a line for each
   # frontend, backend and server, and closes the connection. Its header line

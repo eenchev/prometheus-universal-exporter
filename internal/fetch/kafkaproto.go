@@ -33,7 +33,6 @@ var (
 	kafkaListOffsets      = kafkaAPI{2, "ListOffsets", 4}
 	kafkaMetadata         = kafkaAPI{3, "Metadata", 7}
 	kafkaOffsetFetch      = kafkaAPI{9, "OffsetFetch", 5}
-	kafkaFindCoordinator  = kafkaAPI{10, "FindCoordinator", 2}
 	kafkaDescribeGroups   = kafkaAPI{15, "DescribeGroups", 2}
 	kafkaListGroups       = kafkaAPI{16, "ListGroups", 2}
 	kafkaSaslHandshake    = kafkaAPI{17, "SaslHandshake", 1}
@@ -44,7 +43,7 @@ var (
 // kafkaAPIs are the APIs a scrape needs a broker to speak at their
 // versions; SaslAuthenticate, sent at version 1 where the broker speaks
 // it, and the SASL ones, needed only with a login, are checked apart.
-var kafkaAPIs = []kafkaAPI{kafkaMetadata, kafkaListOffsets, kafkaFindCoordinator, kafkaListGroups, kafkaDescribeGroups, kafkaOffsetFetch}
+var kafkaAPIs = []kafkaAPI{kafkaMetadata, kafkaListOffsets, kafkaListGroups, kafkaDescribeGroups, kafkaOffsetFetch}
 
 // kafkaClientID is the client ID every request carries, which a broker
 // logs and quotas may name.

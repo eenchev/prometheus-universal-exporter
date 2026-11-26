@@ -38,7 +38,7 @@ message and send no request that changes the cluster.
   user MUST be refused, a probe's with `400` before anything is sent and a
   static target's at load.
 - Every request MUST be sent at one version: Metadata 7, ListOffsets 4,
-  OffsetFetch 5, FindCoordinator 2, DescribeGroups 2, ListGroups 2,
+  OffsetFetch 5, DescribeGroups 2, ListGroups 2,
   ApiVersions 2, SaslHandshake 1, and SaslAuthenticate 1 where the broker
   speaks it, 0 otherwise. Each request MUST carry the client ID
   `prometheus-universal-exporter`, and each answer's correlation ID MUST be
@@ -61,20 +61,23 @@ message and send no request that changes the cluster.
   MUST NOT show the password or the token.
 - A scrape MUST ask the target the cluster's metadata for every topic,
   without creating one. It MUST then ask every broker the metadata lists
-  for its groups, each group's coordinator for the chosen groups, and that
-  coordinator their description and their committed offsets of every
-  topic. Only after those MUST it ask each leader of a chosen topic's
-  partition that has a leader for the partition's newest (-1) and oldest
-  (-2) offsets, uncommitted records read. Each broker MUST be asked on a
-  connection of its own, at the address the metadata or FindCoordinator
-  gives it. The brokers MAY be asked at once, and every connection MUST be
-  closed when the scrape ends.
+  for the groups it coordinates, then the broker that listed each chosen
+  group for its description and its committed offsets of every topic, and
+  MUST NOT send FindCoordinator. Only after those MUST it ask each leader
+  of a chosen topic's partition that has a leader for the partition's
+  newest (-1) and oldest (-2) offsets, uncommitted records read. Each
+  broker MUST be asked on a connection of its own, at the address the
+  metadata gives it; a broker whose address no connection can use MUST
+  fail what is asked of it, as a broker that cannot be reached does. The
+  brokers MAY be asked at once, and every connection MUST be closed when
+  the scrape ends.
 - The target that cannot be reached, refused, or that fails its login or
   its metadata MUST fail the scrape. A failure of another broker MUST NOT
   fail it: what the broker would have answered MUST be missing, the
   partitions it leads MUST have their `error`, its groups their `error`,
   and `errors` MUST hold a sentence for it naming the broker. So MUST a
-  group whose coordinator is not found, which keeps its `error`. The
+  group that its coordinator refused to describe or to give the offsets
+  of, which keeps its `error`. The
   scrape's deadline running out, and the response limit, MUST fail the
   scrape whatever was being asked.
 - The answers of a scrape together larger than the response limit MUST
@@ -103,7 +106,7 @@ message and send no request that changes the cluster.
     `under_replicated` (fewer in sync than replicas), `offline`, `newest`,
     `oldest` and `error`;
   - `groups`, the chosen ones: each `group`, `protocol_type`, `state`,
-    `members`, `coordinator` (`null` with an `error`), `error`, and
+    `members`, `coordinator` (the broker that listed it), `error`, and
     `topics`, the chosen topics it committed offsets of: each `group`,
     `topic`, `committed_sum` (of the offsets of 0 or more), `lag` (`null`
     when no partition has one), and `partitions`: each `partition`,

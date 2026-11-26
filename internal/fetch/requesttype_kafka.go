@@ -3,6 +3,7 @@
 package fetch
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -46,8 +47,9 @@ import (
 // asks:
 //
 //   - every broker for the consumer groups it coordinates (ListGroups);
-//   - each chosen group's coordinator for the group's state and members
-//     (DescribeGroups) and for its committed offsets (OffsetFetch);
+//   - the broker that listed each chosen group, its coordinator, for the
+//     group's state and members (DescribeGroups) and for its committed
+//     offsets (OffsetFetch);
 //   - each partition's leader for the partition's newest and oldest
 //     offsets (ListOffsets), after the committed ones, so that a lag read
 //     at once does not go below zero.
@@ -330,7 +332,7 @@ type (
 		ProtocolType string  `json:"protocol_type"`
 		State        *string `json:"state"`
 		Members      *int    `json:"members"`
-		Coordinator  *int32  `json:"coordinator"`
+		Coordinator  int32   `json:"coordinator"`
 		Error        string  `json:"error"`
 		// Topics are the chosen topics the group has committed offsets of.
 		Topics []kafkaGroupTopicDoc `json:"topics"`
@@ -408,9 +410,10 @@ type kafkaCluster struct {
 }
 
 // kafkaNode is a broker of the cluster and its connection, made the first
-// time it is asked for.
+// time it is asked for. bad says why its address cannot be connected to.
 type kafkaNode struct {
 	address netAddress
+	bad     error
 	once    sync.Once
 	conn    *kafkaConn
 	err     error
@@ -531,8 +534,11 @@ func (k *kafkaCluster) node(id int32) (*kafkaConn, error) {
 	k.mu.Lock()
 	n := k.nodes[id]
 	k.mu.Unlock()
-	if n == nil {
+	switch {
+	case n == nil:
 		return nil, fmt.Errorf("broker %d is not among the brokers the metadata lists", id)
+	case n.bad != nil:
+		return nil, n.bad
 	}
 	n.once.Do(func() {
 		conn, err := k.dial(n.address)
@@ -543,22 +549,22 @@ func (k *kafkaCluster) node(id int32) (*kafkaConn, error) {
 	return n.conn, n.err
 }
 
-// learn records where broker id is, unless it is known.
-func (k *kafkaCluster) learn(id int32, host string, port int32) error {
+// learn records where broker id is. An address that cannot be connected
+// to is the broker's failure, met when it is asked for (node), so that one
+// broker's does not fail the scrape.
+func (k *kafkaCluster) learn(id int32, host string, port int32) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if _, known := k.nodes[id]; known {
-		return nil
-	}
+	written := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	canonical, err := canonicalHost(host)
-	if err != nil {
-		return fmt.Errorf("broker %d's address %s: %w", id, net.JoinHostPort(host, strconv.Itoa(int(port))), err)
+	switch {
+	case err != nil:
+		k.nodes[id] = &kafkaNode{bad: fmt.Errorf("broker %d's address %s: %w", id, brokerSaid(written), err)}
+	case host == "" || port < 1 || port > 65535:
+		k.nodes[id] = &kafkaNode{bad: fmt.Errorf("broker %d has the address %s, which no connection can use", id, brokerSaid(written))}
+	default:
+		k.nodes[id] = &kafkaNode{address: netAddress{host: canonical, hostPort: net.JoinHostPort(canonical, strconv.Itoa(int(port)))}}
 	}
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("broker %d has the port %d, which is %w", id, port, errKafkaProtocol)
-	}
-	k.nodes[id] = &kafkaNode{address: netAddress{host: canonical, hostPort: net.JoinHostPort(canonical, strconv.Itoa(int(port)))}}
-	return nil
 }
 
 // each runs work on the connection of each broker of ids at once, and
@@ -621,7 +627,7 @@ func (k *kafkaCluster) scrape(address netAddress) (*kafkaDocument, error) {
 		doc.Errors = append(doc.Errors, err.Error())
 		return false
 	}
-	if err := k.groups(boot, doc, failed); err != nil {
+	if err := k.groups(doc, failed); err != nil {
 		return nil, err
 	}
 	if err := k.offsets(doc, failed); err != nil {
@@ -719,9 +725,7 @@ func (k *kafkaCluster) metadata(boot *kafkaConn, doc *kafkaDocument) error {
 	for i := range doc.Brokers {
 		b := &doc.Brokers[i]
 		b.Controller = b.ID == doc.Controller
-		if err := k.learn(b.ID, b.Host, b.Port); err != nil {
-			return err
-		}
+		k.learn(b.ID, b.Host, b.Port)
 	}
 	slices.SortFunc(doc.Brokers, func(a, b kafkaBrokerDoc) int { return int(a.ID - b.ID) })
 	slices.SortFunc(doc.Topics, func(a, b kafkaTopicDoc) int { return strings.Compare(a.Name, b.Name) })
@@ -731,16 +735,22 @@ func (k *kafkaCluster) metadata(boot *kafkaConn, doc *kafkaDocument) error {
 // groups lists the consumer groups on every broker, finds each chosen
 // one's coordinator, and asks it the group's state, members and committed
 // offsets, into doc.
-func (k *kafkaCluster) groups(boot *kafkaConn, doc *kafkaDocument, failed func(error) bool) error {
+func (k *kafkaCluster) groups(doc *kafkaDocument, failed func(error) bool) error {
 	own := kafkaRequest(k.c)
 	include, exclude := kafkaPattern(own.IncludeGroups), kafkaPattern(own.ExcludeGroups)
 	ids := make([]int32, 0, len(doc.Brokers))
 	for _, b := range doc.Brokers {
 		ids = append(ids, b.ID)
 	}
+	// A broker lists the groups it coordinates, so the broker that lists
+	// a group is the one to ask about it.
+	type listing struct {
+		protocol    string
+		coordinator int32
+	}
 	var mu sync.Mutex
-	listed := map[string]string{}
-	for id, err := range k.each(ids, func(_ int32, conn *kafkaConn) error {
+	listed := map[string]listing{}
+	for id, err := range k.each(ids, func(id int32, conn *kafkaConn) error {
 		r, err := conn.roundTrip(kafkaListGroups, kafkaListGroups.version, nil)
 		if err != nil {
 			return err
@@ -760,7 +770,7 @@ func (k *kafkaCluster) groups(boot *kafkaConn, doc *kafkaDocument, failed func(e
 		}
 		mu.Lock()
 		for group, protocol := range found {
-			listed[group] = protocol
+			listed[group] = listing{protocol, id}
 		}
 		mu.Unlock()
 		return nil
@@ -783,17 +793,9 @@ func (k *kafkaCluster) groups(boot *kafkaConn, doc *kafkaDocument, failed func(e
 	byCoordinator := map[int32][]int{}
 	for i, name := range names {
 		g := &doc.Groups[i]
-		g.Group, g.ProtocolType, g.Topics = name, listed[name], []kafkaGroupTopicDoc{}
-		coordinator, err := k.coordinator(boot, name)
-		if err != nil {
-			if failed(err) {
-				return err
-			}
-			g.Error = err.Error()
-			continue
-		}
-		g.Coordinator = &coordinator
-		byCoordinator[coordinator] = append(byCoordinator[coordinator], i)
+		l := listed[name]
+		g.Group, g.ProtocolType, g.Coordinator, g.Topics = name, l.protocol, l.coordinator, []kafkaGroupTopicDoc{}
+		byCoordinator[l.coordinator] = append(byCoordinator[l.coordinator], i)
 	}
 	chosen := map[string]bool{}
 	for _, t := range doc.Topics {
@@ -812,32 +814,14 @@ func (k *kafkaCluster) groups(boot *kafkaConn, doc *kafkaDocument, failed func(e
 			}
 		}
 	}
-	return nil
-}
-
-// coordinator finds the broker that coordinates group.
-func (k *kafkaCluster) coordinator(boot *kafkaConn, group string) (int32, error) {
-	w := kafkaWriter{}
-	w.string(group)
-	w.int8(0) // a group's coordinator
-	r, err := boot.roundTrip(kafkaFindCoordinator, kafkaFindCoordinator.version, w.b)
-	if err != nil {
-		return 0, err
-	}
-	r.int32() // throttle_time_ms
-	code := r.int16()
-	said, _ := r.nullableString()
-	id, host, port := r.int32(), r.string(), r.int32()
-	if err := boot.decoded(kafkaFindCoordinator, r); err != nil {
-		return 0, err
-	}
-	if code != 0 {
-		if said == "" {
-			said = kafkaError(code)
+	// A group its coordinator refused to describe, or to give the offsets
+	// of, is among the errors too.
+	for _, g := range doc.Groups {
+		if g.Error != "" && !slices.Contains(doc.Errors, g.Error) {
+			doc.Errors = append(doc.Errors, g.Error)
 		}
-		return 0, fmt.Errorf("finding the coordinator of group %q: %s", group, brokerSaid(said))
 	}
-	return id, k.learn(id, host, port)
+	return nil
 }
 
 // describe asks a coordinator the state and the members of the groups of
@@ -977,10 +961,11 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 			n, o := newest[key], oldest[key]
 			switch {
 			case p.Offline:
-			case n.err != "":
-				p.Error = n.err
-			case o.err != "":
-				p.Error = o.err
+			case n.err != "" || o.err != "":
+				// What the metadata said of the partition comes first.
+				if p.Error == "" {
+					p.Error = cmp.Or(n.err, o.err)
+				}
 			default:
 				p.Newest, p.Oldest = &n.offset, &o.offset
 				latest[key] = n.offset

@@ -170,8 +170,9 @@ var internalLayers = []string{"allocapi", "model", "kubeapi", "expr", "fetch", "
 // sqltest, the sql request type's stand-in database, and kubetest, the
 // stand-in Kubernetes API server of the kubernetes request type and of
 // internal/kubeapi, redistest, the redis request type's stand-in server,
-// and ldaptest, the ldap request type's.
-var testOnly = map[string]bool{"testutil": true, "grpctest": true, "sshtest": true, "sqltest": true, "kubetest": true, "redistest": true, "ldaptest": true}
+// ldaptest, the ldap request type's, and kafkatest, the kafka request
+// type's stand-in cluster.
+var testOnly = map[string]bool{"testutil": true, "grpctest": true, "sshtest": true, "sqltest": true, "kubetest": true, "redistest": true, "ldaptest": true, "kafkatest": true}
 
 // The internal packages stay layered, and the test-only ones stay out of the
 // binary.

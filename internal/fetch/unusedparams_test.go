@@ -44,6 +44,7 @@ var unusedRefusals = map[string]string{
 	RequestTypeSIP:        `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeAMQP:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 	RequestTypeNATS:       `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
+	RequestTypeKafka:      `probe parameters param_tenat are not used by collector "places": no placeholder in its label values names them`,
 }
 
 // ownPlaceholders put, by request type, a placeholder in each of the

@@ -55,7 +55,7 @@ targets:
 
 A target's `target` is checked when the file loads, as its collector's type
 reads it. An `http` or `graphite` target is an absolute URL. A target whose
-port is 0 or above 65535, which no connection can use, is refused with an error that names the port; this applies to a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `sip`, `amqp` or `nats` target too.
+port is 0 or above 65535, which no connection can use, is refused with an error that names the port; this applies to a `grpc`, `sshfile`, `sshexec`, `sql`, `redis`, `tcp`, `ldap`, `tlscert`, `ntp`, `snmp`, `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `sip`, `amqp`, `nats` or `kafka` target too.
 
 Each target names a collector from the exporter configuration and takes
 every per-scrape parameter that `/probe` accepts (`method`, `path`, `body`,
@@ -100,6 +100,7 @@ soon as the file is read, before its collector is looked up.)
 | [`sip`](SIP.md#static-targets), opt-in | the SIP server, required | `timeout` |
 | [`amqp`](AMQP.md#static-targets), opt-in | the AMQP broker, required | `timeout` |
 | [`nats`](NATS.md#static-targets), opt-in | the NATS server, required | `timeout` |
+| [`kafka`](KAFKA.md#static-targets), opt-in | a broker of the cluster, required | `timeout` |
 
 **Credentials.** An `http` or `graphite` target also takes static `headers`,
 and an `http`, `graphite` or `grpc` target its own target credentials, inline
@@ -375,7 +376,7 @@ password or client certificate: a target names its own account, or its own
 | `modbus` | none | no; Modbus TCP has no TLS |
 | `snmp` | `community_file` of v1 and v2c; `username`, `auth_password_file` and `priv_password_file` of v3, each replacing the collector's as its security level uses it | no; SNMP has no TLS |
 | `radius` | none: the account and the shared secret are the collector's | no; RADIUS is spoken over UDP |
-| `sip`, `amqp`, `nats` | none: the account and the `tls` block are the collector's | no |
+| `sip`, `amqp`, `nats`, `kafka` | none: the account and the `tls` block are the collector's | no |
 | `localfile`, `s3file`, `dns`, `tlscert`, `ntp`, `icmp`, `kubernetes`, `whois` | none | no |
 
 A target's credential file may be a reference to a

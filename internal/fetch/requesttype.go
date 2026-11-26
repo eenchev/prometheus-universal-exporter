@@ -34,8 +34,9 @@ import (
 // mail of an account's mailboxes, pop3 counts that of a mailbox over POP3,
 // radius authenticates an account against a RADIUS server, whois reads a
 // domain's registration, sip asks a SIP server whether it answers, amqp asks
-// an AMQP broker how deep its queues are, and nats times a NATS server and
-// reads its JetStream.
+// an AMQP broker how deep its queues are, nats times a NATS server and
+// reads its JetStream, and kafka reads a Kafka cluster's brokers, partitions
+// and consumer groups' lag.
 //
 // The type is required rather than defaulted, so that no configuration means
 // "http" by accident, and so that each type can own its rules:
@@ -89,6 +90,7 @@ const (
 	RequestTypeSIP        = "sip"
 	RequestTypeAMQP       = "amqp"
 	RequestTypeNATS       = "nats"
+	RequestTypeKafka      = "kafka"
 )
 
 // UnixSocketPattern is the pattern that request.unix_socket of an http or tcp
@@ -101,7 +103,7 @@ const UnixSocketPattern = `^$|^/`
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC, RequestTypeSSHFile, RequestTypeSQL, RequestTypeDNS, RequestTypeTLSCert, RequestTypeS3File, RequestTypeKubernetes, RequestTypeRedis, RequestTypeTCP, RequestTypeLDAP, RequestTypeSSHExec, RequestTypeNTP, RequestTypeICMP, RequestTypeSNMP, RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS, RequestTypeKafka}
 
 // optInRequestTypes are the types of knownRequestTypes that a default build
 // leaves out, as it leaves out the sql type's opt-in drivers. A type may be
@@ -109,7 +111,7 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestT
 // carries it only when asked, with its request_type_<name> tag, and its file
 // is built under that tag alone (make new-request-type OPT_IN=1). A test
 // keeps the list in step with the files' constraints.
-var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS}
+var optInRequestTypes = []string{RequestTypeSMTP, RequestTypeModbus, RequestTypeMQTT, RequestTypeWebSocket, RequestTypeFTP, RequestTypeIMAP, RequestTypePOP3, RequestTypeRADIUS, RequestTypeWhois, RequestTypeSIP, RequestTypeAMQP, RequestTypeNATS, RequestTypeKafka}
 
 // Requester is what every request type does: each type's registration
 // gives a small value implementing it (requesttype_<name>.go), whose

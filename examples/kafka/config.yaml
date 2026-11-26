@@ -1,0 +1,146 @@
+# A Kafka cluster read with the kafka request type (docs/KAFKA.md), written
+# as kafka_exporter (github.com/danielqsj/kafka_exporter) writes its series:
+# the same names and labels, so its dashboards and alerts read these as
+# they read its own. The type is opt-in; make run builds it in:
+#
+#   make run EXAMPLE=kafka
+#
+# A probe's target is a broker of the cluster, host:port, port 9092 when
+# left out:
+#
+#   curl 'http://localhost:8080/probe?collector=kafka&target=localhost:9092'
+#
+# To try it on a laptop, one broker in KRaft mode:
+#
+#   docker run -d -p 9092:9092 apache/kafka:3.9.1
+#
+# One series is more than kafka_exporter's, kafka_scrape_errors: the
+# brokers, groups and partitions a scrape could not ask, whose series are
+# then missing, which kafka_exporter only logs.
+collectors:
+  - name: kafka
+    request:
+      type: kafka
+      # kafka_exporter's --topic.exclude and --group.exclude, as patterns
+      # a whole name matches; its internal topics are left out unless
+      # internal_topics is true.
+      exclude_groups: ['console-consumer-.*']
+    transform:
+      type: jq
+    metrics:
+      - name: kafka_brokers
+        description: Number of Brokers in the Kafka Cluster.
+        expression: .brokers | length
+
+      - name: kafka_broker_info
+        description: Information about the Kafka Broker.
+        items: .brokers[]
+        expression: 1
+        labels:
+          - name: address
+            expression: .host + ":" + (.port | tostring)
+          - name: id
+            expression: .id | tostring
+
+      - name: kafka_topic_partitions
+        description: Number of partitions for this Topic
+        items: .topics[]
+        expression: .partition_count
+        labels:
+          - name: topic
+            expression: .name
+
+      # One item per partition, its topic's name beside it.
+      - name: kafka_topic_partition_current_offset
+        description: Current Offset of a Broker at Topic/Partition
+        items: '.topics[] | .name as $t | .partitions[] | select(.newest != null) | . + {topic: $t}'
+        expression: .newest
+        labels: &partition
+          - name: topic
+            expression: .topic
+          - name: partition
+            expression: .partition | tostring
+
+      - name: kafka_topic_partition_oldest_offset
+        description: Oldest Offset of a Broker at Topic/Partition
+        items: '.topics[] | .name as $t | .partitions[] | select(.oldest != null) | . + {topic: $t}'
+        expression: .oldest
+        labels: *partition
+
+      - name: kafka_topic_partition_in_sync_replica
+        description: Number of In-Sync Replicas for this Topic/Partition
+        items: '.topics[] | .name as $t | .partitions[] | . + {topic: $t}'
+        expression: .isr | length
+        labels: *partition
+
+      - name: kafka_topic_partition_leader
+        description: Leader Broker ID of this Topic/Partition
+        items: '.topics[] | .name as $t | .partitions[] | . + {topic: $t}'
+        expression: .leader
+        labels: *partition
+
+      - name: kafka_topic_partition_leader_is_preferred
+        description: 1 if Topic/Partition is using the Preferred Broker
+        items: '.topics[] | .name as $t | .partitions[] | . + {topic: $t}'
+        expression: if .preferred_leader then 1 else 0 end
+        labels: *partition
+
+      - name: kafka_topic_partition_replicas
+        description: Number of Replicas for this Topic/Partition
+        items: '.topics[] | .name as $t | .partitions[] | . + {topic: $t}'
+        expression: .replicas | length
+        labels: *partition
+
+      - name: kafka_topic_partition_under_replicated_partition
+        description: 1 if Topic/Partition is under Replicated
+        items: '.topics[] | .name as $t | .partitions[] | . + {topic: $t}'
+        expression: if .under_replicated then 1 else 0 end
+        labels: *partition
+
+      # One item per partition a group committed an offset of.
+      - name: kafka_consumergroup_current_offset
+        description: Current Offset of a ConsumerGroup at Topic/Partition
+        items: '.groups[] | .topics[] | . as $t | .partitions[] | . + {group: $t.group, topic: $t.topic}'
+        expression: .committed
+        labels: &grouppartition
+          - name: consumergroup
+            expression: .group
+          - name: topic
+            expression: .topic
+          - name: partition
+            expression: .partition | tostring
+
+      - name: kafka_consumergroup_lag
+        description: Current Approximate Lag of a ConsumerGroup at Topic/Partition
+        items: '.groups[] | .topics[] | . as $t | .partitions[] | . + {group: $t.group, topic: $t.topic}'
+        # kafka_exporter writes -1 for a partition without a committed offset.
+        expression: .lag // -1
+        labels: *grouppartition
+
+      - name: kafka_consumergroup_current_offset_sum
+        description: Current Offset of a ConsumerGroup at Topic for all partitions
+        items: .groups[] | .topics[]
+        expression: .committed_sum
+        labels: &grouptopic
+          - name: consumergroup
+            expression: .group
+          - name: topic
+            expression: .topic
+
+      - name: kafka_consumergroup_lag_sum
+        description: Current Approximate Lag of a ConsumerGroup at Topic for all partitions
+        items: .groups[] | .topics[]
+        expression: .lag // 0
+        labels: *grouptopic
+
+      - name: kafka_consumergroup_members
+        description: Amount of members in a consumer group
+        items: .groups[] | select(.members != null)
+        expression: .members
+        labels:
+          - name: consumergroup
+            expression: .group
+
+      - name: kafka_scrape_errors
+        description: Brokers, groups or partitions the scrape could not ask, whose series are missing.
+        expression: .errors | length

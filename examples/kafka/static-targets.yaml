@@ -1,0 +1,15 @@
+# The exporter scrapes this cluster itself, every 30 seconds, and serves it
+# on /static-targets, as kafka_exporter serves its one cluster on /metrics.
+# One target is one cluster, reached through the broker it names; a second
+# cluster is a second target, which kafka_exporter needs a second process
+# for. A target's labels add the cluster to its series.
+#
+#   make run EXAMPLE=kafka
+#   curl http://localhost:8080/static-targets
+interval: 30s
+targets:
+  - name: kafka_local
+    collector: kafka
+    target: localhost:9092
+    labels:
+      cluster: local

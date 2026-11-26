@@ -18,7 +18,8 @@ import (
 //     at once;
 //   - the reader of an ICMP socket;
 //   - the ports of a tcp check;
-//   - the requests of a kubernetes scrape;
+//   - the requests of a kubernetes scrape, and the brokers of a kafka one,
+//     asked at once;
 //   - the read of a file or a directory and the run of a command over SSH,
 //     which a deadline may leave behind;
 //   - a login and a gRPC reflection question, shared by the requests

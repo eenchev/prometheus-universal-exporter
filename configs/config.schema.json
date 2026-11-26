@@ -3399,6 +3399,34 @@
                 "pattern": "^$|^https?://[^/?#@]+/?$",
                 "type": "string"
               },
+              "exclude_groups": {
+                "description": "kafka: regular expressions whose consumer groups are left out, whole names matched, at most 100.",
+                "items": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "exclude_topics": {
+                "description": "kafka: regular expressions whose topics are left out, whole names matched, at most 100.",
+                "items": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
               "extract": {
                 "additionalProperties": {
                   "additionalProperties": false,
@@ -3648,6 +3676,34 @@
                   "integer"
                 ]
               },
+              "include_groups": {
+                "description": "kafka: regular expressions, one of which the whole name of a consumer group matches to be reported, at most 100; every group when left out.",
+                "items": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "include_topics": {
+                "description": "kafka: regular expressions, one of which the whole name of a topic matches to be reported, at most 100; every topic when left out.",
+                "items": {
+                  "maxLength": 1000,
+                  "minLength": 1,
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
               "info_sections": {
                 "description": "redis: the sections of INFO the document holds, each asked for with an INFO of its own, such as [server, memory, keyspace]. Left out, INFO's default sections, unless request.commands is set, when no INFO is sent. See docs/REDIS.md#what-a-scrape-reads.",
                 "items": {
@@ -3656,6 +3712,10 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "internal_topics": {
+                "description": "kafka: report Kafka's own topics too, such as __consumer_offsets; false when left out.",
+                "type": "boolean"
               },
               "interval": {
                 "description": "icmp: how long apart the echoes are sent, at least 10ms; 1s when left out.",
@@ -6272,7 +6332,7 @@
                 ]
               },
               "password_file": {
-                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest. amqp and nats, with username: the file of the account's password, read at every scrape.",
+                "description": "sshfile and sshexec: the file of the account's password, tried after private_key_file; one of the two is required. sql: the file of the account's password, read when a connection is made. redis: the file of the password AUTH sends, read at every scrape; without it the exporter sends no AUTH. ldap, with bind_dn: the file of the password of the simple bind, read at every scrape; an empty one fails the scrape. smtp, mqtt, ftp, imap and pop3, with username: the file of the account's password, read at every scrape; not beside xoauth2. radius, with username: the file of the account's password, read at every scrape. sip, with username: the file of the account's password, read at every scrape and sent only as a digest. amqp and nats, with username: the file of the account's password, read at every scrape. kafka, with username: the file of the password of a PLAIN or SCRAM login, read at every scrape.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"
@@ -6757,6 +6817,17 @@
               "sasl_external": {
                 "description": "ldap: bind with SASL EXTERNAL, as the identity of the TLS client certificate request.tls.cert_file and key_file present, in place of a simple bind; not with bind_dn or password_file. A client certificate makes the connection TLS. See docs/LDAP.md#a-client-certificate.",
                 "type": "boolean"
+              },
+              "sasl_mechanism": {
+                "description": "kafka: the SASL mechanism of the login. PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 send username and password_file, OAUTHBEARER sends bearer_token_file. Left out, PLAIN with a username, OAUTHBEARER with a bearer_token_file, and no login without either.",
+                "enum": [
+                  "PLAIN",
+                  "SCRAM-SHA-256",
+                  "SCRAM-SHA-512",
+                  "OAUTHBEARER",
+                  ""
+                ],
+                "type": "string"
               },
               "searches": {
                 "description": "ldap, required: the searches whose results the document holds under .searches.\u003cname\u003e, each {name, base, scope, filter, attributes, count_only, max_entries}. See docs/LDAP.md#searches.",
@@ -7714,7 +7785,7 @@
                 "type": "string"
               },
               "username": {
-                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. amqp and nats, optional, with password_file: the account logged in with, amqp's guest when left out. Not blanks alone.",
+                "description": "sshfile, sshexec and sql, required: the account the file is read as, or the command runs as, on the host, or the statement runs as on the database. redis, optional, with password_file: the ACL user AUTH logs in as. snmp, with snmp_version 3, required: the SNMPv3 user. smtp, mqtt, ftp, imap and pop3, optional: the account logged in with, ftp's anonymous when left out. radius, required unless mode is status-server: the account the server is asked to authenticate. sip, optional, with password_file: the account a Digest challenge is answered with. amqp and nats, optional, with password_file: the account logged in with, amqp's guest when left out. kafka, optional, with password_file: the account of a PLAIN or SCRAM login. Not blanks alone.",
                 "not": {
                   "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
                   "type": "string"

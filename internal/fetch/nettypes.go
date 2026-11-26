@@ -1,4 +1,4 @@
-//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3 || request_type_sip || request_type_amqp || request_type_nats
+//go:build request_type_smtp || request_type_modbus || request_type_mqtt || request_type_websocket || request_type_ftp || request_type_imap || request_type_pop3 || request_type_sip || request_type_amqp || request_type_nats || request_type_kafka
 
 package fetch
 
@@ -19,9 +19,10 @@ import (
 )
 
 // Shared code of the smtp, modbus, mqtt, websocket, ftp, imap, pop3, sip,
-// amqp and nats request types. Each reaches one server at host:port over
-// TCP, or over TLS on it, through the collector's target policy, within the
-// scrape's deadline, on a connection of the scrape's own. The types are
+// amqp, nats and kafka request types. Each reaches a server at host:port
+// over TCP, or over TLS on it, through the collector's target policy, within
+// the scrape's deadline, on a connection of the scrape's own; kafka reaches
+// each broker of a cluster so, the target first. The types are
 // opt-in, so a build that has none of them leaves this file out.
 
 // netAddress is a target of one of these types: its scheme, in lower case

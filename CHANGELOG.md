@@ -20,6 +20,12 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### New
 
+- An opt-in `kafka` request type reads a Kafka cluster over Kafka's own
+  protocol: its brokers, topics, partitions and offsets, and each consumer
+  group's state, members and lag, logging in with PLAIN, SCRAM or
+  OAUTHBEARER, over TLS or not, from Kafka 2.1 on. It adds no dependency.
+  `examples/kafka` writes kafka_exporter's series from it, so its dashboards
+  and alerts keep working ([Kafka](docs/KAFKA.md)).
 - The allocator's status page diagram gives each exporter's targets and its
   share of their weight on its box, such as `12 targets · 34%`, and draws an
   overloaded exporter's box in red.

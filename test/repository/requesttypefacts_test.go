@@ -245,6 +245,7 @@ var chartSourceNames = map[string]struct{ readme, description string }{
 	"sip":        {"a SIP server that answers", ""},
 	"amqp":       {"the queues of an AMQP broker", ""},
 	"nats":       {"a NATS server and its JetStream", ""},
+	"kafka":      {"a Kafka cluster and its consumer groups' lag", ""},
 }
 
 func TestTheChartDescribesEverySource(t *testing.T) {

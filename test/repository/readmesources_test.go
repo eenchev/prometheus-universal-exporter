@@ -45,6 +45,7 @@ var readmeSourceNames = map[string]string{
 	"sip":        "SIP servers",
 	"amqp":       "AMQP queues",
 	"nats":       "NATS with JetStream",
+	"kafka":      "Kafka consumer lag",
 }
 
 // readmeOpening returns the README's opening: what stands between the badges

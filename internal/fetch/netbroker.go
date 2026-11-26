@@ -1,4 +1,4 @@
-//go:build request_type_amqp || request_type_nats
+//go:build request_type_amqp || request_type_nats || request_type_kafka
 
 package fetch
 
@@ -10,8 +10,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// What the amqp and nats request types share beyond nettypes.go: each
-// logs in to a broker with the collector's account, over TLS as its tls
+// What the amqp, nats and kafka request types share beyond nettypes.go:
+// each logs in to a broker with the collector's account, over TLS as its tls
 // block says, and shows what the broker said in a failure.
 
 // brokerTLSConfig is the tls block's configuration.

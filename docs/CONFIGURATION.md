@@ -3626,6 +3626,7 @@ twelve more:
 - `sip` asks a SIP server whether it answers; see [SIP](SIP.md).
 - `amqp` asks an AMQP broker how deep its queues are; see [AMQP](AMQP.md).
 - `nats` times a NATS server and reads its JetStream; see [NATS](NATS.md).
+- `kafka` reads a Kafka cluster's brokers, partitions and consumer groups' lag; see [Kafka](KAFKA.md).
 
 An uptime check of HTTP and HTTPS sites, like the one blackbox_exporter's
 `http` prober performs, is an `http` collector; see
@@ -3918,6 +3919,17 @@ asks for the account's JetStream state, and `streams` and `consumers` for
 each one named. `tls`, `max_response_bytes`, `allowed_targets` and
 `denied_targets` apply too. The decoder is `json`. Its table is in
 [NATS](NATS.md#a-collector).
+
+For `kafka`, an opt-in type, no key is required. The exporter reads the
+Kafka cluster that the target, a broker, is one of: its metadata, the newest
+and oldest offsets of the partitions of the chosen topics, and each chosen
+consumer group's state, members and committed offsets, on a connection to
+each broker it needs. It logs in with `username` and `password_file`, or the
+token in `bearer_token_file`, by `sasl_mechanism`. `include_topics`,
+`exclude_topics`, `internal_topics`, `include_groups` and `exclude_groups`
+choose what it reports. `tls` is for a target written `tls://`, and
+`max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
+decoder is `json`. Its table is in [Kafka](KAFKA.md#a-collector).
 <!-- /request-types -->
 
 When a request block sets several keys that it may not set (a key of
@@ -4036,6 +4048,10 @@ requires a `target`, the AMQP broker, `host`, `host:port` or `amqps://host`.
 
 `nats`, an opt-in type, accepts `timeout` and `param_<name>`, and
 requires a `target`, the NATS server, `host`, `host:port` or `tls://host`.
+
+`kafka`, an opt-in type, accepts `timeout` and `param_<name>`, and
+requires a `target`, a broker of the cluster, `host`, `host:port` or
+`tls://host:port`.
 <!-- /request-types -->
 
 `target`, `collector` and each of these parameters may be given once.
@@ -4137,8 +4153,8 @@ new-request-type OPT_IN=1` ([Adding a request type](DEVELOPMENT.md#adding-a-requ
 for a type that few deployments want in the binary. The opt-in types are
 [`smtp`](SMTP.md), [`modbus`](MODBUS.md), [`mqtt`](MQTT.md),
 [`websocket`](WEBSOCKET.md), [`ftp`](FTP.md), [`imap`](IMAP.md),
-[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md), [`sip`](SIP.md), [`amqp`](AMQP.md) and [`nats`](NATS.md), each written with the standard library alone: about
-0.1 MB of a stripped binary each, and about 0.8 MB for the twelve. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
+[`pop3`](POP3.md), [`radius`](RADIUS.md), [`whois`](WHOIS.md), [`sip`](SIP.md), [`amqp`](AMQP.md), [`nats`](NATS.md) and [`kafka`](KAFKA.md), each written with the standard library alone: about
+0.1 MB of a stripped binary each, `kafka` about 0.3 MB, and about 1 MB for the thirteen. `OPT_IN_REQUEST_TYPES`, the Makefile's variable and the
 Dockerfile's build argument, adds such types, comma-separated, to the types
 a build carries, whatever `REQUEST_TYPES` says. The tag alone,
 `request_type_<name>`, adds one to a default build. A build without an
@@ -8848,6 +8864,7 @@ changes nothing there.
 - [SIP.md](SIP.md) — the opt-in `sip` request type.
 - [AMQP.md](AMQP.md) — the opt-in `amqp` request type.
 - [NATS.md](NATS.md) — the opt-in `nats` request type.
+- [KAFKA.md](KAFKA.md) — the opt-in `kafka` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target, logging in to it, and credentials for the exporter itself.
 - [ENDPOINTS.md](ENDPOINTS.md) — what each endpoint takes and answers.
 - [FLAGS.md](FLAGS.md) — every command-line flag.

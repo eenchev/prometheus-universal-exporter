@@ -1,4 +1,4 @@
-//go:build !select_request_types || request_type_icmp || request_type_ntp || request_type_snmp || request_type_amqp || request_type_nats || request_type_radius || request_type_whois
+//go:build !select_request_types || request_type_icmp || request_type_ntp || request_type_snmp || request_type_amqp || request_type_nats || request_type_kafka || request_type_radius || request_type_whois
 
 package fetch
 

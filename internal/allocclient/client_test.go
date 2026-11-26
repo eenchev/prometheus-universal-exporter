@@ -909,13 +909,15 @@ func TestAnAnswerWithoutAChangeIsNotAskedAgainAtOnce(t *testing.T) {
 // A wake that brings no news, as from a heartbeat reply checked against the
 // bundle loop's last bundle just before the loop fetched the one it names,
 // does not cut short the wait after an answer without a change; one whose
-// reply named a bundle not yet fetched does.
+// reply named a bundle not yet fetched does. Each wake is sent once the loop
+// waits: one sent while the answer is still being handled is older than it,
+// and the loop drops it.
 func TestAWakeWithoutNewsDoesNotCutTheWaitShort(t *testing.T) {
 	a := newFakeAllocator(t)
 	a.noWait = true
 	const least = 300 * time.Millisecond
 	unchanged := make(chan time.Time, 256)
-	c := startClient(t, a, func(o *Options) {
+	c := newTestClient(t, a, t.TempDir(), func(o *Options) {
 		o.MinBackoff = least
 		o.Event = func(e Event) {
 			if e.Kind == EventUnchanged {
@@ -923,39 +925,52 @@ func TestAWakeWithoutNewsDoesNotCutTheWaitShort(t *testing.T) {
 			}
 		}
 	})
-	generation := a.serveFiles(map[string]string{"config.yaml": "c\n"})
-	var at time.Time
-	select {
-	case at = <-unchanged:
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for an answer without a change")
+	// The loop's own timer, which says when the loop begins to wait.
+	waiting, timer := make(chan struct{}, 64), c.newTimer
+	c.newTimer = func(d time.Duration) (<-chan time.Time, func() bool) {
+		fired, stop := timer(d)
+		waiting <- struct{}{}
+		return fired, stop
 	}
+	runClient(t, c)
+	await := func(what string, ch <-chan time.Time) time.Time {
+		t.Helper()
+		select {
+		case at := <-ch:
+			return at
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for " + what)
+		}
+		return time.Time{}
+	}
+	waits := func() {
+		t.Helper()
+		select {
+		case <-waiting:
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for the bundle loop to wait")
+		}
+	}
+	generation := a.serveFiles(map[string]string{"config.yaml": "c\n"})
+	at := await("an answer without a change", unchanged)
+	waits()
 	// The reply named the bundle the loop has, and woke it all the same.
 	c.mu.Lock()
 	c.heard = generation
 	c.mu.Unlock()
 	signal(c.wake)
-	select {
-	case next := <-unchanged:
-		if gap := next.Sub(at); gap < least {
-			t.Fatalf("a wake without news asked again after %s, before the least backoff of %s", gap, least)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for the next answer without a change")
+	if gap := await("the next answer without a change", unchanged).Sub(at); gap < least {
+		t.Fatalf("a wake without news asked again after %s, before the least backoff of %s", gap, least)
 	}
+	waits()
 	// A reply naming a bundle the loop has not fetched wakes it at once.
 	at = time.Now()
 	c.mu.Lock()
 	c.heard = "newer"
 	c.mu.Unlock()
 	signal(c.wake)
-	select {
-	case next := <-unchanged:
-		if gap := next.Sub(at); gap >= least {
-			t.Errorf("a wake with news waited %s, the whole least backoff", gap)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for the request a wake with news makes")
+	if gap := await("the request a wake with news makes", unchanged).Sub(at); gap >= least {
+		t.Errorf("a wake with news waited %s, the whole least backoff", gap)
 	}
 }
 

@@ -25,7 +25,7 @@ import (
 // partition 1 is under-replicated and not led by its preferred replica and
 // whose partition 2 is offline; a topic, payments; Kafka's own
 // __consumer_offsets; and three groups, billing and audit on brokers 2 and
-// 3, and lost, whose coordinator cannot be found.
+// 3, and locked, on broker 1, which the account may not describe.
 func kafkaCluster3(t *testing.T, secure bool) *kafkatest.Cluster {
 	t.Helper()
 	k := kafkatest.New(t, 3, secure)
@@ -45,7 +45,7 @@ func kafkaCluster3(t *testing.T, secure bool) *kafkatest.Cluster {
 			{Name: "billing", Protocol: "consumer", State: "Stable", Members: 2, Coordinator: 2,
 				Offsets: map[string]map[int32]int64{"orders": {0: 90, 1: 55, 2: -1}, "__consumer_offsets": {0: 1}}},
 			{Name: "audit", Protocol: "consumer", State: "Empty", Coordinator: 3, Offsets: map[string]map[int32]int64{"payments": {0: 3}}},
-			{Name: "lost", Protocol: "consumer", Coordinator: 1, CoordinatorError: kafkatest.CoordinatorNotAvailable},
+			{Name: "locked", Protocol: "consumer", Coordinator: 1, DescribeError: kafkatest.GroupAuthorization, Offsets: map[string]map[int32]int64{"orders": {0: 100}}},
 		}
 	})
 	return k
@@ -107,8 +107,10 @@ func kafkaJSON(t *testing.T, v any) string {
 // they hold where every partition's offsets are known; and its groups, with
 // their state, members and lag by topic and partition, a committed offset
 // past the newest read as no lag, a partition without one as no lag, and a
-// topic not chosen left out. A group whose coordinator cannot be found
-// says so, in its entry and among the errors. The request is traced and labelled by the broker, and the
+// topic not chosen left out. Each group is asked of the broker that lists
+// it, its coordinator, and none of FindCoordinator; one it refuses to
+// describe says so, in its entry and among the errors, and still has its
+// lag. The request is traced and labelled by the broker, and the
 // committed offsets are asked before the newest, so that a lag is not
 // negative.
 func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
@@ -123,7 +125,7 @@ func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
 	if err := json.Unmarshal(resp.Body, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if *doc.ClusterID != "stand-in-cluster" || doc.Controller != 1 || doc.TLS || doc.Address != k.Brokers[0].Addr || len(doc.Errors) != 1 || !strings.HasPrefix(doc.Errors[0], `finding the coordinator of group "lost"`) {
+	if *doc.ClusterID != "stand-in-cluster" || doc.Controller != 1 || doc.TLS || doc.Address != k.Brokers[0].Addr || len(doc.Errors) != 1 || doc.Errors[0] != `describing group "locked": GROUP_AUTHORIZATION_FAILED` {
 		t.Errorf("document %s", resp.Body)
 	}
 	brokers := []string{}
@@ -150,7 +152,7 @@ func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
 	}
 	want = `[{"group":"audit","protocol_type":"consumer","state":"Empty","members":0,"coordinator":3,"error":"","topics":[{"group":"audit","topic":"payments","committed_sum":3,"lag":4,"partitions":[{"partition":0,"committed":3,"lag":4,"error":""}]}]},` +
 		`{"group":"billing","protocol_type":"consumer","state":"Stable","members":2,"coordinator":2,"error":"","topics":[{"group":"billing","topic":"orders","committed_sum":145,"lag":10,"partitions":[{"partition":0,"committed":90,"lag":10,"error":""},{"partition":1,"committed":55,"lag":0,"error":""},{"partition":2,"committed":-1,"lag":null,"error":""}]}]},` +
-		`{"group":"lost","protocol_type":"consumer","state":null,"members":null,"coordinator":null,"error":"finding the coordinator of group \"lost\": The coordinator is not available.","topics":[]}]`
+		`{"group":"locked","protocol_type":"consumer","state":null,"members":null,"coordinator":1,"error":"describing group \"locked\": GROUP_AUTHORIZATION_FAILED","topics":[{"group":"locked","topic":"orders","committed_sum":100,"lag":0,"partitions":[{"partition":0,"committed":100,"lag":0,"error":""}]}]}]`
 	if got := kafkaJSON(t, doc.Groups); got != want {
 		t.Errorf("groups\n%s\nwant\n%s", got, want)
 	}
@@ -162,6 +164,11 @@ func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
 		t.Errorf("method %q, stage %q", method, stage)
 	}
 	asked := k.Asked()
+	for _, a := range asked {
+		if a.API == 10 {
+			t.Errorf("FindCoordinator was sent to broker %d", a.Broker)
+		}
+	}
 	lastFetch, firstList := -1, len(asked)
 	listedBy := map[int32]bool{}
 	for i, a := range asked {
@@ -192,10 +199,10 @@ func TestAKafkaScrapeReportsTheChosenTopicsAndGroups(t *testing.T) {
 		edit           func(*KafkaConfig)
 		topics, groups string
 	}{
-		{func(r *KafkaConfig) { r.IncludeTopics = []string{"ord"} }, "", "audit billing lost"},
-		{func(r *KafkaConfig) { r.IncludeTopics = []string{"pay", "ord.*"} }, "orders", "audit billing lost"},
-		{func(r *KafkaConfig) { r.ExcludeTopics = []string{"pay.*"} }, "orders", "audit billing lost"},
-		{func(r *KafkaConfig) { r.InternalTopics = true }, "__consumer_offsets orders payments", "audit billing lost"},
+		{func(r *KafkaConfig) { r.IncludeTopics = []string{"ord"} }, "", "audit billing locked"},
+		{func(r *KafkaConfig) { r.IncludeTopics = []string{"pay", "ord.*"} }, "orders", "audit billing locked"},
+		{func(r *KafkaConfig) { r.ExcludeTopics = []string{"pay.*"} }, "orders", "audit billing locked"},
+		{func(r *KafkaConfig) { r.InternalTopics = true }, "__consumer_offsets orders payments", "audit billing locked"},
 		{func(r *KafkaConfig) { r.IncludeGroups, r.ExcludeGroups = []string{"a.*", "b.*"}, []string{"audit"} }, "orders payments", "billing"},
 	} {
 		doc, err := kafkaDoc(t, kafkaCollector(t, func(_ *model.Collector, r *KafkaConfig) { check.edit(r) }), k.Brokers[1].Addr)
@@ -225,8 +232,10 @@ func TestAKafkaScrapeReportsTheChosenTopicsAndGroups(t *testing.T) {
 // refuses fails the scrape with what it said and without the password; a
 // mechanism it does not take names those it does; a SCRAM broker that
 // cannot prove it knows the password fails it, and one that asks for too
-// many iterations is not obeyed. A broker that takes a login refuses
-// every request before one.
+// many iterations is not obeyed. A token it does not take is refused, though
+// Kafka answers it with an error challenge rather than an error code. A
+// broker that takes a login refuses every request before one, and a
+// listener without SASL says it takes no login.
 func TestAKafkaScrapeLogsIn(t *testing.T) {
 	k := kafkaCluster3(t, false)
 	k.Edit(func(c *kafkatest.Cluster) {
@@ -257,6 +266,12 @@ func TestAKafkaScrapeLogsIn(t *testing.T) {
 			t.Errorf("%s with a wrong password: %v", mechanism, err)
 		}
 	}
+	// A token the broker does not take is answered with an error challenge
+	// and no error code, as Kafka does, which is a refusal all the same.
+	wrongToken := kafkaCollector(t, func(c *model.Collector, _ *KafkaConfig) { c.Request.BearerTokenFile = kafkaFile(t, "wr0ng-token") })
+	if _, err := kafkaDoc(t, wrongToken, k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), `refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`) || strings.Contains(err.Error(), "wr0ng-token") {
+		t.Errorf("a token not taken: %v", err)
+	}
 	k.Edit(func(c *kafkatest.Cluster) { c.Mechanisms = []string{"SCRAM-SHA-512"} })
 	if _, err := kafkaDoc(t, account("PLAIN", "monitor", "s3cret-pw"), k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "does not take the SASL mechanism PLAIN (UNSUPPORTED_SASL_MECHANISM); it takes SCRAM-SHA-512") {
 		t.Errorf("a mechanism the broker does not take: %v", err)
@@ -271,6 +286,11 @@ func TestAKafkaScrapeLogsIn(t *testing.T) {
 	}
 	if _, err := kafkaDoc(t, kafkaCollector(t, nil), k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "closed the connection while reading the answer to Metadata") {
 		t.Errorf("no login where one is needed: %v", err)
+	}
+	// A login sent to a listener without SASL says so.
+	plain := kafkaCluster3(t, false)
+	if _, err := kafkaDoc(t, account("PLAIN", "monitor", "s3cret-pw"), plain.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "takes no SASL login on this listener (ILLEGAL_SASL_STATE)") {
+		t.Errorf("a login where none is taken: %v", err)
 	}
 }
 
@@ -299,7 +319,7 @@ func TestAKafkaScramLoginIsRFC7677s(t *testing.T) {
 // A broker that cannot be reached once the metadata is read, or that the
 // collector's lists refuse by its name, does not fail the scrape: what it
 // would have said is missing, the groups it alone lists among it, and
-// errors says why. The target refused, or
+// errors says why. So does one whose address no connection can use. The target refused, or
 // unreachable, fails it.
 func TestAKafkaScrapeGoesOnWithoutABroker(t *testing.T) {
 	k := kafkaCluster3(t, false)
@@ -310,7 +330,7 @@ func TestAKafkaScrapeGoesOnWithoutABroker(t *testing.T) {
 	}
 	errs := strings.Join(doc.Errors, "\n")
 	if len(doc.Errors) != 3 || !strings.Contains(errs, "listing the groups of broker 3: connecting to "+k.Brokers[2].Addr) ||
-		!strings.Contains(errs, "asking broker 3 for its partitions' offsets: connecting to "+k.Brokers[2].Addr) || !strings.Contains(errs, `group "lost"`) {
+		!strings.Contains(errs, "asking broker 3 for its partitions' offsets: connecting to "+k.Brokers[2].Addr) || !strings.Contains(errs, `group "locked"`) {
 		t.Errorf("errors %q", doc.Errors)
 	}
 	if p := doc.Topics[0].Partitions[1]; p.Newest != nil || !strings.Contains(p.Error, "broker 3") {
@@ -322,6 +342,25 @@ func TestAKafkaScrapeGoesOnWithoutABroker(t *testing.T) {
 	// Broker 3 alone lists audit, the group it coordinates.
 	if len(doc.Groups) != 2 || doc.Groups[0].Group != "billing" || doc.Groups[0].Topics[0].Lag == nil {
 		t.Errorf("groups %s", kafkaJSON(t, doc.Groups))
+	}
+
+	// A partition whose metadata has an error keeps it, though its offsets
+	// are missing for another reason too.
+	early := kafkaCluster3(t, false)
+	early.Edit(func(c *kafkatest.Cluster) { c.Topics[0].Partitions[1].Error = 5 })
+	early.Stop(3)
+	doc, err = kafkaDoc(t, kafkaCollector(t, nil), early.Brokers[0].Addr)
+	if err != nil || doc.Topics[0].Partitions[1].Error != "LEADER_NOT_AVAILABLE" {
+		t.Errorf("a partition the metadata says has no leader available: %v, %s", err, kafkaJSON(t, doc.Topics[0].Partitions[1]))
+	}
+
+	// A broker whose address no connection can use is one of the errors
+	// too.
+	odd := kafkaCluster3(t, false)
+	odd.Edit(func(c *kafkatest.Cluster) { c.Brokers[2].Host = "kafka 3" })
+	doc, err = kafkaDoc(t, kafkaCollector(t, nil), odd.Brokers[0].Addr)
+	if err != nil || !strings.Contains(strings.Join(doc.Errors, "\n"), `listing the groups of broker 3: broker 3's address kafka 3:`) {
+		t.Errorf("a broker of an address no connection can use: %v, %q", err, doc.Errors)
 	}
 
 	named := kafkaCluster3(t, false)

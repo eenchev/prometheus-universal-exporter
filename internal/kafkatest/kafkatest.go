@@ -9,8 +9,8 @@
 //     test gave it, refusing every other request before a login when it
 //     has mechanisms;
 //   - Metadata, of the brokers, topics and partitions the test gave it;
-//   - ListGroups, of the groups each broker coordinates, FindCoordinator,
-//     DescribeGroups and OffsetFetch;
+//   - ListGroups, of the groups each broker coordinates, DescribeGroups
+//     and OffsetFetch;
 //   - ListOffsets, of the partitions each broker leads, NOT_LEADER for the
 //     rest.
 //
@@ -49,7 +49,6 @@ const (
 	ListOffsets      int16 = 2
 	Metadata         int16 = 3
 	OffsetFetch      int16 = 9
-	FindCoordinator  int16 = 10
 	DescribeGroups   int16 = 15
 	ListGroups       int16 = 16
 	SaslHandshake    int16 = 17
@@ -59,10 +58,10 @@ const (
 
 // Error codes a test may set.
 const (
-	CoordinatorNotAvailable int16 = 15
-	NotLeader               int16 = 6
-	TopicAuthorization      int16 = 29
-	GroupIDNotFound         int16 = 69
+	NotLeader          int16 = 6
+	TopicAuthorization int16 = 29
+	GroupAuthorization int16 = 30
+	GroupIDNotFound    int16 = 69
 )
 
 // Cluster is a stand-in Kafka cluster. Its fields are read under its lock
@@ -120,22 +119,23 @@ type Topic struct {
 }
 
 // Partition is a partition: its leader, -1 for none, its replicas, in sync
-// and offline, and its newest and oldest offsets.
+// and offline, its newest and oldest offsets, and the error the metadata
+// gives it.
 type Partition struct {
 	Leader                 int32
 	Replicas, ISR, Offline []int32
 	Newest, Oldest         int64
+	Error                  int16
 }
 
-// Group is a consumer group, coordinated by Coordinator, with the offsets
-// it committed by topic and partition. CoordinatorError fails
-// FindCoordinator for it and DescribeError DescribeGroups.
+// Group is a consumer group, coordinated by Coordinator, which lists it,
+// with the offsets it committed by topic and partition. DescribeError fails
+// DescribeGroups for it.
 type Group struct {
 	Name, Protocol, State string
 	Members               int
 	Coordinator           int32
 	Offsets               map[string]map[int32]int64
-	CoordinatorError      int16
 	DescribeError         int16
 }
 
@@ -253,6 +253,7 @@ func (c *Cluster) broker(id int32) *Broker {
 // between its two messages.
 type session struct {
 	authed     bool
+	challenged bool
 	mechanism  string
 	user       string
 	firstBare  string
@@ -309,7 +310,7 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 	w := &writer{}
 	switch api {
 	case APIVersions:
-		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, FindCoordinator: {0, 5}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, SaslAuthenticate: {0, 2}}
+		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, SaslAuthenticate: {0, 2}}
 		for key, versions := range c.Versions {
 			spoken[key] = versions
 		}
@@ -328,9 +329,12 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 		w.i32(0)
 	case SaslHandshake:
 		s.mechanism = r.str()
-		if slices.Contains(c.Mechanisms, s.mechanism) {
+		switch {
+		case len(c.Mechanisms) == 0:
+			w.i16(34) // ILLEGAL_SASL_STATE, as a listener without SASL answers
+		case slices.Contains(c.Mechanisms, s.mechanism):
 			w.i16(0)
-		} else {
+		default:
 			w.i16(33)
 		}
 		w.count(len(c.Mechanisms))
@@ -369,7 +373,7 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 			w.bool(t.Internal)
 			w.count(len(t.Partitions))
 			for i, p := range t.Partitions {
-				w.i16(0)
+				w.i16(p.Error)
 				w.count(i)
 				w.i32(p.Leader)
 				w.i32(0)
@@ -392,29 +396,6 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 			w.str(g.Name)
 			w.str(g.Protocol)
 		}
-	case FindCoordinator:
-		key := r.str()
-		w.i32(0)
-		g := c.group(key)
-		if g == nil || g.CoordinatorError != 0 {
-			code := CoordinatorNotAvailable
-			if g != nil {
-				code = g.CoordinatorError
-			}
-			w.i16(code)
-			w.str("The coordinator is not available.")
-			w.i32(-1)
-			w.str("")
-			w.i32(-1)
-			break
-		}
-		b := c.broker(g.Coordinator)
-		_, port, _ := net.SplitHostPort(b.Addr)
-		w.i16(0)
-		w.i16(-1)
-		w.i32(b.ID)
-		w.str(b.Host)
-		w.i32(atoi(port))
 	case DescribeGroups:
 		n := r.i32()
 		w.i32(0)
@@ -553,8 +534,15 @@ func (c *Cluster) authenticate(s *session, message []byte) ([]byte, string) {
 		s.authed = true
 		return nil, ""
 	case "OAUTHBEARER":
-		if string(message) != "n,,\x01auth=Bearer "+c.Token+"\x01\x01" {
+		// A token not taken is answered as Kafka answers it: an error
+		// challenge, as JSON, with no error code, and the login failed at
+		// the client's %x01 after it.
+		switch {
+		case string(message) == "\x01" && s.challenged:
 			return nil, "Authentication failed: invalid token"
+		case string(message) != "n,,\x01auth=Bearer "+c.Token+"\x01\x01":
+			s.challenged = true
+			return []byte(`{"status":"invalid_token"}`), ""
 		}
 		s.authed = true
 		return nil, ""

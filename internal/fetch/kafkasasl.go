@@ -67,7 +67,12 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 	if err := c.decoded(kafkaSaslHandshake, r); err != nil {
 		return err
 	}
-	if code != 0 {
+	switch {
+	case code != 0 && len(enabled) == 0:
+		// A listener without SASL answers so, as Kafka's PLAINTEXT and SSL
+		// listeners do.
+		return fmt.Errorf("%s takes no SASL login on this listener (%s): leave request.username, password_file and bearer_token_file out, or reach a listener that takes one", c.broker, kafkaError(code))
+	case code != 0:
 		return fmt.Errorf("%s does not take the SASL mechanism %s (%s); it takes %s: set request.sasl_mechanism to one of them", c.broker, l.mechanism, kafkaError(code), brokerSaid(strings.Join(enabled, ", ")))
 	}
 	authenticate := func(message []byte) ([]byte, error) {
@@ -99,8 +104,16 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 		_, err := authenticate([]byte("\x00" + l.username + "\x00" + l.password))
 		return err
 	case kafkaOAuthBearer:
-		_, err := authenticate([]byte("n,,\x01auth=Bearer " + l.token + "\x01\x01"))
-		return err
+		answer, err := authenticate([]byte("n,,\x01auth=Bearer " + l.token + "\x01\x01"))
+		if err != nil || len(answer) == 0 {
+			return err
+		}
+		// A token the broker does not take is answered with an error, as
+		// JSON, in place of the empty answer of a login done (RFC 7628,
+		// 3.2.2); the client ends the exchange with %x01, which the broker
+		// then fails.
+		_, _ = authenticate([]byte{1})
+		return fmt.Errorf("%s refused the OAUTHBEARER login of the token: %s", c.broker, brokerSaid(string(answer)))
 	}
 	return c.scram(l, authenticate)
 }

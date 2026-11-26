@@ -79,7 +79,7 @@ collectors:
 | `bearer_token_file` | — | The token of an OAUTHBEARER login, in place of an account. The file is read at each scrape. |
 | `sasl_mechanism` | see notes | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` or `OAUTHBEARER`. Left out, `PLAIN` with a username, `OAUTHBEARER` with a token file, and no login without either. |
 | `include_topics`, `exclude_topics` | every topic | Regular expressions ([RE2](https://github.com/google/re2/wiki/Syntax)), at most 100 each. A topic is reported when its whole name matches one of `include_topics`, or that key is left out, and none of `exclude_topics`. |
-| `internal_topics` | `false` | Report Kafka's own topics too, such as `__consumer_offsets`. |
+| `internal_topics` | `false` | Report Kafka's own topics too, such as `__consumer_offsets`. Without it they are left out whatever `include_topics` says. |
 | `include_groups`, `exclude_groups` | every group | The same, for consumer groups. |
 | `tls` | — | How each broker's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls), when the target says `tls://`. |
 | `max_response_bytes` | `10MiB` | The most bytes the brokers' answers come to, together, in one scrape. |
@@ -127,10 +127,9 @@ from the exporter, as from any Kafka client.
    controller, the topics, and each partition's leader, replicas, replicas
    in sync and offline replicas.
 3. It asks every broker for the consumer groups that it coordinates
-   (`ListGroups`). It then finds each chosen group's coordinator
-   (`FindCoordinator`) and asks the coordinator for the group's state and
-   members (`DescribeGroups`) and for its committed offsets
-   (`OffsetFetch`).
+   (`ListGroups`). It then asks the broker that listed each chosen group,
+   its coordinator, for the group's state and members (`DescribeGroups`)
+   and for its committed offsets (`OffsetFetch`).
 4. It asks each partition's leader for the partition's newest and oldest
    offsets (`ListOffsets`). It does so after the committed offsets, so that
    a lag read at once is not negative.
@@ -140,8 +139,8 @@ The brokers are asked at once, and every connection is closed when the
 scrape ends.
 
 Each request is sent at the version a Kafka 2.1 client sends: Metadata v7,
-ListOffsets v4, OffsetFetch v5, FindCoordinator v2, DescribeGroups v2,
-ListGroups v2 and ApiVersions v2. Kafka 4 keeps those versions and removed
+ListOffsets v4, OffsetFetch v5, DescribeGroups v2, ListGroups v2 and
+ApiVersions v2. Kafka 4 keeps those versions and removed
 the older ones, so one version of each reaches every broker from 2.1 on, and
 Redpanda and the cloud services that speak Kafka's protocol too.
 
@@ -207,13 +206,18 @@ theirs that is chosen.
 - A partition that the group has committed nothing to has `committed: -1`
   and `lag: null`, and counts in neither sum. A topic's `lag` is `null`
   when none of its partitions has a lag.
-- A group whose coordinator could not be found or asked has its `error`, and
-  `state`, `members` and `coordinator` are `null`.
+- `coordinator` is the ID of the broker that listed the group.
+- A group whose coordinator could not be asked, or that it refused to
+  describe, such as one the account may not describe, has its `error`, and
+  `state` and `members` are `null`. Its committed offsets and lag are kept
+  when the coordinator gave them.
 
 **Errors.** A scrape that reaches the target but not every other broker does
 not fail. What the missing broker would have said is missing from the
-document, and `errors` lists each thing that went wrong, as a sentence
-naming the broker, the group or the request. The groups that a missing
+document. `errors` lists each broker that could not be asked and each
+group that could not be described, as a sentence naming the broker or the
+group and the request. A partition whose offsets are missing says why in
+its own `error`. The groups that a missing
 broker coordinates are missing too, since only it lists them. A rule such
 as `.errors | length` tells a partial answer apart.
 
@@ -338,6 +342,15 @@ done here: see [Limitations](#limitations).
 - **`closed the connection while reading the answer to Metadata`.** The
   broker takes only logged-in clients; set the account or the token, and
   `sasl_mechanism`.
+- **`takes no SASL login on this listener`.** The listener is Kafka's
+  `PLAINTEXT` or `SSL` one, which takes no login; leave the account and
+  the token out, or reach the `SASL_PLAINTEXT` or `SASL_SSL` listener,
+  which is often on another port.
+- **`refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`.**
+  The broker does not take the token: it has expired, or it was issued
+  for another audience or by an issuer the broker does not trust. The
+  token file is read at each scrape, so a renewed token is used at the
+  next.
 - **`does not take the SASL mechanism PLAIN …; it takes SCRAM-SHA-512`.**
   Set `sasl_mechanism` to one it takes.
 - **`errors` says `connecting to kafka-0.kafka-headless:9092`.** The
@@ -345,7 +358,8 @@ done here: see [Limitations](#limitations).
   where the brokers' advertised listeners are reachable, or give the
   cluster a listener that advertises such names.
 - **A group is missing.** Only its coordinator lists it: when that broker
-  cannot be reached, `errors` names it. A group that has never committed
-  an offset and has no members is not listed by Kafka at all.
+  cannot be reached, `errors` names it. Kafka also forgets a group that
+  has no members once its committed offsets expire
+  (`offsets.retention.minutes`, a week by default).
 - **`lag` is `null`.** The group has committed no offset of the partition,
   or its leader could not be asked; the partition's `error` says which.

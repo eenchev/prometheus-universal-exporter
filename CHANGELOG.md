@@ -24,6 +24,13 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   share of their weight on its box, such as `12 targets · 34%`, and draws an
   overloaded exporter's box in red.
 
+### Fixed
+
+- `sql` with `keepalive.check: ping`: a keepalive round that started too
+  late to take an idle connection within its interval, as on a busy
+  exporter, counted a failure in `http_exporter_sql_keepalive_failures_total`
+  though no ping was sent. It is now skipped.
+
 ## chart 2.2.0
 
 ### What changed for you

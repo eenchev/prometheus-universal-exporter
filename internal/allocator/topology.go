@@ -18,8 +18,10 @@ import (
 // A line is dashed, and its text says why, for an overdue heartbeat, a
 // member silent, gone, shutting down or heartbeating from two exporters,
 // and a peer whose last check failed, down or never checked. Of more than
-// topologyMost members, those not well are drawn first (shownMembers). The
-// members table and the peers table say the same in text.
+// topologyMost members, those not well are drawn first (shownMembers). With
+// the spread, a member's box has a third line, its targets and its share of
+// their weight, red for an overloaded member (memberShare). The members
+// table, the peers table and the spread's table say the same in text.
 
 // The diagram's sizes, in pixels: a node's box, the hub's, the gaps a line
 // spans between the peers and the hub and between the hub and the members,

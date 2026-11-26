@@ -232,8 +232,10 @@ func TestAKafkaScrapeReportsTheChosenTopicsAndGroups(t *testing.T) {
 // refuses fails the scrape with what it said and without the password; a
 // mechanism it does not take names those it does; a SCRAM broker that
 // cannot prove it knows the password fails it, and one that asks for too
-// many iterations is not obeyed. A broker that takes a login refuses
-// every request before one.
+// many iterations is not obeyed. A token it does not take is refused, though
+// Kafka answers it with an error challenge rather than an error code. A
+// broker that takes a login refuses every request before one, and a
+// listener without SASL says it takes no login.
 func TestAKafkaScrapeLogsIn(t *testing.T) {
 	k := kafkaCluster3(t, false)
 	k.Edit(func(c *kafkatest.Cluster) {
@@ -264,6 +266,12 @@ func TestAKafkaScrapeLogsIn(t *testing.T) {
 			t.Errorf("%s with a wrong password: %v", mechanism, err)
 		}
 	}
+	// A token the broker does not take is answered with an error challenge
+	// and no error code, as Kafka does, which is a refusal all the same.
+	wrongToken := kafkaCollector(t, func(c *model.Collector, _ *KafkaConfig) { c.Request.BearerTokenFile = kafkaFile(t, "wr0ng-token") })
+	if _, err := kafkaDoc(t, wrongToken, k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), `refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`) || strings.Contains(err.Error(), "wr0ng-token") {
+		t.Errorf("a token not taken: %v", err)
+	}
 	k.Edit(func(c *kafkatest.Cluster) { c.Mechanisms = []string{"SCRAM-SHA-512"} })
 	if _, err := kafkaDoc(t, account("PLAIN", "monitor", "s3cret-pw"), k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "does not take the SASL mechanism PLAIN (UNSUPPORTED_SASL_MECHANISM); it takes SCRAM-SHA-512") {
 		t.Errorf("a mechanism the broker does not take: %v", err)
@@ -278,6 +286,11 @@ func TestAKafkaScrapeLogsIn(t *testing.T) {
 	}
 	if _, err := kafkaDoc(t, kafkaCollector(t, nil), k.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "closed the connection while reading the answer to Metadata") {
 		t.Errorf("no login where one is needed: %v", err)
+	}
+	// A login sent to a listener without SASL says so.
+	plain := kafkaCluster3(t, false)
+	if _, err := kafkaDoc(t, account("PLAIN", "monitor", "s3cret-pw"), plain.Brokers[0].Addr); err == nil || !strings.Contains(err.Error(), "takes no SASL login on this listener (ILLEGAL_SASL_STATE)") {
+		t.Errorf("a login where none is taken: %v", err)
 	}
 }
 

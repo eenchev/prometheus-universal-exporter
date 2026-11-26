@@ -253,6 +253,7 @@ func (c *Cluster) broker(id int32) *Broker {
 // between its two messages.
 type session struct {
 	authed     bool
+	challenged bool
 	mechanism  string
 	user       string
 	firstBare  string
@@ -328,9 +329,12 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 		w.i32(0)
 	case SaslHandshake:
 		s.mechanism = r.str()
-		if slices.Contains(c.Mechanisms, s.mechanism) {
+		switch {
+		case len(c.Mechanisms) == 0:
+			w.i16(34) // ILLEGAL_SASL_STATE, as a listener without SASL answers
+		case slices.Contains(c.Mechanisms, s.mechanism):
 			w.i16(0)
-		} else {
+		default:
 			w.i16(33)
 		}
 		w.count(len(c.Mechanisms))
@@ -530,8 +534,15 @@ func (c *Cluster) authenticate(s *session, message []byte) ([]byte, string) {
 		s.authed = true
 		return nil, ""
 	case "OAUTHBEARER":
-		if string(message) != "n,,\x01auth=Bearer "+c.Token+"\x01\x01" {
+		// A token not taken is answered as Kafka answers it: an error
+		// challenge, as JSON, with no error code, and the login failed at
+		// the client's %x01 after it.
+		switch {
+		case string(message) == "\x01" && s.challenged:
 			return nil, "Authentication failed: invalid token"
+		case string(message) != "n,,\x01auth=Bearer "+c.Token+"\x01\x01":
+			s.challenged = true
+			return []byte(`{"status":"invalid_token"}`), ""
 		}
 		s.authed = true
 		return nil, ""

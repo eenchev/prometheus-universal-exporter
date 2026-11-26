@@ -52,12 +52,15 @@ message and send no request that changes the cluster.
   `tls://host:port`.
 - With a mechanism, every connection MUST log in after ApiVersions, by
   SaslHandshake and SaslAuthenticate. A mechanism that the broker does not
-  take MUST fail it, naming those it does. PLAIN MUST send the user and the
-  password (RFC 4616), OAUTHBEARER the token (RFC 7628), and SCRAM MUST
-  follow RFC 5802 with SHA-256 or SHA-512: a nonce of 24 random bytes, a
-  user's `=` and `,` escaped. It MUST refuse a server nonce that does not
-  extend the client's, more than 100,000 iterations, and a server signature
-  that does not match. A refused login MUST say what the broker said and
+  take MUST fail it, naming those it does, and a listener that takes none
+  MUST fail it saying so. PLAIN MUST send the user and the password
+  (RFC 4616), and OAUTHBEARER the token (RFC 7628): an answer to the token
+  that is not empty is the broker's error, which the client MUST end with
+  `%x01` and MUST fail the login with. SCRAM MUST follow RFC 5802 with
+  SHA-256 or SHA-512: a nonce of 24 random bytes, a user's `=` and `,`
+  escaped. It MUST refuse a server nonce that does not extend the
+  client's, more than 100,000 iterations, and a server signature that does
+  not match. A refused login MUST say what the broker said and
   MUST NOT show the password or the token.
 - A scrape MUST ask the target the cluster's metadata for every topic,
   without creating one. It MUST then ask every broker the metadata lists

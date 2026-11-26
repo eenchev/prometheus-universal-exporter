@@ -79,7 +79,7 @@ collectors:
 | `bearer_token_file` | — | The token of an OAUTHBEARER login, in place of an account. The file is read at each scrape. |
 | `sasl_mechanism` | see notes | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` or `OAUTHBEARER`. Left out, `PLAIN` with a username, `OAUTHBEARER` with a token file, and no login without either. |
 | `include_topics`, `exclude_topics` | every topic | Regular expressions ([RE2](https://github.com/google/re2/wiki/Syntax)), at most 100 each. A topic is reported when its whole name matches one of `include_topics`, or that key is left out, and none of `exclude_topics`. |
-| `internal_topics` | `false` | Report Kafka's own topics too, such as `__consumer_offsets`. |
+| `internal_topics` | `false` | Report Kafka's own topics too, such as `__consumer_offsets`. Without it they are left out whatever `include_topics` says. |
 | `include_groups`, `exclude_groups` | every group | The same, for consumer groups. |
 | `tls` | — | How each broker's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls), when the target says `tls://`. |
 | `max_response_bytes` | `10MiB` | The most bytes the brokers' answers come to, together, in one scrape. |
@@ -342,6 +342,15 @@ done here: see [Limitations](#limitations).
 - **`closed the connection while reading the answer to Metadata`.** The
   broker takes only logged-in clients; set the account or the token, and
   `sasl_mechanism`.
+- **`takes no SASL login on this listener`.** The listener is Kafka's
+  `PLAINTEXT` or `SSL` one, which takes no login; leave the account and
+  the token out, or reach the `SASL_PLAINTEXT` or `SASL_SSL` listener,
+  which is often on another port.
+- **`refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`.**
+  The broker does not take the token: it has expired, or it was issued
+  for another audience or by an issuer the broker does not trust. The
+  token file is read at each scrape, so a renewed token is used at the
+  next.
 - **`does not take the SASL mechanism PLAIN …; it takes SCRAM-SHA-512`.**
   Set `sasl_mechanism` to one it takes.
 - **`errors` says `connecting to kafka-0.kafka-headless:9092`.** The

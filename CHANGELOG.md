@@ -16,6 +16,30 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### What changed for you
 
+- Nothing; you can upgrade without changes.
+
+## chart 2.2.0
+
+### What changed for you
+
+- Deploys exporter 2.2.0: read its `### What changed for you` before
+  upgrading. With `allocator.enabled` in a cluster whose pods have IPv6
+  addresses, the exporter pods now start, where each stopped at once on
+  the `--allocator.advertise` the chart writes from the pod's IP.
+
+### Fixed
+
+- Chart: an empty block in a values file, such as `ingress:` or
+  `autoscaling:` with every key under it commented out, is a null to Helm,
+  which removes the chart's defaults under it, and rendering failed with
+  `nil pointer evaluating interface {}.enabled`, naming no key. It now
+  fails naming the block and saying what to do
+  ([Values](charts/prometheus-universal-exporter/README.md#values)).
+
+## exporter 2.2.0
+
+### What changed for you
+
 - In a request's body, header, query and type's own templated values, a
   `{{` followed directly by the name of a clock format (`{{date}}`,
   `{{unix_ms|number}}`, `{{time:-1h}}` and the rest below) is now a clock
@@ -390,12 +414,6 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   refusal now leaves its heartbeats as soon as the allocator serves the
   bundle it has in force
   ([Heartbeats](docs/ALLOCATOR.md#heartbeats)).
-- Chart: an empty block in a values file, such as `ingress:` or
-  `autoscaling:` with every key under it commented out, is a null to Helm,
-  which removes the chart's defaults under it, and rendering failed with
-  `nil pointer evaluating interface {}.enabled`, naming no key. It now
-  fails naming the block and saying what to do
-  ([Values](charts/prometheus-universal-exporter/README.md#values)).
 - A `sql` scrape that took from its pool a connection PostgreSQL had ended
   while it was idle — `idle_session_timeout`, `pg_terminate_backend` —
   failed with `SQLSTATE 57P05` or `57P01`, and with a timeout shorter than

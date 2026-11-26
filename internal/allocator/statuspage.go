@@ -195,10 +195,12 @@ type filterForm struct {
 }
 
 // statusPage is what the page's template renders: the status, with the
-// spread laid out for its table and bars.
+// spread laid out for its table and bars, and the diagram of this
+// instance, its peers and its members (topologyOf), nil for none.
 type statusPage struct {
 	Status
-	View spreadView
+	View     spreadView
+	Topology *topologyView
 }
 
 // spreadView is the spread as the table shows it: a row for each member,
@@ -232,7 +234,7 @@ type spreadRow struct {
 }
 
 func statusPageOf(s Status) statusPage {
-	page := statusPage{Status: s}
+	page := statusPage{Status: s, Topology: topologyOf(s)}
 	sp := s.Spread
 	if sp == nil {
 		return page
@@ -411,9 +413,9 @@ div.notice.warning { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var
 div.notice.warning p { margin: 0; }
 div.notice.warning ul { margin: 6px 0 0; padding-left: 20px; }
 code.shard-key { overflow-wrap: anywhere; }
-:root { --bar-static: #c2410c; --bar-probe: #2563eb; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; } }
-:root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; }
+:root { --bar-static: #c2410c; --bar-probe: #2563eb; --node-allocator: #7c3aed; --node-allocator-bg: #f3effe; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bar-static: #e26a35; --bar-probe: #4d8fea; --node-allocator: #a78bfa; --node-allocator-bg: #2a2342; } }
+:root[data-theme="dark"] { --bar-static: #e26a35; --bar-probe: #4d8fea; --node-allocator: #a78bfa; --node-allocator-bg: #2a2342; }
 td.bar { width: 32%; min-width: 120px; }
 /* On the first line of the row, beside the counts, however the member's
    id wraps: 12px centred in a 21px line. A segment's width is its share
@@ -443,6 +445,39 @@ th.group { text-align: center; border-bottom: 1px solid var(--line); }
    does not push the table past the page's edge. */
 td.sources { min-width: 10em; }
 td.sources span.source { overflow-wrap: anywhere; }
+/* The diagram (topology.go) is drawn at its own size times the zoom, so its
+   text stays legible, in a window that scrolls. The leader is filled in the
+   accent colour, the other allocator instances in purple and the members in
+   the panel's grey; a line that is not well is dashed as well as red. */
+figure.topology { margin: 0; }
+/* The diagram is drawn in a window of a fixed height, which scrolls both
+   ways, so many members do not push the tables below down the page. The
+   page's script zooms it (zoomDiagram). */
+.topology-window { max-height: 480px; overflow: auto; border: 1px solid var(--field); border-radius: 8px; }
+/* On a phone the hint wraps below the buttons, and a button's word is kept
+   whole, where the page's overflow-wrap would break "Reset" in two. */
+.topology-zoom { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
+.topology-zoom[hidden] { display: none; }
+.topology-zoom button { flex: none; white-space: nowrap; overflow-wrap: normal; height: 28px; min-width: 32px; padding: 0 10px; font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--field); border-radius: 6px; cursor: pointer; }
+.topology-zoom button:disabled { color: var(--muted); cursor: default; }
+.topology-zoom output { min-width: 4em; text-align: center; color: var(--muted); }
+figure.topology svg { display: block; max-width: none; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+figure.topology figcaption { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.topology .node rect { fill: var(--panel); stroke: var(--field); stroke-width: 1; }
+.topology .node text { fill: var(--fg); text-anchor: middle; }
+.topology .node text.name { font-weight: 600; }
+.topology .node text.sub { fill: var(--muted); font-size: 12px; }
+.topology .node.allocator rect { fill: var(--node-allocator-bg); stroke: var(--node-allocator); stroke-width: 1.5; }
+.topology .node.master rect { fill: var(--accent); stroke: var(--accent); }
+.topology .node.master text, .topology .node.master text.sub { fill: var(--on-accent); }
+.topology .node.hub rect { stroke-width: 2; }
+.topology .node.down rect { stroke: var(--bad); stroke-dasharray: 4 3; }
+.topology a:focus-visible rect, .topology a:hover rect { stroke: var(--accent); stroke-width: 2; }
+.topology line.edge { stroke: var(--muted); stroke-width: 1.5; }
+.topology line.edge.late, .topology line.edge.down { stroke: var(--bad); stroke-dasharray: 6 4; }
+.topology text.edge-label { fill: var(--muted); font-size: 12px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.topology text.edge-label.late, .topology text.edge-label.down { fill: var(--bad); }
+.topology text.more { fill: var(--muted); font-size: 12px; }
 form.filter.jobs { margin: 0 0 8px; }
 form.filter.jobs input[type="search"] { flex: none; width: 100%; box-sizing: border-box; }
 /* On a phone the label is "Instance" over "ID", so the column is no wider
@@ -620,6 +655,95 @@ var statusFrame = `<!DOCTYPE html>
 ` + pagekit.SortableScript + pagekit.LocalTimesScript + `
   const arrangeJobs = sortable(content, "probe-jobs", "jobs-filter", "probe jobs");
   localTimes(content);
+  // The status page's diagram is drawn in a window that scrolls. Its
+  // buttons, which the page hides without JavaScript, zoom it a step in or
+  // out, from half its size to twice, and Ctrl with the mouse wheel, or a
+  // trackpad's pinch, zooms it around the pointer. Browsers send a pinch as
+  // the wheel with Ctrl, and Safari as gesture events. A zoom keeps the
+  // point under the pointer, or the window's middle, where it is. The SVG
+  // is drawn at its size times the zoom; its viewBox keeps the drawing
+  // sharp. The diagram first drawn, and Reset, put the leader's box in the
+  // window's middle, as far as the window scrolls (onLeader). A refresh
+  // swaps the diagram, so the zoom and where the window was scrolled to are
+  // drawn again on the new one (keepDiagram).
+  const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];
+  let zoom = 1;
+  function zoomDiagram(to, x, y) {
+    const svg = content.querySelector("figure.topology svg");
+    if (!svg) return;
+    const box = svg.parentElement, bar = content.querySelector(".topology-zoom");
+    to = Math.min(zoomSteps[zoomSteps.length - 1], Math.max(zoomSteps[0], to));
+    if (x === undefined) [x, y] = [box.clientWidth / 2, box.clientHeight / 2];
+    const at = [(box.scrollLeft + x) / zoom, (box.scrollTop + y) / zoom];
+    zoom = to;
+    svg.setAttribute("width", Number(svg.getAttribute("data-width")) * zoom);
+    svg.setAttribute("height", Number(svg.getAttribute("data-height")) * zoom);
+    box.scrollLeft = at[0] * zoom - x;
+    box.scrollTop = at[1] * zoom - y;
+    bar.hidden = false;
+    bar.querySelector("output").textContent = Math.round(zoom * 100) + "%";
+    bar.querySelector('[data-zoom="out"]').disabled = zoom <= zoomSteps[0];
+    bar.querySelector('[data-zoom="in"]').disabled = zoom >= zoomSteps[zoomSteps.length - 1];
+  }
+  function onLeader(box) {
+    const svg = box.querySelector("svg");
+    box.scrollLeft = Number(svg.getAttribute("data-focus-x")) * zoom - box.clientWidth / 2;
+    box.scrollTop = Number(svg.getAttribute("data-focus-y")) * zoom - box.clientHeight / 2;
+  }
+  content.addEventListener("click", (event) => {
+    const button = event.target.closest(".topology-zoom button");
+    if (!button) return;
+    const step = button.dataset.zoom;
+    if (step === "reset") {
+      zoomDiagram(1);
+      onLeader(content.querySelector(".topology-window"));
+    } else if (step === "in") zoomDiagram(zoomSteps.find((z) => z > zoom + 0.001) || zoom);
+    else zoomDiagram(zoomSteps.findLast((z) => z < zoom - 0.001) || zoom);
+  });
+  // A wheel's delta is in pixels, lines or pages (deltaMode 0, 1 or 2);
+  // Firefox gives a mouse's in lines.
+  const wheelPixels = (event, box) => event.deltaY * [1, 16, box.clientHeight][event.deltaMode];
+  let pinchFrom = 0;
+  content.addEventListener("wheel", (event) => {
+    const box = event.ctrlKey && event.target.closest(".topology-window");
+    if (!box) return;
+    event.preventDefault();
+    // A pinch Safari sends as gesture events is zoomed by them alone.
+    if (pinchFrom) return;
+    const edge = box.getBoundingClientRect();
+    zoomDiagram(zoom * Math.exp(-wheelPixels(event, box) * 0.002), event.clientX - edge.left, event.clientY - edge.top);
+  }, {passive: false});
+  content.addEventListener("gesturestart", (event) => {
+    if (!event.target.closest(".topology-window")) return;
+    event.preventDefault();
+    pinchFrom = zoom;
+  });
+  content.addEventListener("gesturechange", (event) => {
+    const box = pinchFrom && event.target.closest(".topology-window");
+    if (!box) return;
+    event.preventDefault();
+    const edge = box.getBoundingClientRect();
+    zoomDiagram(pinchFrom * event.scale, event.clientX - edge.left, event.clientY - edge.top);
+  });
+  content.addEventListener("gestureend", () => { pinchFrom = 0; });
+  function keepDiagram(swap) {
+    const before = content.querySelector(".topology-window");
+    const at = before && [before.scrollLeft, before.scrollTop];
+    swap();
+    const after = content.querySelector(".topology-window");
+    if (!after) return;
+    const kept = zoom;
+    zoom = 1;
+    zoomDiagram(kept, 0, 0);
+    if (!at) return onLeader(after);
+    after.scrollLeft = at[0];
+    after.scrollTop = at[1];
+  }
+  const first = content.querySelector(".topology-window");
+  if (first) {
+    zoomDiagram(1);
+    onLeader(first);
+  }
   // A refresh asked while another waits for the URL as it is now is that
   // one: the answer coming is the one asked for, and a slow allocator is
   // not asked again at every tick of the auto-refresh. One asked after the
@@ -640,13 +764,13 @@ var statusFrame = `<!DOCTYPE html>
       if (!response.ok) throw new Error("HTTP " + response.status);
       const text = await response.text();
       if (inFlight !== mine) return;
-      arrangeJobs(() => {
+      arrangeJobs(() => keepDiagram(() => {
         content.innerHTML = text;
         refreshedAt = Date.now();
         asOf();
         filterRows();
         localTimes(content);
-      });
+      }));
     } catch (error) {
       // A refresh aborted for a later one says nothing: the later one says
       // how it went.
@@ -688,14 +812,21 @@ var statusFrame = `<!DOCTYPE html>
 // statusParts are what the status page and the views share: of a member
 // (MemberStatus), how long ago its last heartbeat came, marked when one is
 // overdue, the bundle it has in force beside the one it is to have, and
-// its state; a discovery source's result; and a view's targets, labels
-// and the note over a list.
+// its state; a discovery source's result; a view's targets, labels and the
+// note over a list; and the status page's diagram's lines, their texts and
+// its boxes (topology.go).
 const statusParts = `
 {{- define "heartbeat"}}{{if .Late}}<time class="ago bad" datetime="{{.LastHeartbeat}}" data-note="a heartbeat is overdue" title="a heartbeat is overdue; {{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{else}}<time class="ago" datetime="{{.LastHeartbeat}}" title="{{.LastHeartbeat}}">{{age .LastHeartbeatAgeSeconds}} ago</time>{{end}}{{end}}
 {{- define "bundle"}}{{if .UpToDate}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code> <span class="good">current</span>{{else}}{{if .Generation}}<code class="gen" title="{{.Generation}}">{{gen .Generation}}</code>{{else}}<span class="muted">none</span>{{end}}{{if .Current}} <span class="bad">→</span> <code class="gen" title="{{.Current}}">{{gen .Current}}</code>{{end}}{{end}}{{if .Refused}}<br><span class="bad">refused</span> <code class="gen" title="{{.Refused}}">{{gen .Refused}}</code>{{end}}{{end}}
 {{- define "state"}}{{if .ShuttingDown}}<span class="bad">shutting down</span>{{else if and .Live .InList}}<span class="good">in the list</span>{{else if .Live}}joining{{else if .InList}}<span class="bad">silent</span>, leaving{{else}}<span class="muted">gone</span>{{end}}{{if .SameName}}, <span class="bad" title="Two exporters heartbeat under this member name, and each scrapes its share: give each a name of its own with --allocator.member">two exporters under this name</span>{{end}}{{end}}
 {{- define "capacity"}}{{if and .InList (ne .CapacityInList .Capacity)}}<span title="the member list places it by {{weight .CapacityInList}} until its heartbeats' {{weight .Capacity}} has held for the settle time">{{weight .CapacityInList}} <span class="bad">→</span> {{weight .Capacity}}</span>{{else}}{{weight .Capacity}}{{end}}{{end}}
 {{- define "result"}}{{if eq . "ok"}}<span class="good">ok</span>{{else if eq . "failing"}}<span class="bad">failing</span>{{else}}<span class="muted">not answered yet</span>{{end}}{{end}}
+{{- define "topology-edge"}}
+<line class="edge{{with .Class}} {{.}}{{end}}" x1="{{.X1}}" y1="{{.Y1}}" x2="{{.X2}}" y2="{{.Y2}}"></line>{{end}}
+{{- define "topology-label"}}
+<text class="edge-label{{with .Class}} {{.}}{{end}}" x="{{.LX}}" y="{{.LY}}" text-anchor="{{.Anchor}}"><title{{with .At}} data-at="{{.}}"{{end}}>{{.At}}{{.Tip}}</title>{{.Text}}</text>{{end}}
+{{- define "topology-node"}}
+{{if .Member}}<a href="?member={{.Member}}">{{end}}<g class="node{{if .Allocator}} allocator{{end}}{{if .Master}} master{{end}}{{if .Down}} down{{end}}"><title>{{.FullName}}</title><rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="6"></rect><text x="{{.MidX}}" y="{{.NameY}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{.SubY}}" class="sub">{{.Sub}}</text></g>{{if .Member}}</a>{{end}}{{end}}
 {{- define "target"}}{{if .}}{{.}}{{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "labels"}}{{range $name, $value := .}}<span class="label">{{$name}}={{$value}}</span> {{else}}<span class="muted">–</span>{{end}}{{end}}
 {{- define "list-note"}}
@@ -732,6 +863,30 @@ const statusContent = `{{define "content"}}
 <tr><th>Ready</th><td>{{if .Instance.Ready}}<span class="good">ready</span>{{else}}<span class="bad">shutting down</span>{{end}}</td></tr>
 <tr><th>Peers</th><td>{{with .Peers}}{{if .LeaderOnly}}<span class="muted">(leader only)</span> {{end}}{{if eq .Role "leader"}}<span class="good">leader</span>{{if gt .LiveInstances 1}} of {{.LiveInstances}} live instances{{else}}, the only live instance{{end}}{{else if eq .Role "follower"}}follower of {{.Leader}}{{else}}<span class="muted">choosing the leader</span>{{end}}{{else}}<span class="muted">off: this instance asks its discovery sources itself (no <code class="flag">--peers</code>)</span>{{end}}</td></tr>
 </table>
+{{- with .Topology}}
+
+<h2 id="diagram">Diagram</h2>
+<figure class="topology">
+<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out" title="Zoom out (Ctrl and the wheel, or pinch, over the diagram)">−</button><output aria-live="polite">100%</output><button type="button" data-zoom="in" aria-label="Zoom in" title="Zoom in (Ctrl and the wheel, or pinch, over the diagram)">+</button><button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or a trackpad's pinch</span></div>
+<div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">
+<svg role="group" aria-label="{{.Label}}" width="{{.Width}}" height="{{.Height}}" viewBox="0 0 {{.Width}} {{.Height}}" data-width="{{.Width}}" data-height="{{.Height}}" data-focus-x="{{.FocusX}}" data-focus-y="{{.FocusY}}">
+{{- range .Peers}}{{template "topology-edge" .Edge}}{{end}}
+{{- range .Members}}{{template "topology-edge" .Edge}}{{end}}
+{{- with .Hub}}
+<g class="node hub{{if .Master}} master{{else}} allocator{{end}}">{{with .FullName}}<title>{{.}}</title>{{end}}<rect x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}" rx="8"></rect><text x="{{.MidX}}" y="{{plus .Y 20}}" class="name">{{.Name}}</text><text x="{{.MidX}}" y="{{plus .Y 37}}" class="sub">{{.Sub}}</text><text x="{{.MidX}}" y="{{plus .Y 53}}" class="sub">{{.Note}}</text></g>
+{{- end}}
+{{- range .Peers}}{{template "topology-node" .}}{{end}}
+{{- range .Members}}{{template "topology-node" .}}{{end}}
+{{- range .Peers}}{{template "topology-label" .Edge}}{{end}}
+{{- range .Members}}{{template "topology-label" .Edge}}{{end}}
+{{- if .MoreMembers}}
+<text x="{{.MoreX}}" y="{{.MoreY}}" text-anchor="end" class="more">and {{.MoreMembers}} more in the table below, {{if .MoreNotWell}}{{.MoreNotWell}} of them not well{{else}}all well{{end}}</text>
+{{- end}}
+</svg>
+</div>
+<figcaption>{{if not .HasLeader}}No instance leads yet{{else if not $.Peers}}This instance leads{{else}}The filled box leads{{end}}{{if $.Peers}}; purple boxes are {{if .HasLeader}}the other {{end}}allocator instances{{if .HasMembers}}, grey ones the exporters{{end}}{{else}}; the grey boxes are the exporters{{end}}.{{if and $.Peers .HasMembers}} Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives.{{end}} Each line gives the time since the {{if not .HasMembers}}last check; the exporters are on the leader's page{{else if $.Peers}}last heartbeat or check{{else}}last heartbeat{{end}}. Dashed red needs attention; the line says why.</figcaption>
+</figure>
+{{- end}}
 {{- with .Peers}}
 
 <h2>Peers</h2>

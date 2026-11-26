@@ -1041,7 +1041,9 @@ error names `starttls` and its protocols instead.
 
 [`examples/tcp/`](../examples/tcp/config.yaml) holds complete collectors for
 memcached, ZooKeeper and HAProxy, with more of each one's statistics than
-below, and static targets for them.
+below, and static targets for them. It also reads memcached's `stats slabs`,
+each statistic by slab class, and ZooKeeper's `ruok`, whether the server
+answers `imok`.
 
 ZooKeeper's `mntr`: each number that it reports becomes a series of one
 family by its name, plus whether the server is the ensemble's leader. The

@@ -2543,8 +2543,9 @@ dashboards.
 
 [`examples/tcp/`](../examples/tcp/config.yaml) reads three services that
 report their statistics as text over TCP, with the [`tcp`](TCP.md) request
-type: memcached's `stats`, read up to its `END` line, ZooKeeper's `mntr`,
-and HAProxy's `show stat`. The first two are read with regular expressions,
+type: memcached's `stats` and `stats slabs`, read up to their `END` line,
+ZooKeeper's `mntr` and `ruok`, and HAProxy's `show stat`. The first two are
+read with regular expressions,
 and HAProxy's CSV by its columns. Its
 [`static-targets.yaml`](../examples/tcp/static-targets.yaml) scrapes a
 memcached pair, a ZooKeeper ensemble and an HAProxy:

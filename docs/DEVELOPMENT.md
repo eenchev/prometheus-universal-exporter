@@ -2545,13 +2545,29 @@ statistics by name under it. Of the 100–110 µs for 500 collectors:
 Now the names are read by index, and the map and the slices are created at
 their size before the lock is taken. The statistics are collected into a
 slice under the lock, and the map is filled from it once the lock is
-released (`collectorStats` in `selfmetrics.go`). What the first read after a
-reload still does with the lock held is build the statistics of the
-collectors that the reload added, a quarter of a microsecond each: 320
-bytes, which is most of it, and a reading of the clock, which marks when the
-collector's counters began. The sort of the names and the copy of each
-collector's counters, under that collector's own lock, are unchanged and
-make up the rest of the read.
+released (`collectorStats` in `selfmetrics.go`).
+
+The first read after a reload also builds the statistics of the collectors
+that the reload added, a quarter of a microsecond each: 320 bytes, which is
+most of it, and a reading of the clock, which marks when the collector's
+counters began. It used to build them with the lock held. Now it takes the
+lock twice: once to find the statistics there are, and, when some are
+missing, once more to keep those it built in between with the lock
+released (`statsFoundLocked` and `statsSinceLockedWith` in `server.go`). A
+probe that built a collector's statistics in between keeps them, and the
+read returns those. A read that finds every collector's statistics takes
+the lock once, as before. As measured on two shared cores, old and new in
+turn, three times each, 50 rounds:
+
+| Benchmark | Under the lock before | Under the lock after |
+| --- | --- | --- |
+| `reloaded/n=50` | 15–20 µs | 5.7–7.2 µs |
+| `reloaded/n=500` | 131–148 µs | 46–56 µs |
+| `reloaded/n=2000` | 0.65–0.76 ms | 0.30–0.35 ms |
+
+The whole read takes as long as before, and one allocation more. The sort
+of the names and the copy of each collector's counters, under that
+collector's own lock, are unchanged and make up the rest of the read.
 
 `collectorstats_http_test.go` checks this without a duration:
 

@@ -44,10 +44,14 @@ func collectorStatsBefore(s *Server, between func()) (names []string, values map
 }
 
 // collectorStatsBetween is collectorStats with between called once the
-// configuration is read and before the statistics lock is taken.
+// configuration is read and before the statistics lock is first taken. The
+// read takes the lock a second time when it made statistics; between is not
+// called again then.
 func collectorStatsBetween(s *Server, between func()) (names []string, values map[string]statsValues, stats map[string]*serverStats) {
+	called := false
 	hook := func(held bool) {
-		if held {
+		if held && !called {
+			called = true
 			between()
 		}
 	}

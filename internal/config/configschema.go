@@ -285,7 +285,7 @@ func blanksOrPlaceholder() map[string]any {
 // headerNameChars are the characters of a header name, an HTTP token
 // (RFC 9110), as a regular expression class; httpguts.ValidHeaderFieldName,
 // which the exporter asks, takes these and no others.
-const headerNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
+const headerNameChars = fetch.SchemaHeaderNameChars
 
 // caseless is a regular expression of text matched without regard to case
 // (fetch.SchemaCaseless).
@@ -297,12 +297,7 @@ func caseless(text string) string { return fetch.SchemaCaseless(text) }
 // any case, since the exporter sets that one itself. Only the exporter
 // refuses two names that are one header in different case: a schema sees
 // each name on its own.
-func headerNames() map[string]any {
-	return map[string]any{
-		"pattern": "^[" + headerNameChars + "]+$",
-		"not":     map[string]any{"pattern": "^" + caseless("Accept-Encoding") + "$"},
-	}
-}
+func headerNames() map[string]any { return fetch.SchemaHeaderNames() }
 
 // forwardHeaderEntry is what the exporter accepts as an entry of
 // request.forward_headers (fetch.checkForwardHeaders): a header name, with or
@@ -325,9 +320,7 @@ func forwardHeaderEntry() map[string]any {
 // queryNames is what the exporter takes as a name of request.query
 // (fetch.checkQueryNames): one of at least a character, none of them a
 // control character. Any other is sent escaped.
-func queryNames() map[string]any {
-	return map[string]any{"minLength": 1, "pattern": `^[^\x00-\x1F\x7F]*$`}
-}
+func queryNames() map[string]any { return fetch.SchemaQueryNames() }
 
 // leastResponseRule is the rule of request.max_response_bytes and
 // limits.max_response_bytes. Besides the rule for every size, the value is
@@ -653,6 +646,7 @@ func collectorKeySchemaRules() map[string]map[string]any {
 		"collectors[].cache.revalidate":                   {"description": "http and graphite: once a cached result has expired, ask the target with If-None-Match and If-Modified-Since whether its response, kept with it when it had an ETag or Last-Modified, is still current; a 304 Not Modified reuses the kept body, which the transforms read again. Defaults to true. See docs/CONFIGURATION.md#revalidating-expired-responses."},
 		"collectors[].max_concurrent_probes":              {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
 		"collectors[].coalesce":                           {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].answer":                             {"enum": optionalEnum(model.ChainAnswers), "description": "http, with request.then: what the trip's response is. last, the default: the last step's answer, read by any decoder. all: one JSON document of every answer, keyed by step name, first for the collector's own request, each {status, body}, or for a fan-out a list of {each, status, body} or {each, error}; the decoder is json. See docs/REQUESTS.md#chained-requests."},
 		"collectors[].report_failures":                    {"description": "Answer a failed probe 200 with series saying so instead of 502: http_exporter_probe_success 0, http_exporter_probe_elapsed_seconds and http_exporter_probe_failed_stage{stage} 1, and a successful one with its series, http_exporter_probe_success 1 and http_exporter_probe_elapsed_seconds. The collector's rules may not produce those names. Static targets are not changed by it. Defaults to false. See docs/CONFIGURATION.md#reporting-failed-probes-as-metrics."},
 		"collectors[].lint":                               {"description": "The metric lint: advice --dry-run and the debug report give about the series the collector makes, which never fails anything. See docs/CONFIGURATION.md#metric-lint."},
 		"collectors[].lint.ignore":                        {"description": "The ids of the lint rules whose advice is not given for this collector."},
@@ -1156,7 +1150,7 @@ func collectorSchemaRule() map[string]any {
 		map[string]any{"properties": map[string]any{"rename_labels": map[string]any{"minProperties": 1}}, "required": []string{"rename_labels"}},
 		map[string]any{"properties": map[string]any{"remove_labels": map[string]any{"minItems": 1}}, "required": []string{"remove_labels"}},
 	}}}, "required": []string{"transform"}}
-	return map[string]any{
+	collector := map[string]any{
 		"required":    []string{"name", "request", "transform"},
 		"description": "How to reach a kind of target and turn its response into metrics.",
 		"if":          map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"not": map[string]any{"const": "prometheus"}}}}}},
@@ -1170,6 +1164,31 @@ func collectorSchemaRule() map[string]any {
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": map[string]any{"properties": map[string]any{"derived": map[string]any{"items": classicNames}}}},
 			map[string]any{"if": map[string]any{"not": map[string]any{"anyOf": []any{escapesNames, takesOffLabels}}}, "then": rules(classicLabelNames)},
+		},
+	}
+	collector["allOf"] = append(collector["allOf"].([]any), chainCollectorRules()...)
+	return collector
+}
+
+// chainCollectorRules are the rules of a collector with request.then that
+// span its keys, as the exporter checks them (fetch.validateChain,
+// checkChainAnswer): answer only beside request.then; no
+// request.pagination, request.redirect_trusted_hosts or cache.revalidate
+// true beside it; and under answer: all, the decoder json or auto.
+func chainCollectorRules() []any {
+	chained := map[string]any{"properties": map[string]any{"request": map[string]any{"required": []string{"then"}}}, "required": []string{"request"}}
+	return []any{
+		map[string]any{"if": map[string]any{"not": chained}, "then": map[string]any{"not": map[string]any{"required": []string{"answer"}}}},
+		map[string]any{"if": chained, "then": map[string]any{"properties": map[string]any{
+			"request": map[string]any{"not": map[string]any{"anyOf": []any{
+				map[string]any{"required": []string{"pagination"}},
+				map[string]any{"properties": map[string]any{"redirect_trusted_hosts": map[string]any{"minItems": 1}}, "required": []string{"redirect_trusted_hosts"}},
+			}}},
+			"cache": map[string]any{"properties": map[string]any{"revalidate": map[string]any{"not": map[string]any{"const": true}}}},
+		}}},
+		map[string]any{
+			"if":   map[string]any{"properties": map[string]any{"answer": map[string]any{"const": model.ChainAnswerAll}}, "required": []string{"answer"}},
+			"then": map[string]any{"properties": map[string]any{"decoder": map[string]any{"properties": map[string]any{"type": map[string]any{"enum": []string{"auto", "json"}}}}}},
 		},
 	}
 }

@@ -51,6 +51,10 @@ type TracedRequest struct {
 	// Page is the page of request.pagination the request asked for, from
 	// 1; 0 without request.pagination.
 	Page int
+	// Step is the step of a chain the request was made for, "" outside a
+	// chain, and Item its fan-out item, from 1, 0 for none (chain.go).
+	Step string
+	Item int
 	// Withheld names the headers of the first request that a redirect to a
 	// host the collector does not trust was not sent (redirecttrust.go),
 	// and WithheldWhy says why the redirect was not trusted.
@@ -235,8 +239,10 @@ func traceRequestAt(ctx context.Context, method, url string, header http.Header,
 	if !ok {
 		return tracedAt{}
 	}
+	// A value of a chain marked secret is never shown (chain.go).
+	url = maskSecrets(ctx, url)
 	if !t.spans {
-		header = header.Clone()
+		header = maskHeaderSecrets(ctx, header).Clone()
 		if header == nil {
 			header = http.Header{}
 		}
@@ -252,6 +258,9 @@ func traceRequestAt(ctx context.Context, method, url string, header http.Header,
 	defer t.mu.Unlock()
 	page, _ := ctx.Value(pageKey{}).(int)
 	request := TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, Page: page, started: time.Now()}
+	if step := chainStepOf(ctx); step != nil {
+		request.Step, request.Item = step.name, step.item
+	}
 	if t.pending != nil {
 		// The connection the request is the first sent on, made before it
 		// was recorded: its span begins with the connection.

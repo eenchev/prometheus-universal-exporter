@@ -48,7 +48,7 @@ import (
 var probeSeriesHelp = map[string]string{
 	model.ProbeSuccessMetric:     "1 when the probe succeeded, 0 when a stage of its trip failed or one carried on past failed (report_failures).",
 	model.ProbeElapsedMetric:     "Seconds the probe took, from its request to its answer (report_failures).",
-	model.ProbeFailedStageMetric: "1 for the stage of the probe's trip that failed: http, http_status, decode, transform, validation, metric, the request type's own, or panic (report_failures).",
+	model.ProbeFailedStageMetric: "1 for the stage of the probe's trip that failed: http, http_status, decode, transform, validation, metric, the request type's own, or panic (report_failures); with step, the step of an http collector's chain that failed.",
 }
 
 // reportsProbe says whether the probe of c whose trip ended as result is
@@ -76,7 +76,7 @@ func reportedSeries(result *probeResult) int {
 // not make a probe a success: one that panicked failed as much as one whose
 // stage did, and the answer may not contradict the self-metrics. answer is
 // not changed: the probes sharing a trip each make their own from it.
-func reportedAnswer(answer *model.MetricSet, success bool, failedStage string, elapsed time.Duration) model.MetricSet {
+func reportedAnswer(answer *model.MetricSet, success bool, failedStage, failedStep string, elapsed time.Duration) model.MetricSet {
 	var own []model.Metric
 	if answer != nil {
 		own = answer.Metrics
@@ -92,7 +92,12 @@ func reportedAnswer(answer *model.MetricSet, success bool, failedStage string, e
 		model.Metric{Name: model.ProbeElapsedMetric, Help: probeSeriesHelp[model.ProbeElapsedMetric], Type: model.GaugeMetricType, Value: max(elapsed.Seconds(), 0)},
 	)
 	if !success && failedStage != "" {
-		out.Metrics = append(out.Metrics, model.Metric{Name: model.ProbeFailedStageMetric, Help: probeSeriesHelp[model.ProbeFailedStageMetric], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"stage": failedStage}})
+		labels := map[string]string{"stage": failedStage}
+		if failedStep != "" {
+			// The step of an http collector's chain that failed.
+			labels["step"] = failedStep
+		}
+		out.Metrics = append(out.Metrics, model.Metric{Name: model.ProbeFailedStageMetric, Help: probeSeriesHelp[model.ProbeFailedStageMetric], Type: model.GaugeMetricType, Value: 1, Labels: labels})
 	}
 	return out
 }
@@ -104,7 +109,7 @@ func writeProbeAnswer(w http.ResponseWriter, r *http.Request, c *model.Collector
 		result.writeTo(w, r, utf8Names)
 		return
 	}
-	answer := reportedAnswer(result.metrics, result.ok, result.stage, elapsed)
+	answer := reportedAnswer(result.metrics, result.ok, result.stage, result.step, elapsed)
 	writeMetricSet(w, r, &answer, utf8Names)
 }
 
@@ -147,7 +152,7 @@ func reportedVerdict(c *model.Collector, result collected, verdict string, answe
 		return verdict, answer
 	}
 	success := !result.failed() && !result.carriedOn
-	reported := reportedAnswer(answer, success, result.stage, elapsed)
+	reported := reportedAnswer(answer, success, result.stage, result.step, elapsed)
 	switch {
 	case success:
 		return fmt.Sprintf("200 with %d series, %s 1 among them (report_failures)", len(reported.Metrics), model.ProbeSuccessMetric), &reported

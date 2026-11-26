@@ -107,6 +107,9 @@ type Server struct {
 	// backoffs keeps the targets failure_backoff keeps trips from
 	// (backoff.go).
 	backoffs *failureBackoffs
+	// chains are the last trips of the chained collectors and static
+	// targets, which the status page draws (chainreport.go).
+	chains chainTrips
 	// lastSuccesses keeps when each trip whose clock placeholders read
 	// ~last_success last succeeded (lastsuccess.go).
 	lastSuccesses lastSuccesses
@@ -846,7 +849,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	}
 	// A stale answer is not a success: the trip failed.
 	stale := out.result(false)
-	stale.outcome, stale.failure, stale.stage = probeStale, result.failure, result.stage
+	stale.outcome, stale.failure, stale.stage, stale.step = probeStale, result.failure, result.stage, result.step
 	return stale
 }
 
@@ -948,7 +951,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Error: model.CallerText(result.err),
 		})
 		failure := out.result(false)
-		failure.failure, failure.stage = s.shownStatusError(result.err), result.stage
+		failure.failure, failure.stage, failure.step = s.shownStatusError(result.err), result.stage, result.step
 		return failure
 	case result.refused:
 		// The caller asked for a target the collector may not reach.
@@ -964,7 +967,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %s", name, result.stage, model.CallerText(result.err)), http.StatusBadGateway)
 		failure := out.result(false)
 		failure.unauthorized = result.unauthorized
-		failure.failure, failure.stage = s.shownStatusError(result.err), result.stage
+		failure.failure, failure.stage, failure.step = s.shownStatusError(result.err), result.stage, result.step
 		if job.backingOff != nil {
 			failure.outcome = probeBackoff
 		}
@@ -987,7 +990,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		answer := carriedOnAnswer(c)
 		out.metrics = &answer
 		carried := out.result(!c.ReportFailures)
-		carried.stage = result.stage
+		carried.stage, carried.step = result.stage, result.step
 		if c.ReportFailures {
 			carried.carriedOn, carried.unauthorized = true, result.unauthorized
 			carried.failure = s.shownStatusError(result.carriedErr)

@@ -379,6 +379,9 @@ func normalizeFormats(x *model.Collector) error {
 			}
 		}
 	}
+	if err := checkChainAnswer(x); err != nil {
+		return err
+	}
 	if fetch.CollectorPolicy(x).Pagination != nil {
 		// The pages are read as JSON to find the next one and their items,
 		// and merged into one JSON document, whatever their Content-Type.

@@ -216,6 +216,10 @@ type Client struct {
 	// runs still names the previous bundle, for as long as the reload's end
 	// takes; the next heartbeat, sent at once, names the new one.
 	inForce, seen string
+	// heard is the generation the last heartbeat reply named. The bundle
+	// loop, woken while it waits, asks again only when heard is news:
+	// neither seen nor in force (newsHeard).
+	heard string
 	// inForceAt is when inForce was put in force (Status.InForceAt).
 	inForceAt time.Time
 	// interval is the heartbeat interval in force: Options' value at
@@ -670,6 +674,9 @@ func (c *Client) heartbeatOne(ctx context.Context, addr string) (sent bool) {
 	// news, and waking it for one would ask again without waiting.
 	c.mu.Lock()
 	seen, inForce := c.seen, c.inForce
+	if err == nil && reply.Generation != "" {
+		c.heard = reply.Generation
+	}
 	if err != nil {
 		for _, s := range c.says {
 			if s.address == addr {
@@ -891,16 +898,39 @@ func (c *Client) bundleLoop(ctx context.Context) {
 			backoff = 0
 			continue
 		}
-		fired, stop := c.newTimer(wait)
+		c.waitOrNews(ctx, wait, wake)
+	}
+}
+
+// waitOrNews waits for wait to pass, or for wake to bring news. A wake is
+// news only while the generation the last heartbeat reply named is neither
+// seen nor in force (newsHeard): a reply checked against seen just before
+// the bundle loop fetched that same bundle can wake it after it has, and
+// asking again then would cut short the wait after an answer without a
+// change.
+func (c *Client) waitOrNews(ctx context.Context, wait time.Duration, wake <-chan struct{}) {
+	fired, stop := c.newTimer(wait)
+	defer stop()
+	for {
 		select {
 		case <-ctx.Done():
-			stop()
 			return
 		case <-fired:
+			return
 		case <-wake:
-			stop()
+			if c.newsHeard() {
+				return
+			}
 		}
 	}
+}
+
+// newsHeard says the last heartbeat reply named a bundle the bundle loop
+// has neither seen nor put in force.
+func (c *Client) newsHeard() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.heard != "" && c.heard != c.seen && c.heard != c.inForce
 }
 
 // syncOnce makes one bundle request and acts on its answer. ok is false when

@@ -140,18 +140,21 @@ func (c *exprCache[T]) len() int {
 // Every program has them all, whatever the collector's request type, so a
 // rule that names one compiles anywhere and reads null where the request has
 // nothing to give (JQBindings).
-var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params", "$scrape_time", "$last_success"}
+var JQVariables = []string{"$root", "$status", "$headers", "$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$params", "$scrape_time", "$last_success", "$steps"}
 
 // JQBindings are the values of JQVariables after $root for one evaluation;
 // a field left nil is null to the program.
 type JQBindings struct {
 	Status, Headers, Timings, TLS, URL, Redirects, HTTPVersion, RemoteIP, Params, ScrapeTime, LastSuccess any
+	// Steps is $steps, how each request of an http collector's chain went
+	// (fetch.ChainReport.JQSteps).
+	Steps any
 }
 
 // Values are the values to run a program with, root first, in the order of
 // JQVariables.
 func (b JQBindings) Values(root any) []any {
-	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP, b.Params, b.ScrapeTime, b.LastSuccess}
+	return []any{root, b.Status, b.Headers, b.Timings, b.TLS, b.URL, b.Redirects, b.HTTPVersion, b.RemoteIP, b.Params, b.ScrapeTime, b.LastSuccess, b.Steps}
 }
 
 // jqCompilerOptions are what every program is compiled with: the variables,
@@ -181,7 +184,7 @@ var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 // tripVariables are the variables of JQVariables that are of the request
 // an answer came from, whose values are made only for a program that reads
 // one (JQProgram.ReadsTrip).
-var tripVariables = []string{"$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip"}
+var tripVariables = []string{"$timings", "$tls", "$url", "$redirects", "$http_version", "$remote_ip", "$steps"}
 
 // readsTrip says whether expression may read a variable of tripVariables.
 // jq names a variable only as it is written, so a program that reads one

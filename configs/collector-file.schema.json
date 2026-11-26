@@ -564,6 +564,103 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "not": {
+                "properties": {
+                  "request": {
+                    "required": [
+                      "then"
+                    ]
+                  }
+                },
+                "required": [
+                  "request"
+                ]
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "answer"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "request": {
+                  "required": [
+                    "then"
+                  ]
+                }
+              },
+              "required": [
+                "request"
+              ]
+            },
+            "then": {
+              "properties": {
+                "cache": {
+                  "properties": {
+                    "revalidate": {
+                      "not": {
+                        "const": true
+                      }
+                    }
+                  }
+                },
+                "request": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "pagination"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "redirect_trusted_hosts": {
+                            "minItems": 1
+                          }
+                        },
+                        "required": [
+                          "redirect_trusted_hosts"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "answer": {
+                  "const": "all"
+                }
+              },
+              "required": [
+                "answer"
+              ]
+            },
+            "then": {
+              "properties": {
+                "decoder": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "auto",
+                        "json"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
           }
         ],
         "description": "How to reach a kind of target and turn its response into metrics.",
@@ -581,6 +678,15 @@
           }
         },
         "properties": {
+          "answer": {
+            "description": "http, with request.then: what the trip's response is. last, the default: the last step's answer, read by any decoder. all: one JSON document of every answer, keyed by step name, first for the collector's own request, each {status, body}, or for a fan-out a list of {each, status, body} or {each, error}; the decoder is json. See docs/REQUESTS.md#chained-requests.",
+            "enum": [
+              "last",
+              "all",
+              ""
+            ],
+            "type": "string"
+          },
           "cache": {
             "additionalProperties": false,
             "description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching.",
@@ -3262,6 +3368,96 @@
                 "description": "s3file: the scheme, host and port of a store that speaks the S3 API, such as https://minio.example.com:9000, in place of AWS's. See docs/S3FILE.md#other-stores.",
                 "pattern": "^$|^https?://[^/?#@]+/?$",
                 "type": "string"
+              },
+              "extract": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "oneOf": [
+                    {
+                      "required": [
+                        "regex"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "json"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "form"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "header"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "cookie"
+                      ]
+                    }
+                  ],
+                  "properties": {
+                    "cookie": {
+                      "description": "The value of a cookie the answer sets.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "form": {
+                      "description": "A field of the body read as a form.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "header": {
+                      "description": "A header of the answer.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "json": {
+                      "description": "A jq expression on the body read as JSON, giving text, a number, or a list, which for_each goes over.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "optional": {
+                      "description": "A value not found, or empty, is the empty text instead of failing the step.",
+                      "type": "boolean"
+                    },
+                    "regex": {
+                      "description": "A regular expression on the body: its first group, or the whole match without one.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "secret": {
+                      "description": "The value is shown as *** wherever the exporter shows it: the debug report and the workflow diagram, a step's URL and headers, an error and a span.",
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                },
+                "description": "http, with request.then: the values read from the first request's answer, by name, at most 16, each from exactly one of regex, json, form, header and cookie. A step sends one as {{chain.\u003cname\u003e}}. See docs/REQUESTS.md#chained-requests.",
+                "maxProperties": 16,
+                "minProperties": 1,
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "type": "object"
               },
               "fastcgi": {
                 "additionalProperties": false,
@@ -7037,6 +7233,342 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "then": {
+                "description": "http: 1 to 12 more requests to the same target, made in order after the collector's own, each able to send values read from the answers before it. Every request goes to the target's origin, redirects included. Not with request.pagination, cache.revalidate or request.redirect_trusted_hosts. See docs/REQUESTS.md#chained-requests.",
+                "items": {
+                  "additionalProperties": false,
+                  "allOf": [
+                    {
+                      "not": {
+                        "required": [
+                          "path",
+                          "url"
+                        ]
+                      }
+                    },
+                    {
+                      "not": {
+                        "anyOf": [
+                          {
+                            "required": [
+                              "body",
+                              "form"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "body",
+                              "json"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "form",
+                              "json"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "not": {
+                          "required": [
+                            "for_each"
+                          ]
+                        }
+                      },
+                      "then": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "required": [
+                                "concurrency"
+                              ]
+                            },
+                            {
+                              "required": [
+                                "max_items"
+                              ]
+                            },
+                            {
+                              "required": [
+                                "on_item_error"
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "properties": {
+                    "accept_status": {
+                      "anyOf": [
+                        {
+                          "maxItems": 1
+                        },
+                        {
+                          "items": {
+                            "not": {
+                              "const": "any"
+                            }
+                          }
+                        }
+                      ],
+                      "description": "The statuses that count as an answer for this step, written as request.accept_status is; the collector's when left out.",
+                      "items": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^any$",
+                        "type": [
+                          "integer",
+                          "string"
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    "body": {
+                      "description": "The step's body, with placeholders, written as request.body is.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "concurrency": {
+                      "description": "With for_each: how many of the step's requests run at once, 1 to 16, 4 when left out.",
+                      "maximum": 16,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "extract": {
+                      "additionalProperties": {
+                        "additionalProperties": false,
+                        "oneOf": [
+                          {
+                            "required": [
+                              "regex"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "json"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "form"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "header"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "cookie"
+                            ]
+                          }
+                        ],
+                        "properties": {
+                          "cookie": {
+                            "description": "The value of a cookie the answer sets.",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "form": {
+                            "description": "A field of the body read as a form.",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "header": {
+                            "description": "A header of the answer.",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "json": {
+                            "description": "A jq expression on the body read as JSON, giving text, a number, or a list, which for_each goes over.",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "optional": {
+                            "description": "A value not found, or empty, is the empty text instead of failing the step.",
+                            "type": "boolean"
+                          },
+                          "regex": {
+                            "description": "A regular expression on the body: its first group, or the whole match without one.",
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "secret": {
+                            "description": "The value is shown as *** wherever the exporter shows it: the debug report and the workflow diagram, a step's URL and headers, an error and a span.",
+                            "type": "boolean"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "description": "The values read from the step's answer, as request.extract reads them.",
+                      "maxProperties": 16,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                      },
+                      "type": "object"
+                    },
+                    "for_each": {
+                      "description": "The name of a list value an earlier step read with json: one request per entry, with {{each}}, {{each.\u003cfield\u003e}} and {{each_index}}. At most one step of a chain fans out.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "form": {
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "description": "The step's body as a form, each field's value with placeholders.",
+                      "type": "object"
+                    },
+                    "forwarded_headers": {
+                      "description": "Whether the step is sent the forwarded headers: header_\u003cname\u003e probe parameters and those request.forward_headers lets through. true, the default, sends them; false sends none of them, but a forwarded Authorization (request.forward_authorization), the collector's credential, and a forwarded Host, which keeps the step on the first request's virtual host.",
+                      "type": "boolean"
+                    },
+                    "headers": {
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "description": "Headers added to the collector's, each replacing one of the same name, with placeholders. A name is an HTTP token, not Accept-Encoding, and not Authorization nor the header a login sends its token in, which carry the collector's credentials.",
+                      "propertyNames": {
+                        "allOf": [
+                          {
+                            "not": {
+                              "pattern": "^[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"
+                            },
+                            "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
+                          },
+                          {
+                            "not": {
+                              "pattern": "^[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"
+                            }
+                          }
+                        ]
+                      },
+                      "type": "object"
+                    },
+                    "json": {
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "description": "The step's body as a JSON object of text, each value with placeholders.",
+                      "type": "object"
+                    },
+                    "max_items": {
+                      "description": "With for_each: how many entries are asked for, 1 to 1000, 100 when left out. The rest are left out, counted in http_exporter_chain_items_cut_total; the trip still succeeds.",
+                      "maximum": 1000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "method": {
+                      "description": "GET, HEAD, POST, PUT or PATCH. GET when left out, or POST when the step has a body.",
+                      "enum": [
+                        "GET",
+                        "get",
+                        "HEAD",
+                        "head",
+                        "POST",
+                        "post",
+                        "PUT",
+                        "put",
+                        "PATCH",
+                        "patch",
+                        ""
+                      ],
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The step's name: lower-case letters, digits and _, unique in the collector, and not first, the collector's own request. It names the step in errors, metrics and the answer document.",
+                      "not": {
+                        "const": "first"
+                      },
+                      "pattern": "^[a-z_][a-z0-9_]*$",
+                      "type": "string"
+                    },
+                    "on_item_error": {
+                      "description": "With for_each: fail, the default, fails the trip at an item's failure; skip keeps the item in the answer document as an error and goes on.",
+                      "enum": [
+                        "fail",
+                        "skip",
+                        ""
+                      ],
+                      "type": "string"
+                    },
+                    "path": {
+                      "description": "A path on the target, joined to it as request.path is, with placeholders. It names no scheme and no host: a chain asks one target only. The collector's request.path when left out.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "query": {
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "description": "Query parameters of the step, with placeholders. A name is not empty and holds no control character.",
+                      "propertyNames": {
+                        "minLength": 1,
+                        "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+                      },
+                      "type": "object"
+                    },
+                    "url": {
+                      "description": "A link a step read, as one placeholder alone, such as \"{{chain.next}}\", sent in place of path. A relative link is resolved against the answer it came from; it must lead to the target's origin.",
+                      "pattern": "^$|^\\{\\{chain\\.([A-Za-z_][A-Za-z0-9_]*)\\}\\}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "minItems": 1,
+                "type": "array"
               },
               "tls": {
                 "additionalProperties": false,

@@ -39,6 +39,10 @@ type pythonInput struct {
 	// the epoch, each left out when there is none.
 	ScrapeTime  any `json:"scrape_time,omitempty"`
 	LastSuccess any `json:"last_success,omitempty"`
+	// Steps is the script's steps, how each request of an http
+	// collector's chain went, jq's $steps; left out, None, without a
+	// chain.
+	Steps any `json:"steps,omitempty"`
 }
 
 type pythonResponse struct {

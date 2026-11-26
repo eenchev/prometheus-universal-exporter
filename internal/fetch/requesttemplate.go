@@ -449,7 +449,7 @@ func RequestParams(c *model.Collector) []RequestParam {
 	byName := map[string]*RequestParam{}
 	var names []string
 	for _, p := range placeholders {
-		if p.Clock != nil {
+		if p.Clock != nil || strings.HasPrefix(p.Name, chainParamPrefix) {
 			continue // no probe parameter fills it
 		}
 		param := byName[p.Name]
@@ -555,7 +555,11 @@ func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, o
 			return nil, f.err
 		}
 		for _, p := range f.placeholders {
-			used[p.Name] = true
+			// A parameter a chain fills in itself is none a probe gives
+			// (chaintemplate.go).
+			if !strings.HasPrefix(p.Name, chainParamPrefix) {
+				used[p.Name] = true
+			}
 		}
 	}
 	if path {

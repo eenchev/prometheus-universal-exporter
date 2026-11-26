@@ -80,3 +80,26 @@ func SchemaOptionalPattern(pattern string) string {
 func SchemaOnlyBlanks() map[string]any {
 	return map[string]any{"type": "string", "pattern": "^[" + SchemaSurroundingBlank + "]+$"}
 }
+
+// SchemaHeaderNameChars are the characters of a header name, an HTTP token
+// (RFC 9110 § 5.6.2), as a pattern's character class writes them.
+const SchemaHeaderNameChars = "!#$%&'*+.^_`|~0-9A-Za-z-"
+
+// SchemaHeaderNames is the rule of a header's name in request.headers
+// (checkHeaderNames): an HTTP token that is not Accept-Encoding, in any
+// case, since the exporter sets that one itself. Only the exporter refuses
+// two names that are one header in different case: a schema sees each name
+// on its own.
+func SchemaHeaderNames() map[string]any {
+	return map[string]any{
+		"pattern": "^[" + SchemaHeaderNameChars + "]+$",
+		"not":     map[string]any{"pattern": "^" + SchemaCaseless("Accept-Encoding") + "$"},
+	}
+}
+
+// SchemaQueryNames is the rule of a name of request.query
+// (checkQueryNames): one of at least a character, none of them a control
+// character. Any other is sent escaped.
+func SchemaQueryNames() map[string]any {
+	return map[string]any{"minLength": 1, "pattern": `^[^\x00-\x1F\x7F]*$`}
+}

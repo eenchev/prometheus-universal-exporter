@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -41,6 +42,9 @@ type collectorEntry struct {
 	Credentials          []string
 	ForwardAuthorization bool
 	ForwardHeaders       []string
+	// Chain says what a collector with request.then asks per trip: its
+	// steps, and the requests its last trip sent; "" for another.
+	Chain string
 }
 
 type collectorsPage struct {
@@ -119,6 +123,7 @@ func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 			Credentials:          configuredCredentials(c),
 			ForwardAuthorization: c.Request.ForwardAuthorization,
 			ForwardHeaders:       forwardableHeaders(c.Request),
+			Chain:                s.chainSummary(c),
 		})
 	}
 	s.renderPage(w, collectorsTemplate, page)
@@ -171,7 +176,7 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 {{- range .Collectors}}
 <section class="collector" id="collector-{{.Name}}">
 <h2><code>{{.Name}}</code></h2>
-<p class="kind">{{.RequestType}} · {{.Transform}}</p>
+<p class="kind">{{.RequestType}} · {{.Transform}}{{if .Chain}} · {{.Chain}}{{end}}</p>
 <form class="probe" action="probe" method="get" autocomplete="off">
 <input type="hidden" name="collector" value="{{.Name}}">
 <div class="row">
@@ -326,3 +331,18 @@ for (const form of document.querySelectorAll("form.probe")) {
 </body>
 </html>
 `)
+
+// chainSummary is what the collectors page says of c's chain: how many
+// requests make it, and how many its last trip sent, fan-out items
+// included; "" for a collector without request.then.
+func (s *Server) chainSummary(c *model.Collector) string {
+	steps := fetch.CollectorPolicy(c).Chain
+	if steps == nil {
+		return ""
+	}
+	summary := fmt.Sprintf("a chain of %d requests", len(steps)+1)
+	if trip, ok := s.chains.ofCollector(c.Name); ok {
+		summary += fmt.Sprintf("; the last trip sent %d requests", trip.requests())
+	}
+	return summary
+}

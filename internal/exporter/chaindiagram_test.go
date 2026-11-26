@@ -101,3 +101,44 @@ func TestAFanOutsSpansStopAtAHundredItems(t *testing.T) {
 		t.Fatalf("untraced %v, last kept %v", untraced, last)
 	}
 }
+
+// longChain is a report whose every line would run past a block: a long
+// step name, a long path and query, long values, a long item error and an
+// error of several lines.
+func longChain() *fetch.ChainReport {
+	long := strings.Repeat("abcdefghij", 12)
+	return &fetch.ChainReport{Answer: model.ChainAnswerAll, FailedStep: "detail_of_every_product_in_the_catalogue", Steps: []fetch.ChainStepReport{
+		{Name: "first", Method: "GET", URL: "https://dummyjson.com/auth/products?limit=5&select=id&skip=5&" + long, State: fetch.ChainStepOK, Status: 200, Duration: 142 * time.Millisecond,
+			Values: []fetch.ChainValueReport{{Name: "ids", Text: "[6,7,8,9,10," + long + "]", Found: true}}},
+		{Name: "product", Method: "GET", URL: "https://dummyjson.com/auth/products/6?select=title%2Ccategory%2Cprice%2Cstock%2Crating%2Creviews", State: fetch.ChainStepFailed, ForEach: true, OnItemError: model.ChainItemSkip, ItemsFailed: 1, Duration: 273 * time.Millisecond,
+			Items: []fetch.ChainItemReport{{Index: 0, Each: "6", Status: 200}, {Index: 1, Each: long, Error: "received HTTP status 404 " + long}}},
+		{Name: "detail_of_every_product_in_the_catalogue", Method: "PATCH", URL: "https://dummyjson.com/" + long, State: fetch.ChainStepTimedOut, Duration: 2100 * time.Millisecond, Deadline: "the trip's deadline", Error: strings.Repeat("context deadline exceeded ", 12)},
+	}}
+}
+
+// Every line of a block stays inside it: a line is cut to lineChars
+// characters, its last …, the path of a step's title at its end, so the
+// name and the method stay; an error wraps over at most three lines of
+// that many. lineChars characters of 12px monospace, 7.2 units each, fit
+// the block's width less its padding.
+func TestTheWorkflowDiagramKeepsItsTextInsideTheBlocks(t *testing.T) {
+	if width := float64(lineChars) * 12 * 0.6; width > blockWidth-2*blockPadding {
+		t.Fatalf("%d characters are %.0f units, wider than a block's %d", lineChars, width, blockWidth-2*blockPadding)
+	}
+	for _, values := range []bool{false, true} {
+		for _, block := range chainBlocks(longChain(), chainDiagramOptions{values: values}) {
+			for _, line := range block.lines {
+				if n := len([]rune(line)); n > lineChars {
+					t.Errorf("a line of %d characters runs past the block: %q", n, line)
+				}
+			}
+		}
+	}
+	blocks := chainBlocks(longChain(), chainDiagramOptions{values: true})
+	if title := blocks[1].lines[0]; !strings.HasPrefix(title, "product  GET /auth/products/6?select=") || !strings.HasSuffix(title, "…") {
+		t.Errorf("the fan-out's title is %q", title)
+	}
+	if lines := blocks[2].lines; !strings.HasSuffix(lines[len(lines)-1], "…") || len(lines) != 5 {
+		t.Errorf("the timed-out step's error is not cut over three lines: %q", lines)
+	}
+}

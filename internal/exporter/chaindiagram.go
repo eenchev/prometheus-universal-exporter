@@ -62,8 +62,13 @@ const (
 	arrowHeight   = 26
 	stackOffset   = 5
 	maxErrorLines = 3
-	errorLineLen  = 72
 	maxShownItems = 5
+	// lineChars is the most characters of a block's line. A line runs
+	// blockWidth less a padding on either side, 500 units, in 12px
+	// monospace, whose character is 0.6em, 7.2 units, in Menlo, Consolas
+	// and the browsers' own monospace alike: 69 characters fill it, and 66
+	// leave a margin for a wider font.
+	lineChars = 66
 )
 
 // chainStepID is the id of the element of a step's details in a debug
@@ -266,9 +271,9 @@ func stepBlock(step *fetch.ChainStepReport, options chainDiagramOptions) chainBl
 	}
 	title := step.Name + "  " + step.Method
 	if step.URL != "" {
-		title += " " + shownStart(pathOf(step.URL), 60)
+		title += " " + pathOf(step.URL)
 	}
-	block.lines = append(block.lines, title)
+	block.lines = append(block.lines, fitted(title))
 	switch step.State {
 	case fetch.ChainStepNotReached:
 		block.class, block.word = "unreached", "not reached"
@@ -294,9 +299,9 @@ func stepBlock(step *fetch.ChainStepReport, options chainDiagramOptions) chainBl
 		state += fmt.Sprintf("  status %d", step.Status)
 	}
 	state += "  " + step.Duration.Round(time.Millisecond).String()
-	block.lines = append(block.lines, state)
+	block.lines = append(block.lines, fitted(state))
 	if len(step.Values) > 0 {
-		block.lines = append(block.lines, "read: "+shownStart(shownValues(step.Values, options.values), errorLineLen))
+		block.lines = append(block.lines, fitted("read: "+shownValues(step.Values, options.values)))
 	}
 	if step.ForEach {
 		block.stacked = true
@@ -310,7 +315,7 @@ func stepBlock(step *fetch.ChainStepReport, options chainDiagramOptions) chainBl
 				block.lines = append(block.lines, fmt.Sprintf("and %d more", step.ItemsFailed-shown))
 				break
 			}
-			block.lines = append(block.lines, shownStart(fmt.Sprintf("item %d (%s): %s", item.Index+1, item.Each, item.Error), errorLineLen))
+			block.lines = append(block.lines, fitted(fmt.Sprintf("item %d (%s): %s", item.Index+1, item.Each, item.Error)))
 			shown++
 		}
 		if step.ItemsCut > 0 {
@@ -318,7 +323,7 @@ func stepBlock(step *fetch.ChainStepReport, options chainDiagramOptions) chainBl
 		}
 	}
 	if block.class != "ok" && step.Error != "" && (!step.ForEach || step.State == fetch.ChainStepTimedOut) {
-		block.lines = append(block.lines, wrapped(step.Error, errorLineLen, maxErrorLines)...)
+		block.lines = append(block.lines, wrapped(step.Error, lineChars, maxErrorLines)...)
 	}
 	return block
 }
@@ -361,8 +366,18 @@ func shownChainValue(v fetch.ChainValueReport) string {
 	return shownStart(v.Text, 64)
 }
 
+// fitted is a line of a block cut to lineChars characters, the last of them
+// … when it goes on, so it stays inside the block.
+func fitted(line string) string {
+	runes := []rune(line)
+	if len(runes) <= lineChars {
+		return line
+	}
+	return string(runes[:lineChars-1]) + "…"
+}
+
 // wrapped is text in lines of at most width characters, at most lines of
-// them, the last ending with … when text goes on.
+// them, the last ending with … when text goes on, within the width.
 func wrapped(text string, width, lines int) []string {
 	var out []string
 	runes := []rune(text)
@@ -377,7 +392,8 @@ func wrapped(text string, width, lines int) []string {
 		runes = runes[n:]
 	}
 	if len(runes) > 0 && len(out) > 0 {
-		out[len(out)-1] += "…"
+		last := []rune(out[len(out)-1])
+		out[len(out)-1] = string(last[:min(len(last), width-1)]) + "…"
 	}
 	return out
 }

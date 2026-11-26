@@ -144,7 +144,7 @@ next export, or through an outage, is therefore not taken for a newer one.
   it knows when each began to count, and their points start at that time
   (see [Created timestamps](SELF-METRICS.md#created-timestamps)).
 - The start times remembered are bounded too, at twice
-  [`otlp.max_pending_points`](#delivery) (200000 by default), so series whose
+  [`otlp.max_pending_points`](#delivery) (200000 with its default), so series whose
   labels keep changing cannot grow them without limit. Past the bound, the
   series exported least recently is forgotten first, and starts again if it
   comes back. Each keeps at most 256 bytes of its series, using a digest for

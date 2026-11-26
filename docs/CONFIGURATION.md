@@ -4070,6 +4070,9 @@ requires a `target`, a broker of the cluster, `host`, `host:port` or
   refuses to send. It gets a `400` that names the parameter before the
   target is contacted, instead of a `502` that is retried and logged as the
   target's failure.
+- So does an `http` or `graphite` target that holds a control character,
+  which no URL holds. Blanks around a target are trimmed, so a line feed at
+  its end is not one.
 - A parameter that no request type knows is not read at all, whatever its
   values.
 - A whole request, with its request line and headers, may be 64 KiB. The

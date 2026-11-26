@@ -188,7 +188,9 @@ header the collector forwards (§ 42.4) that holds a control character other
 than tab MUST be answered `400` naming the parameter, before the target is
 contacted or the probe counted, as a configured header value with one is
 refused at load; it MUST NOT be sent, retried or logged as the target's
-failure. A parameter no request type accepts MUST stay
+failure. So MUST an `http` or `graphite` target that holds a control
+character within the blanks around it, which no URL holds. A parameter no
+request type accepts MUST stay
 ignored, repeated or long as it may be.
 
 #### 3.2a Probe deadline

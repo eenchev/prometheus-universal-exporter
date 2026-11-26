@@ -306,3 +306,36 @@ func TestTheHTTPServerBoundsARequestsLineAndHeaders(t *testing.T) {
 		t.Fatalf("a request of 32 KiB answered %d %.200q, want the probe's own 400", code, body)
 	}
 }
+
+// An http probe's target with a control character, which no URL holds, is
+// refused with 400 before anything is sent, as a header_<name> value with
+// one is, rather than failing the trip as the target's failure, being
+// retried and logged. Blanks around a target are trimmed, so a target with
+// a line feed at its end still reaches its server.
+func TestAProbeTargetWithAControlCharacterIsRefused(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := testutil.Collector("text", "text")
+	c.Request.Retry.Attempts = 3
+	server := verboseServer(t, true, c)
+	for _, bad := range []string{"\x00", target.URL + "/a\x01b", target.URL + "/\x7f", "ht\ttp://example.com/"} {
+		r := probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(bad), nil)
+		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "has a control character in its target") {
+			t.Errorf("target %q: answered %d %q, want 400", bad, r.Code, r.Body)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("refused probes reached the target %d times", n)
+	}
+	if strings.Contains(logs.String(), "probe failed") {
+		t.Fatalf("a refused probe was logged as the target's failure:\n%s", logs)
+	}
+	if r := probeOnce(t, server, "/probe?collector=text&target="+url.QueryEscape(target.URL+"\n"), nil); r.Code != http.StatusOK || hits.Load() != 1 {
+		t.Errorf("a target with a line feed at its end: answered %d %q", r.Code, r.Body)
+	}
+}

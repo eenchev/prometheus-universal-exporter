@@ -22,6 +22,13 @@ import (
 // absolute URL. A probe's target may be a bare host:port, as Prometheus
 // service discovery hands it over, and is checked when it is fetched.
 func checkHTTPTarget(c *model.Collector, target string, static bool) error {
+	// A control character within a target, which no URL holds, is refused
+	// before anything is sent, as any other wrong parameter is, rather than
+	// failing the fetch as the target's failure: logged, counted and backed
+	// off from. Blanks around the target are trimmed (normalizeTarget).
+	if strings.ContainsFunc(strings.TrimSpace(target), func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return errors.New("has a control character in its target, which no URL holds")
+	}
 	if !static {
 		return nil
 	}

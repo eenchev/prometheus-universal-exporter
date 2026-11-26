@@ -69,17 +69,15 @@ func TestAProbeOfATargetNamedAsAStaticTargetIsNotForgottenWithThatTarget(t *test
 	}
 }
 
-// An http probe's target may hold any bytes, NULs among them: such a probe
-// fails where its URL is read, and its failure is remembered, as any
-// probe's is. While a key was its parts with a NUL between them, a target
-// could be written so that the key of its probe was, byte for byte, the key
-// of something else: here, for a collector whose definition could not be
-// fingerprinted, so that its probes have no key of their own, the key of a
-// rule of the probe of another target. Each then took the other's failure
-// for its own with another error: both were logged in full on every scrape,
-// and the rule's recovery would have ended the probe's failure. They are
-// two failures now, each logged in full once and then as a repeat, and the
-// probe of the target with NULs is answered as it was.
+// While a key of the failure log was its parts with a NUL between them, an
+// http probe's target could be written with NULs so that the key of its
+// probe's failure was, byte for byte, the key of something else: here, for
+// a collector whose definition could not be fingerprinted, so that its
+// probes have no key of their own, the key of a rule of the probe of
+// another target. Each then took the other's failure for its own. Such a
+// target is now refused with 400 before anything is sent, as no URL holds a
+// control character, so it is no failure of the log at all: the rule's
+// failure alone is remembered, logged in full once and then as a repeat.
 func TestATargetWithNULsHasNoOtherSubjectsKey(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -112,14 +110,14 @@ func TestATargetWithNULsHasNoOtherSubjectsKey(t *testing.T) {
 			t.Fatalf("the probe whose rule lacks its value is answered %d, want 200: %s", recorder.Code, recorder.Body)
 		}
 		recorder := probeOnce(t, server, probePath("unkeyed", crafted, ""), nil)
-		if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "invalid control character in URL") {
-			t.Fatalf("the probe of a target with NULs is answered %d %q, want 502 and that its URL holds a control character", recorder.Code, recorder.Body)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "has a control character in its target") {
+			t.Fatalf("the probe of a target with NULs is answered %d %q, want 400 and that its target holds a control character", recorder.Code, recorder.Body)
 		}
 	}
-	if rules, probes := levelsOf(t, logs, "metric extraction failed"), levelsOf(t, logs, "probe failed"); strings.Join(rules, " ") != "WARN DEBUG" || strings.Join(probes, " ") != "ERROR DEBUG" {
-		t.Errorf("the rule's failures are logged at %v and those of the probe of the target with NULs at %v, want each in full and then as a repeat:\n%s", rules, probes, logs)
+	if rules, probes := levelsOf(t, logs, "metric extraction failed"), levelsOf(t, logs, "probe failed"); strings.Join(rules, " ") != "WARN DEBUG" || len(probes) != 0 {
+		t.Errorf("the rule's failures are logged at %v and those of the probe of the target with NULs at %v, want the rule's in full and then as a repeat, and no probe failure:\n%s", rules, probes, logs)
 	}
-	if remembered := rememberedOf(server, "unkeyed"); len(remembered) != 2 {
-		t.Errorf("the failure log remembers %v of the collector, want the rule's failure and the probe's", remembered)
+	if remembered := rememberedOf(server, "unkeyed"); len(remembered) != 1 {
+		t.Errorf("the failure log remembers %v of the collector, want the rule's failure alone", remembered)
 	}
 }

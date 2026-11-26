@@ -227,3 +227,71 @@ func TestTheDiagramReadsInBothThemes(t *testing.T) {
 		}
 	}
 }
+
+// With the spread, a member's box has a third line: the static and probe
+// targets it holds and its share of their weight, a share above none
+// that rounds to none being "<1%". An overloaded member's box is marked,
+// its line says so, and its tooltip gives its fair share, the targets it
+// keeps draining and the balance factor. The longest such line fits its
+// box, the boxes the diagram, and the lines' texts stay far enough apart;
+// without the spread a box keeps its two lines.
+func TestAMembersBoxGivesItsShareOfTheTargets(t *testing.T) {
+	spread := &SpreadStatus{BalanceFactor: 1.2, TotalWeight: SpreadCounts{Static: 993, Draining: 4, Probe: 3}, Members: []SpreadMember{
+		{Member: "a", SpreadCounts: SpreadCounts{Static: 4, Draining: 2}, Weight: SpreadCounts{Static: 4, Draining: 4}, FairShare: 2.5, LoadRatio: 1.6, Overloaded: true},
+		{Member: "b", SpreadCounts: SpreadCounts{Static: 988, Probe: 3}, Weight: SpreadCounts{Static: 988, Probe: 3}, FairShare: 997.5, LoadRatio: 0.99},
+		{Member: "c", SpreadCounts: SpreadCounts{Static: 1}, Weight: SpreadCounts{Static: 1}, FairShare: 2.5, LoadRatio: 0.4},
+	}}
+	members := []MemberStatus{{ID: "a", Live: true}, {ID: "b", Live: true}, {ID: "c", Live: true}, {ID: "d", Live: true}}
+	s := Status{Members: &MembersStatus{List: members}, Spread: spread}
+	v := topologyOf(s)
+	want := []struct {
+		share, tip string
+		over       bool
+	}{
+		{"4 targets · <1%, over", "4 targets, <1% of the weight; its fair share is <1%; it keeps 2 more draining; overloaded, above 1.2 times its fair share", true},
+		{"991 targets · 99%", "991 targets, 99% of the weight; its fair share is 100%", false},
+		{"1 target · <1%", "1 target, <1% of the weight; its fair share is <1%", false},
+		{"0 targets · 0%", "0 targets, 0% of the weight; its fair share is 0%", false},
+	}
+	for i, w := range want {
+		n := v.Members[i]
+		if n.Share != w.share || n.ShareTip != w.tip || n.Over != w.over {
+			t.Errorf("member %s: %q, %q, over %v; want %q, %q, %v", n.Name, n.Share, n.ShareTip, n.Over, w.share, w.tip, w.over)
+		}
+		if n.H != topologyNodeH+topologyShareH || n.ShareY() >= n.Y+n.H {
+			t.Errorf("member %s's box is %dpx high, its third line at %d", n.Name, n.H, n.ShareY()-n.Y)
+		}
+		if n.Y+n.H > v.Height {
+			t.Errorf("member %s ends at %d, below the diagram's %d", n.Name, n.Y+n.H, v.Height)
+		}
+	}
+	for i := 1; i < len(v.Members); i++ {
+		if v.Members[i].Y < v.Members[i-1].Y+v.Members[i-1].H {
+			t.Errorf("boxes %d and %d overlap", i-1, i)
+		}
+		if gap := v.Members[i].Edge.LY - v.Members[i-1].Edge.LY; gap < 14 {
+			t.Errorf("the texts of lines %d and %d are %dpx apart", i-1, i, gap)
+		}
+	}
+	// The longest line, at 6.5px a character, fits the box with room on
+	// each side.
+	if width := 13 * len([]rune("9999 targets · 100%, over")) / 2; width > topologyNodeW-8 {
+		t.Errorf("the longest share line is about %dpx, wider than a box", width)
+	}
+	var b strings.Builder
+	if err := statusContentTemplate.Execute(&b, statusPageOf(s)); err != nil {
+		t.Fatal(err)
+	}
+	page := b.String()
+	for _, want := range []string{`<g class="node over"><title>a: 4 targets, &lt;1% of the weight;`, `class="share">4 targets · &lt;1%, over</text>`,
+		`<g class="node"><title>b: 991 targets`,
+		"An exporter's last line is its targets and its share of their weight, in red when it is overloaded.</figcaption>"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	s.Spread = nil
+	if plain := topologyOf(s); plain.Members[0].H != topologyNodeH || plain.Members[0].Share != "" || plain.HasShares {
+		t.Errorf("without the spread a box is %+v", plain.Members[0])
+	}
+}

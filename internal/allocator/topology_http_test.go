@@ -34,13 +34,13 @@ func TestTheStatusPageDrawsTheMembersAroundTheLeader(t *testing.T) {
 	r1, r2 := memberOf(t, s, "r1"), memberOf(t, s, "r2")
 	requireIn(t, page, `<h2 id="diagram">Diagram</h2>`,
 		`<g class="node hub master">`, `>Target allocator</text>`, `>this instance</text>`,
-		`<a href="?member=r1"><g class="node"><title>r1</title>`,
+		`<a href="?member=r1"><g class="node"><title>r1: 0 targets, and no member holds any weight</title>`, `class="share">0 targets</text>`,
 		`<a href="?member=a%26b%23c">`,
 		`<text class="edge-label" x="`, `<title data-at="`+r1.LastHeartbeat+`">`+r1.LastHeartbeat+`, the last heartbeat</title>0s ago</text>`,
 		`<line class="edge late"`, `<title data-at="`+r2.LastHeartbeat+`">`+r2.LastHeartbeat+`, the last heartbeat; a heartbeat is overdue</title>7s ago, overdue</text>`,
 		`const tip = mark.localName === "title" ? "textContent" : "title";`,
 		`<line class="edge down"`, `>shutting down, 0s ago</text>`, `<g class="node down">`,
-		`r&lt;img src=x&gt;`, "<figcaption>This instance leads; the grey boxes are the exporters. Each line gives the time since the last heartbeat. Dashed red needs attention; the line says why.</figcaption>")
+		`r&lt;img src=x&gt;`, "<figcaption>This instance leads; the grey boxes are the exporters. Each line gives the time since the last heartbeat. Dashed red needs attention; the line says why. An exporter's last line is its targets and its share of their weight, in red when it is overloaded.</figcaption>")
 	if strings.Contains(page, "<img src=x>") {
 		t.Error("a member's name is written unescaped")
 	}
@@ -62,7 +62,7 @@ func TestTheDiagramFillsTheLeaderAmongPeers(t *testing.T) {
 	leaderPage := ask(leader.a.Handler(""), "/", "").Body.String()
 	requireIn(t, leaderPage, `<g class="node hub master">`, `>this instance, leader</text>`,
 		`<g class="node allocator"><title>`+follower.addr.String()+`</title>`, `>follower</text>`, `, the last check</title>`,
-		"<figcaption>The filled box leads; purple boxes are the other allocator instances, grey ones the exporters. Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why.</figcaption>",
+		"<figcaption>The filled box leads; purple boxes are the other allocator instances, grey ones the exporters. Each exporter heartbeats every allocator instance; the exporters' lines are the heartbeats this instance receives. Each line gives the time since the last heartbeat or check. Dashed red needs attention; the line says why. An exporter's last line is its targets and its share of their weight, in red when it is overloaded.</figcaption>",
 		"Diagram: this instance, leader, 1 peer and 2 members;")
 	followerPage := ask(follower.a.Handler(""), "/", "").Body.String()
 	requireIn(t, followerPage, `<g class="node hub allocator">`, `>this instance, follower</text>`,
@@ -103,12 +103,15 @@ func TestTheDiagramScrollsAndZooms(t *testing.T) {
 	page := ask(a.Handler(""), "/", "").Body.String()
 	requireIn(t, page,
 		`.topology-window { max-height: 480px; overflow: auto;`,
+		// An overloaded member's box and its share line are red.
+		".topology .node.over rect { stroke: var(--bad); stroke-width: 2; }", ".topology .node.over text.share { fill: var(--bad); font-weight: 600; }",
 		`<div class="topology-zoom" role="group" aria-label="Zoom" hidden><button type="button" data-zoom="out" aria-label="Zoom out"`,
 		`<button type="button" data-zoom="reset">Reset</button><span class="muted">or Ctrl and the mouse wheel, or a trackpad's pinch</span></div>`,
 		// On a phone the hint wraps, and "Reset" is not broken in two.
 		".topology-zoom { display: flex; flex-wrap: wrap;", ".topology-zoom button { flex: none; white-space: nowrap; overflow-wrap: normal;",
 		`<div class="topology-window" tabindex="0" role="region" aria-label="The diagram, which scrolls">`,
-		`data-width="616" data-height="102" data-focus-x="98" data-focus-y="51">`,
+		`data-width="616" data-height="109" data-focus-x="98" data-focus-y="54">`,
+		`<title>r1: 3 targets, 100% of the weight; its fair share is 100%</title>`, `class="share">3 targets · 100%</text>`,
 		"const zoomSteps = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];",
 		`svg.setAttribute("width", Number(svg.getAttribute("data-width")) * zoom);`,
 		"box.scrollLeft = at[0] * zoom - x;",

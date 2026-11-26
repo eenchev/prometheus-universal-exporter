@@ -1,6 +1,7 @@
 package allocator
 
 import (
+	"math"
 	"strconv"
 )
 
@@ -28,8 +29,11 @@ import (
 // its gap is the wider. topologyMost is the most members drawn, and
 // topologyNameMax the most characters of a box's line.
 const (
-	topologyNodeW     = 170
-	topologyNodeH     = 36
+	topologyNodeW = 170
+	topologyNodeH = 36
+	// topologyShareH is what a member's third line, its share of the
+	// targets, adds to its box when the page has the spread.
+	topologyShareH    = 14
 	topologyHubW      = 180
 	topologyHubH      = 64
 	topologyPeerGap   = 134
@@ -66,6 +70,8 @@ type topologyView struct {
 	// HasLeader says a box is the leader's: none is before the instances
 	// have checked each other.
 	HasLeader bool
+	// HasShares says the members' boxes give their shares of the targets.
+	HasShares bool
 	// FocusX and FocusY are the middle of the leader's box, or of this
 	// instance's while none leads, which the page scrolls the diagram's
 	// window to at first and on Reset.
@@ -88,7 +94,13 @@ type topologyNode struct {
 	Member         string
 	Allocator      bool
 	Master, Down   bool
-	Edge           *topologyEdge
+	// Share is a member's third line, its targets and its share of the
+	// weight (memberShare), "" when the page has no spread; ShareTip is
+	// what its tooltip adds to FullName, and Over marks a member that is
+	// overloaded.
+	Share, ShareTip string
+	Over            bool
+	Edge            *topologyEdge
 }
 
 // topologyEdge is a line from the hub to a node, and its text, put along
@@ -107,11 +119,12 @@ type topologyEdge struct {
 	Class          string
 }
 
-// NameY and SubY are the baselines of a node's two lines, and MidX its
+// NameY, SubY and ShareY are the baselines of a node's lines, and MidX its
 // middle, where they are centred.
-func (n topologyNode) NameY() int { return n.Y + 15 }
-func (n topologyNode) SubY() int  { return n.Y + 29 }
-func (n topologyNode) MidX() int  { return n.X + n.W/2 }
+func (n topologyNode) NameY() int  { return n.Y + 15 }
+func (n topologyNode) SubY() int   { return n.Y + 29 }
+func (n topologyNode) ShareY() int { return n.Y + 43 }
+func (n topologyNode) MidX() int   { return n.X + n.W/2 }
 
 // topologyOf lays out the diagram of s, nil when there is neither a peer
 // nor a member to draw.
@@ -148,8 +161,14 @@ func topologyOf(s Status) *topologyView {
 	if v.MoreMembers > 0 {
 		memberRows++
 	}
+	// With the spread, a member's box has a third line, and the rows are
+	// as much higher.
+	memberH, rowH := topologyNodeH, topologyRowH
+	if s.Spread != nil && s.Members != nil {
+		memberH, rowH = topologyNodeH+topologyShareH, topologyRowH+topologyShareH
+	}
 	rows := max(memberRows, len(peers), 1)
-	inner := max(rows*topologyRowH, topologyHubH+topologyRowH/2)
+	inner := max(rows*rowH, topologyHubH+rowH/2)
 	v.Height = inner + 2*topologyMargin
 
 	hubX, membersX := topologyMargin, topologyMargin+topologyHubW+topologyAlone
@@ -167,14 +186,14 @@ func topologyOf(s Status) *topologyView {
 	v.Hub.Note = cutName(s.Instance.Address)
 	hubMidY := hubY + topologyHubH/2
 
-	// rowY is the top of a node in row i of a column of n rows, the column
-	// centred beside the hub.
-	rowY := func(i, n int) int {
-		top := topologyMargin + (inner-n*topologyRowH)/2
-		return top + i*topologyRowH + (topologyRowH-topologyNodeH)/2
+	// rowY is the top of a box h high in row i of a column of n rows, the
+	// column centred beside the hub.
+	rowY := func(i, n, h int) int {
+		top := topologyMargin + (inner-n*rowH)/2
+		return top + i*rowH + (rowH-h)/2
 	}
 	for i, p := range peers {
-		y := rowY(i, len(peers))
+		y := rowY(i, len(peers), topologyNodeH)
 		n := topologyNode{X: topologyMargin, Y: y, W: topologyNodeW, H: topologyNodeH, Allocator: true, Master: p.Leader, Down: !p.Live}
 		n.Name, n.FullName = cutName(p.Address), p.Address
 		n.Sub = "follower"
@@ -190,11 +209,14 @@ func topologyOf(s Status) *topologyView {
 		v.Peers = append(v.Peers, n)
 	}
 	for i, m := range shown {
-		y := rowY(i, memberRows)
-		n := topologyNode{X: membersX, Y: y, W: topologyNodeW, H: topologyNodeH, Down: !m.Live || m.ShuttingDown}
+		y := rowY(i, memberRows, memberH)
+		n := topologyNode{X: membersX, Y: y, W: topologyNodeW, H: memberH, Down: !m.Live || m.ShuttingDown}
 		n.Name, n.FullName, n.Sub = cutName(m.ID), m.ID, cutName(m.Address)
 		n.Member = m.ID
-		n.Edge = edgeOf(hubX+topologyHubW, hubMidY, membersX, y+topologyNodeH/2)
+		if memberH > topologyNodeH {
+			n.Share, n.ShareTip, n.Over = memberShare(s.Spread, m.ID)
+		}
+		n.Edge = edgeOf(hubX+topologyHubW, hubMidY, membersX, y+memberH/2)
 		n.Edge.Text, n.Edge.Tip, n.Edge.Class = memberEdgeText(m)
 		n.Edge.At = m.LastHeartbeat
 		v.Members = append(v.Members, n)
@@ -202,10 +224,11 @@ func topologyOf(s Status) *topologyView {
 	if v.MoreMembers > 0 {
 		// The text, longer than a box is wide, ends at the diagram's right
 		// edge, below the last member's box, where no line runs.
-		v.MoreX, v.MoreY = v.Width-topologyMargin, rowY(len(shown), memberRows)+topologyNodeH/2+4
+		v.MoreX, v.MoreY = v.Width-topologyMargin, rowY(len(shown), memberRows, memberH)+memberH/2+4
 	}
 	v.Label = topologyLabel(s, len(peers), len(members))
 	v.HasMembers = s.Members != nil
+	v.HasShares = memberH > topologyNodeH && len(v.Members) > 0
 	v.HasLeader = v.Hub.Master
 	v.FocusX, v.FocusY = v.Hub.MidX(), v.Hub.Y+v.Hub.H/2
 	for _, p := range v.Peers {
@@ -215,6 +238,49 @@ func topologyOf(s Status) *topologyView {
 		}
 	}
 	return v
+}
+
+// memberShare is a member's third line: the static and probe targets it
+// holds and its share of their weight, the weight that LoadRatio weighs
+// against the fair share; what its tooltip says of them, its fair share
+// and the targets it keeps draining; and whether it is overloaded. A member
+// the spread does not name holds none.
+func memberShare(sp *SpreadStatus, id string) (text, tip string, over bool) {
+	var m SpreadMember
+	for _, x := range sp.Members {
+		if x.Member == id {
+			m = x
+			break
+		}
+	}
+	targets := m.Static + m.Probe
+	text = count(targets) + " target" + plural(int(targets))
+	tip = text + ", "
+	if placed := sp.TotalWeight.Static + sp.TotalWeight.Probe; placed > 0 {
+		share := percent(m.Weight.Static+m.Weight.Probe, placed)
+		text += " · " + share
+		tip += share + " of the weight; its fair share is " + percent(m.FairShare, placed)
+	} else {
+		tip += "and no member holds any weight"
+	}
+	if m.Draining > 0 {
+		tip += "; it keeps " + count(m.Draining) + " more draining"
+	}
+	if m.Overloaded {
+		text += ", over"
+		tip += "; overloaded, above " + weight(sp.BalanceFactor) + " times its fair share"
+	}
+	return text, tip, m.Overloaded
+}
+
+// percent is part of whole as a whole percentage, "<1%" for a part above
+// none that rounds to none.
+func percent(part, whole float64) string {
+	p := math.Round(part / whole * 100)
+	if p == 0 && part > 0 {
+		return "<1%"
+	}
+	return strconv.FormatFloat(p, 'f', 0, 64) + "%"
 }
 
 // hubRole is this instance's second line, and whether it leads: alone,

@@ -264,7 +264,7 @@ func memberShare(sp *SpreadStatus, id string) (text, tip string, over bool) {
 		tip += "and no member holds any weight"
 	}
 	if m.Draining > 0 {
-		tip += "; it keeps " + count(m.Draining) + " more draining"
+		tip += "; it also keeps " + count(m.Draining) + " draining"
 	}
 	if m.Overloaded {
 		text += ", over"

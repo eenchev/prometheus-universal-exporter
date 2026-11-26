@@ -248,7 +248,7 @@ func TestAMembersBoxGivesItsShareOfTheTargets(t *testing.T) {
 		share, tip string
 		over       bool
 	}{
-		{"4 targets · <1%, over", "4 targets, <1% of the weight; its fair share is <1%; it keeps 2 more draining; overloaded, above 1.2 times its fair share", true},
+		{"4 targets · <1%, over", "4 targets, <1% of the weight; its fair share is <1%; it also keeps 2 draining; overloaded, above 1.2 times its fair share", true},
 		{"991 targets · 99%", "991 targets, 99% of the weight; its fair share is 100%", false},
 		{"1 target · <1%", "1 target, <1% of the weight; its fair share is <1%", false},
 		{"0 targets · 0%", "0 targets, 0% of the weight; its fair share is 0%", false},

@@ -51,17 +51,13 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	if err = refuseNotScalarKeys(b); err != nil {
 		return nil, err
 	}
-	raw := b
-	b, entries := SplitDiscoveredTargets(b)
-	if entries != nil {
-		if err = discoveredValueProblems(raw); err != nil {
-			return nil, err
-		}
-	}
-	var f model.StaticTargetFile
+	// The file is decoded as written, discovered_targets apart, so that a
+	// mistake is told at its line, and an alias reads as its anchor
+	// wherever the two are.
+	var w staticTargetDocument
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&f)), b, &f); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&w)), b, &w.StaticTargetFile); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("static target file %s is empty; it must define targets", path)
 		}
@@ -70,13 +66,24 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	if err = oneDocument(dec); err != nil {
 		return nil, err
 	}
+	f := w.StaticTargetFile
 	f.Written = len(f.Targets)
-	if entries != nil {
-		if f.Discovered, err = readDiscoveredEntries(entries, fileHead(b)); err != nil {
+	if w.Entries.Kind != 0 {
+		if err = discoveredValueProblems(b); err != nil {
+			return nil, err
+		}
+		if f.Discovered, err = readDiscoveredEntries(ResolvedNode(&w.Entries), fileHead(b)); err != nil {
 			return nil, err
 		}
 	}
 	return &f, nil
+}
+
+// staticTargetDocument is a static target file as it is decoded: the file,
+// and its discovered_targets apart, which readDiscoveredEntries reads.
+type staticTargetDocument struct {
+	model.StaticTargetFile `yaml:",inline"`
+	Entries                yaml.Node `yaml:"discovered_targets"`
 }
 
 // refuseAllocatorKeys refuses a document with a key that only the target

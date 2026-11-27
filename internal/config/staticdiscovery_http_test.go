@@ -243,3 +243,42 @@ func metricsText(metrics []model.Metric) string {
 	}
 	return b.String()
 }
+
+// A file with discovered_targets reports a mistake in the rest of it at the
+// line it is on, wherever the entries are, and an alias of an anchor reads
+// as the anchor does, between the entries and the written targets either
+// way.
+func TestAFileWithEntriesReportsMistakesAtTheirLines(t *testing.T) {
+	const entriesFirst = `interval: 1m
+discovered_targets:
+  - name: node
+    collector: a
+    target_template: http://{{address}}/metrics
+    labels: &team
+      team: infra
+    discovery:
+      - dns_sd: {names: [_metrics._tcp.nodes.test]}
+  - name: other
+    collector: a
+    target_template: http://{{address}}/m
+    labels: *team
+    discovery:
+      - dns_sd: {names: [other.test]}
+targets:
+  - name: ta
+    labels: *team
+    collector: a
+    target: http://a.invalid
+`
+	f, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", entriesFirst))
+	if err != nil {
+		t.Fatalf("aliases of an entry's anchor: %v", err)
+	}
+	if f.Targets[0].Labels["team"] != "infra" || f.Discovered[1].Sample.Labels["team"] != "infra" {
+		t.Errorf("aliases of an entry's anchor read as %v and %v", f.Targets[0].Labels, f.Discovered[1].Sample.Labels)
+	}
+	text := strings.Replace(entriesFirst, "    target: http://a.invalid\n", "    target: http://a.invalid\n    interval: soon\n", 1)
+	if _, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", text)); err == nil || !strings.Contains(err.Error(), "line 21:") {
+		t.Errorf("a written target's mistake after the entries: %v, want it at line 21", err)
+	}
+}

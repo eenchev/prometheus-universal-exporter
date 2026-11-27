@@ -109,7 +109,7 @@ func fileHead(raw []byte) []*yaml.Node {
 	root := doc.Content[0]
 	var head []*yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if key := root.Content[i]; key.Value != "targets" && !strings.HasPrefix(key.Value, "x-") {
+		if key := root.Content[i]; key.Value != "targets" && key.Value != DiscoveredTargetsKey && !strings.HasPrefix(key.Value, "x-") {
 			head = append(head, ResolvedNode(key), ResolvedNode(root.Content[i+1]))
 		}
 	}
@@ -277,8 +277,11 @@ func checkDiscoverySources(list []model.DiscoverySource) error {
 	names := map[string]bool{}
 	for i := range list {
 		d := &list[i]
-		for kind, set := range map[string]bool{"file_sd": d.FileSD != nil, "http_sd": d.HTTPSD != nil, "kubernetes": d.Kubernetes != nil} {
-			if set {
+		for _, other := range []struct {
+			kind string
+			set  bool
+		}{{"file_sd", d.FileSD != nil}, {"http_sd", d.HTTPSD != nil}, {"kubernetes", d.Kubernetes != nil}} {
+			if kind := other.kind; other.set {
 				return fmt.Errorf("discovery source %d is a %s source, which the target allocator (pue-allocator --static-targets-file) asks; the exporter asks dns_sd sources alone, so run the exporter with the allocator, or find the targets by DNS", i, kind)
 			}
 		}

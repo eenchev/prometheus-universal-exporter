@@ -915,3 +915,20 @@ func TestDryRunReportsAChain(t *testing.T) {
 		t.Fatalf("exit=%d config=%+v", out.code, result)
 	}
 }
+
+// A dry run of a static target file of discovered_targets names its
+// entries, each checked at a sample address, beside the targets it writes;
+// an entry its collector refuses fails the check.
+func TestCheckNamesTheDiscoveredTargetsEntries(t *testing.T) {
+	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig)
+	entries := "interval: 1m\ndiscovered_targets:\n  - name: node\n    collector: demo\n    target_template: http://{{address}}/m\n    discovery:\n      - dns_sd: {names: [_m._tcp.a.test]}\n"
+	run := runCheckCLI(t, conf, "--static-targets-file="+testutil.WriteFile(t, "targets.yaml", entries))
+	details := run.result(t, "static_targets").Details
+	if run.code != 0 || fmt.Sprint(details["discovered_targets"]) != "[node]" || fmt.Sprint(details["targets"]) != "[]" {
+		t.Fatalf("exit=%d\n%s", run.code, run.stdout)
+	}
+	bare := strings.Replace(entries, "    target_template: http://{{address}}/m\n", "", 1)
+	if run := runCheckCLI(t, conf, "--static-targets-file="+testutil.WriteFile(t, "targets.yaml", bare)); run.code != 1 || !strings.Contains(strings.Join(run.result(t, "static_targets").Errors, " "), "checked with the address 192.0.2.1:9100") {
+		t.Fatalf("an entry the collector refuses: exit=%d\n%s", run.code, run.stdout)
+	}
+}

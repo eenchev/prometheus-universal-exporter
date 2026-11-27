@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -92,7 +93,7 @@ type DNSSDConfig = discovery.DNSSDConfig
 // The defaults and bounds of a discovery source.
 const (
 	// DefaultMaxDiscoveredTargets is --discovery.max-targets's default.
-	DefaultMaxDiscoveredTargets = 10000
+	DefaultMaxDiscoveredTargets = config.DefaultMaxDiscoveredTargets
 	// DefaultFileSDRefresh is how often file_sd files are read again by
 	// default: the allocator's own watch interval.
 	DefaultFileSDRefresh = time.Minute

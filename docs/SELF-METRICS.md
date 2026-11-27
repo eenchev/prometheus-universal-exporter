@@ -227,7 +227,7 @@ up * on (instance) group_left (version) http_exporter_build_info
 
 | Family | Type | Meaning |
 | --- | --- | --- |
-| `http_exporter_static_targets` | gauge | [Static targets](STATIC-TARGETS.md) loaded from the static target file; 0 without one. |
+| `http_exporter_static_targets` | gauge | [Static targets](STATIC-TARGETS.md) in force: those the static target file writes and those its `discovered_targets` found; 0 without one. |
 | `http_exporter_static_targets_exported_via_otlp` | gauge | Those of them with `export_via_otlp`, also delivered over OTLP. |
 
 A static target's scrapes are counted in its collector's families above, as

@@ -49,6 +49,9 @@ type Metric struct {
 	Histogram *Histogram        `json:"-"`
 	Summary   *Summary          `json:"-"`
 	Created   int64             `json:"-"`
+	// Exemplar is a counter's exemplar, as an OpenMetrics target wrote it
+	// after the counter's sample; nil for none.
+	Exemplar *Exemplar `json:"-"`
 }
 
 // Histogram is the value of a histogram series. NoSum and NoCount say that
@@ -80,16 +83,41 @@ type Histogram struct {
 	InfExemplar *Exemplar
 }
 
-// Exemplar is an observation that stands for a histogram's bucket. It holds
-// the value, when it was made, and the trace of the probe or scrape that made
-// it. Only the exporter's own durations have exemplars, and only for traces
-// that were exported. Only a format that can carry exemplars writes them:
-// OpenMetrics, protobuf and OTLP.
+// Exemplar is an observation that stands for a histogram's bucket or a
+// counter's increase. It holds the value, when it was made, and what it was
+// made in. The exporter's own durations have exemplars of the probes and the
+// scrapes whose traces were exported, with TraceID and SpanID. A series
+// read from an OpenMetrics target has the exemplars the target wrote, with
+// their labels in Labels, and Time zero for one written without a time. Only
+// a format that can carry exemplars writes them: OpenMetrics, protobuf and
+// OTLP.
 type Exemplar struct {
 	// TraceID and SpanID are as OTLP/JSON writes them, 32 and 16 hex digits.
 	TraceID, SpanID string
-	Value           float64
-	Time            time.Time
+	// Labels are a target's exemplar's labels, as it wrote them.
+	Labels map[string]string
+	Value  float64
+	Time   time.Time
+}
+
+// MaxExemplarRunes is how many characters an exemplar's label names and
+// values may have together, as OpenMetrics bounds them.
+const MaxExemplarRunes = 128
+
+// Pairs are the exemplar's labels in the order they are written: trace_id and
+// span_id of the exporter's own, then a target's by name.
+func (x *Exemplar) Pairs() [][2]string {
+	out := make([][2]string, 0, 2+len(x.Labels))
+	if x.TraceID != "" {
+		out = append(out, [2]string{"trace_id", x.TraceID})
+	}
+	if x.SpanID != "" {
+		out = append(out, [2]string{"span_id", x.SpanID})
+	}
+	for _, name := range SortedKeys(x.Labels) {
+		out = append(out, [2]string{name, x.Labels[name]})
+	}
+	return out
 }
 
 // InfBucket returns the count of the histogram's +Inf bucket and whether it

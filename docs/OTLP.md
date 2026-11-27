@@ -1338,7 +1338,15 @@ The exemplars are written where a format carries them
 The Prometheus text format has no exemplars. The series that measure one
 probe, `http_exporter_scrape_duration_seconds` and a static target's
 `http_exporter_target_scrape_duration_seconds`, are gauges, which
-OpenMetrics gives no exemplars, and a target's series have none.
+OpenMetrics gives no exemplars.
+
+A target's counters and histogram buckets carry the exemplars an
+OpenMetrics target wrote on them. A `trace_id` label of 32 hex digits and a
+`span_id` of 16 become the exemplar's `traceId` and `spanId`, in lower case,
+unless they are all zeros; any other label is one of its
+`filteredAttributes`. An exemplar the target
+wrote without a timestamp has the point's time. A sum's point carries its
+counter's exemplar in `exemplars`.
 
 ### Propagation to the targets
 
@@ -1406,4 +1414,5 @@ request lines show it.
   would be linked to (those of the tab's spans), and say that they would be
   linked if the trace were exported. A run's trace never is, so the request
   body shows them without.
-- A run's series are a target's, and have no exemplars.
+- A run's series are a target's, and have only the exemplars the target
+  wrote.

@@ -3127,7 +3127,21 @@ reads it (`internal/decode/openmetrics.go`), without `prometheus/common`, and:
 
 - a timestamp MUST be read as a float number of seconds and kept in
   milliseconds;
-- an exemplar after the value or the timestamp MUST be skipped;
+- an exemplar after the value or the timestamp of a counter's sample or a
+  histogram's bucket MUST be kept on that series or bucket: its labels, its
+  value and its timestamp, if it has one. One after any other sample, one that
+  does not parse, is not valid UTF-8, repeats a label name, does not separate
+  its labels with commas or has more than 128 characters of label names and
+  values together MUST be skipped, and the sample read without it. The
+  exemplar of a series that a `prometheus` rule's `scale` changes MUST be
+  dropped. OpenMetrics answers MUST write a kept exemplar after its counter's
+  sample or its bucket's count, its labels in order of name and its timestamp
+  only if it had one, and none in a family written as `unknown`; the OTLP
+  export MUST carry it on the sum's or the histogram's point, a `trace_id`
+  label of 32 hex digits as its `traceId` and a `span_id` of 16 as its
+  `spanId`, in lower case, unless they are all zeros, any other label as a
+  filtered attribute, and the point's time for one without a timestamp; the
+  Prometheus text format MUST NOT;
 - a counter family `foo`'s sample `foo_total` MUST be the counter `foo_total`,
   with the family's type and help, and a counter family named `foo_total` MUST
   be read the same way;
@@ -6773,8 +6787,9 @@ written for it, and, the same ones in the order of their
 values, in the histogram's `exemplars`; the OTLP export on the histogram's
 and the exponential histogram's points, as `exemplars` with `traceId`,
 `spanId`, `asDouble` and `timeUnixNano`. The Prometheus text format MUST
-NOT carry any, and no other series MUST: the gauges of one probe's
-duration can have none in OpenMetrics.
+NOT carry any, and no other self-metric MUST: the gauges of one probe's
+duration can have none in OpenMetrics. A target's series carry the
+exemplars it wrote (§ 14.1).
 
 Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
 gauge a static target's health series carry on its endpoint and over OTLP

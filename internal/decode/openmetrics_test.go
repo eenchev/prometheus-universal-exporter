@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -42,11 +43,32 @@ func TestOpenMetricsInput(t *testing.T) {
 			},
 		},
 		{
-			name: "exemplars are skipped, with or without a timestamp",
-			body: "# TYPE r counter\nr_total 5 # {trace_id=\"abc\"} 1.0 1700000000.1\n# TYPE s counter\ns_total 6 1700000001 # {trace_id=\"d # e\"} 2\n# EOF\n",
+			name: "a counter's exemplar is kept, with or without a timestamp",
+			body: "# TYPE r counter\nr_total 5 # {trace_id=\"abc\"} 1.0 1700000000.1\n# TYPE s counter\ns_total 6 1700000001 # {trace_id=\"d # e\",tenant=\"a\\\"b\\\\c\"} 2\n# EOF\n",
 			want: []model.Metric{
-				{Name: "r_total", Type: model.CounterMetricType, Value: 5, Labels: map[string]string{}},
-				{Name: "s_total", Type: model.CounterMetricType, Value: 6, Labels: map[string]string{}, Timestamp: ms(1700000001000)},
+				{Name: "r_total", Type: model.CounterMetricType, Value: 5, Labels: map[string]string{}, Exemplar: &model.Exemplar{Labels: map[string]string{"trace_id": "abc"}, Value: 1, Time: time.UnixMilli(1700000000100).UTC()}},
+				{Name: "s_total", Type: model.CounterMetricType, Value: 6, Labels: map[string]string{}, Timestamp: ms(1700000001000), Exemplar: &model.Exemplar{Labels: map[string]string{"trace_id": "d # e", "tenant": `a"b\c`}, Value: 2}},
+			},
+		},
+		{
+			name: "a histogram's buckets keep their exemplars, the +Inf one's too",
+			body: "# TYPE h histogram\nh_bucket{le=\"1.0\"} 1 # {trace_id=\"t1\",span_id=\"s1\"} 0.4 1700000000\nh_bucket{le=\"+Inf\"} 2 # {trace_id=\"t2\"} 3\nh_count 2 # {trace_id=\"no\"} 1\nh_sum 3.4\n# EOF\n",
+			want: []model.Metric{{Name: "h", Type: model.HistogramMetricType, Labels: map[string]string{}, Histogram: &model.Histogram{
+				Buckets: []model.Bucket{
+					{UpperBound: 1, CumulativeCount: 1, Exemplar: &model.Exemplar{Labels: map[string]string{"trace_id": "t1", "span_id": "s1"}, Value: 0.4, Time: time.UnixMilli(1700000000000).UTC()}},
+					{UpperBound: posInf, CumulativeCount: 2, Exemplar: &model.Exemplar{Labels: map[string]string{"trace_id": "t2"}, Value: 3}},
+				}, Count: 2, Sum: 3.4}}},
+		},
+		{
+			name: "an exemplar of a gauge, one that does not read, one too long, one of a label twice, one without a value and one without commas are skipped",
+			body: "# TYPE g gauge\ng 1 # {trace_id=\"a\"} 1\n# TYPE c counter\nc_total 1 # trace_id=\"a\" 1\n# TYPE d counter\nd_total 2 # {trace_id=\"" + strings.Repeat("x", 121) + "\"} 1\n# TYPE e counter\ne_total 3 # {a=\"1\",a=\"2\"} 1\n# TYPE f counter\nf_total 4 # {a=\"1\"}\n# TYPE k counter\nk_total 5 # {a=\"1\" b=\"2\"} 1\n# EOF\n",
+			want: []model.Metric{
+				{Name: "g", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{}},
+				{Name: "c_total", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{}},
+				{Name: "d_total", Type: model.CounterMetricType, Value: 2, Labels: map[string]string{}},
+				{Name: "e_total", Type: model.CounterMetricType, Value: 3, Labels: map[string]string{}},
+				{Name: "f_total", Type: model.CounterMetricType, Value: 4, Labels: map[string]string{}},
+				{Name: "k_total", Type: model.CounterMetricType, Value: 5, Labels: map[string]string{}},
 			},
 		},
 		{

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -101,22 +102,61 @@ type otlpHistogramDataPoint struct {
 	Exemplars         []otlpExemplar  `json:"exemplars,omitempty"`
 }
 
-// otlpExemplar is an exemplar of a histogram's point (model.Exemplar): its
-// time, its value and the trace and the span it was observed in, hex as
-// OTLP/JSON writes ids. Only the exporter's own durations have them.
+// otlpExemplar is an exemplar of a histogram's or a sum's point
+// (model.Exemplar): its time, its value, the trace and the span it was
+// observed in, hex as OTLP/JSON writes ids, and its other labels as
+// filtered attributes.
 type otlpExemplar struct {
-	TimeUnixNano string     `json:"timeUnixNano"`
-	AsDouble     otlpDouble `json:"asDouble"`
-	SpanID       string     `json:"spanId"`
-	TraceID      string     `json:"traceId"`
+	FilteredAttributes []otlpAttribute `json:"filteredAttributes,omitempty"`
+	TimeUnixNano       string          `json:"timeUnixNano"`
+	AsDouble           otlpDouble      `json:"asDouble"`
+	SpanID             string          `json:"spanId,omitempty"`
+	TraceID            string          `json:"traceId,omitempty"`
+}
+
+// otlpTraceIDLabel and otlpSpanIDLabel are the labels of a target's exemplar
+// that OTLP carries as the exemplar's trace and span, when they are ids: 32
+// and 16 hex digits, as OpenTelemetry's and Prometheus' clients write them,
+// not all zeros, which OpenTelemetry takes for no id (otlpID).
+var (
+	otlpTraceIDLabel = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
+	otlpSpanIDLabel  = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
+)
+
+// otlpID is whether value is an id that re matches and that is not all zeros.
+func otlpID(re *regexp.Regexp, value string) bool {
+	return re.MatchString(value) && strings.Trim(value, "0") != ""
+}
+
+// otlpExemplarOf is x as an OTLP point carries it, at the point's time at
+// when x has none. A target's trace_id and span_id labels are its trace and
+// span when they read as ids, and attributes otherwise, as its other labels
+// are.
+func otlpExemplarOf(x *model.Exemplar, at string) otlpExemplar {
+	out := otlpExemplar{TimeUnixNano: at, AsDouble: otlpDouble(x.Value), SpanID: x.SpanID, TraceID: x.TraceID}
+	if !x.Time.IsZero() {
+		out.TimeUnixNano = strconv.FormatInt(x.Time.UnixNano(), 10)
+	}
+	for _, name := range model.SortedKeys(x.Labels) {
+		value := x.Labels[name]
+		switch {
+		case name == "trace_id" && out.TraceID == "" && otlpID(otlpTraceIDLabel, value):
+			out.TraceID = strings.ToLower(value)
+		case name == "span_id" && out.SpanID == "" && otlpID(otlpSpanIDLabel, value):
+			out.SpanID = strings.ToLower(value)
+		default:
+			out.FilteredAttributes = append(out.FilteredAttributes, otlpAttribute{Key: name, Value: otlpValue{StringValue: value}})
+		}
+	}
+	return out
 }
 
 // otlpExemplars are a histogram's exemplars as OTLP points carry them, nil
 // for none.
-func otlpExemplars(h *model.Histogram) []otlpExemplar {
+func otlpExemplars(h *model.Histogram, at string) []otlpExemplar {
 	var out []otlpExemplar
 	for _, x := range histogramExemplars(h) {
-		out = append(out, otlpExemplar{TimeUnixNano: strconv.FormatInt(x.Time.UnixNano(), 10), AsDouble: otlpDouble(x.Value), SpanID: x.SpanID, TraceID: x.TraceID})
+		out = append(out, otlpExemplarOf(x, at))
 	}
 	return out
 }
@@ -223,6 +263,8 @@ type otlpNumberDataPoint struct {
 	TimeUnixNano      string          `json:"timeUnixNano"`
 	AsDouble          *otlpDouble     `json:"asDouble,omitempty"`
 	AsInt             string          `json:"asInt,omitempty"`
+	// Exemplars are a counter's, which a sum's point carries.
+	Exemplars []otlpExemplar `json:"exemplars,omitempty"`
 }
 
 // otlpResourceIdentity is the OTLP resource a metric set belongs to. Static
@@ -1098,7 +1140,11 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 		case otlpKindSum:
 			v := otlpDouble(m.Value)
 			s := metric(name, m.Help, shape).Sum
-			s.DataPoints = append(s.DataPoints, otlpNumberDataPoint{Attributes: attributes, StartTimeUnixNano: startAt, TimeUnixNano: at, AsDouble: &v})
+			point := otlpNumberDataPoint{Attributes: attributes, StartTimeUnixNano: startAt, TimeUnixNano: at, AsDouble: &v}
+			if m.Exemplar != nil && m.Type == model.CounterMetricType {
+				point.Exemplars = []otlpExemplar{otlpExemplarOf(m.Exemplar, at)}
+			}
+			s.DataPoints = append(s.DataPoints, point)
 		default:
 			gaugeOf(m.Name, name, unit, attributes, m.Value)
 		}
@@ -1568,7 +1614,7 @@ func otlpHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) o
 		previous = b.CumulativeCount
 	}
 	point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(count-previous, 10))
-	point.Exemplars = otlpExemplars(h)
+	point.Exemplars = otlpExemplars(h, at)
 	return point
 }
 
@@ -1594,7 +1640,7 @@ func otlpExponentialHistogramPoint(m model.Metric, attributes []otlpAttribute, a
 		low, high := otlpDouble(x.Min), otlpDouble(x.Max)
 		point.Min, point.Max = &low, &high
 	}
-	point.Exemplars = otlpExemplars(h)
+	point.Exemplars = otlpExemplars(h, at)
 	return point
 }
 

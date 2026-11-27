@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"math"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -16,7 +18,11 @@ import (
 //   - A timestamp is a float number of seconds, which is kept in
 //     milliseconds, as the model keeps every timestamp.
 //   - An exemplar after a sample's value or timestamp, " # {labels} value
-//     [timestamp]", is skipped: the model has no place for one.
+//     [timestamp]", is kept on a histogram's bucket and on a counter's
+//     sample, the samples OpenMetrics gives exemplars to (readExemplar).
+//     One on any other sample is skipped, and so is one that does not read
+//     as an exemplar or whose labels are longer than OpenMetrics allows, so
+//     that a target's exemplar never fails a scrape.
 //   - A family's type may be unknown, read as untyped. It may be stateset,
 //     read as a gauge, whose samples already are one per state with the
 //     value 1 or 0. It may be info, read as the gauge foo_info with its
@@ -105,14 +111,98 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 	return nil
 }
 
-// withoutExemplar is the rest of a sample line after its value without the
-// exemplar that may end it. An exemplar starts with a # after a blank; a
-// timestamp, the only other thing that may follow the value, has none.
-func withoutExemplar(s []byte) []byte {
+// splitExemplar cuts the exemplar that may end a sample line off the rest of
+// the line after its value: the rest, and what follows the exemplar's #, nil
+// for none. An exemplar starts with a # after a blank; a timestamp, the only
+// other thing that may follow the value, has none.
+func splitExemplar(s []byte) (rest, exemplar []byte) {
 	if i := bytes.IndexByte(s, '#'); i >= 0 && (i == 0 || isBlank(s[i-1])) {
-		return s[:i]
+		return s[:i], s[i+1:]
 	}
-	return s
+	return s, nil
+}
+
+// readExemplar reads an exemplar, "{labels} value [timestamp]", as what
+// follows its #: its labels, unescaped, its value and its time, a float
+// number of seconds. It is nil for text that is not one, for labels longer
+// than model.MaxExemplarRunes together, for a label written twice, and for
+// labels not separated by commas.
+func readExemplar(s []byte) *model.Exemplar {
+	s = skipBlanks(s)
+	if len(s) == 0 || s[0] != '{' {
+		return nil
+	}
+	s = s[1:]
+	x := &model.Exemplar{}
+	runes := 0
+	for {
+		s = skipBlanks(s)
+		if len(s) > 0 && s[0] == '}' {
+			s = s[1:]
+			break
+		}
+		end := 0
+		for end < len(s) && (s[end] == '_' || s[end] >= 'a' && s[end] <= 'z' || s[end] >= 'A' && s[end] <= 'Z' || end > 0 && s[end] >= '0' && s[end] <= '9') {
+			end++
+		}
+		if end == 0 {
+			return nil
+		}
+		name := string(s[:end])
+		s = skipBlanks(s[end:])
+		if len(s) < 2 || s[0] != '=' {
+			return nil
+		}
+		s = skipBlanks(s[1:])
+		if len(s) == 0 || s[0] != '"' {
+			return nil
+		}
+		closing := 1
+		for closing < len(s) && s[closing] != '"' {
+			if s[closing] == '\\' {
+				closing++
+			}
+			closing++
+		}
+		if closing >= len(s) {
+			return nil
+		}
+		value, err := unescapePromText(string(s[1:closing]), "exemplar label value")
+		if err != nil || !utf8.ValidString(value) {
+			return nil
+		}
+		if _, twice := x.Labels[name]; twice {
+			return nil
+		}
+		if x.Labels == nil {
+			x.Labels = map[string]string{}
+		}
+		x.Labels[name] = value
+		if runes += utf8.RuneCountInString(name) + utf8.RuneCountInString(value); runes > model.MaxExemplarRunes {
+			return nil
+		}
+		// A comma or the closing brace follows each label.
+		switch s = skipBlanks(s[closing+1:]); {
+		case len(s) > 0 && s[0] == ',':
+			s = s[1:]
+		case len(s) == 0 || s[0] != '}':
+			return nil
+		}
+	}
+	token, s := cutBlank(skipBlanks(s))
+	value, err := parsePromFloat(token)
+	if err != nil {
+		return nil
+	}
+	x.Value = value
+	if token, s = cutBlank(skipBlanks(s)); len(token) > 0 {
+		ms, err := openMetricsTimestamp(token)
+		if err != nil || len(bytes.TrimSpace(s)) != 0 {
+			return nil
+		}
+		x.Time = time.UnixMilli(ms).UTC()
+	}
+	return x
 }
 
 // openMetricsTimestamp reads an OpenMetrics timestamp, a float number of

@@ -52,6 +52,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - The allocator's status page diagram gives each exporter's targets and its
   share of their weight on its box, such as `12 targets · 34%`, and draws an
   overloaded exporter's box in red.
+- A target's OpenMetrics exemplars, on its counters and its histograms'
+  buckets, are kept: `/probe` and static targets write them in OpenMetrics,
+  and the OTLP export carries them, a `trace_id` and a `span_id` as the
+  exemplar's trace and span. Before, they were skipped.
 
 ### Fixed
 

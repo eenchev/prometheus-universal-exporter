@@ -241,6 +241,8 @@ type promSeries struct {
 	timestamp *int64
 	histogram *model.Histogram
 	summary   *model.Summary
+	// exemplar is a counter's, from OpenMetrics.
+	exemplar *model.Exemplar
 	// line is the line of a histogram's or summary's first sample, for the
 	// error of one that cannot be a series (settle).
 	line int
@@ -300,6 +302,9 @@ type promParser struct {
 	sampleName   []byte
 	sampleFamily *promFamily
 	sampleRole   int
+	// exemplar is the exemplar of the sample being read, nil for none
+	// (openmetrics.go).
+	exemplar *model.Exemplar
 }
 
 type promAlias struct {
@@ -445,8 +450,13 @@ func (p *promParser) sample(s []byte) error {
 	if err != nil {
 		return model.Errorf("expected float as value, got %s", model.Quoted(token))
 	}
+	p.exemplar = nil
 	if p.options.openMetrics {
-		s = withoutExemplar(s)
+		var exemplar []byte
+		s, exemplar = splitExemplar(s)
+		if exemplar != nil {
+			p.exemplar = readExemplar(exemplar)
+		}
 	}
 	var (
 		timestamp int64
@@ -605,6 +615,9 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 			return err
 		}
 		series.value = value
+		if f.typ == model.CounterMetricType && role == promRoleNone {
+			series.exemplar = p.exemplar
+		}
 		if timed {
 			// A copy, made only here: a parameter whose address is taken
 			// is allocated for every call, with a time or without.
@@ -685,7 +698,7 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 	case series.summary != nil:
 		series.summary.Quantiles = append(series.summary.Quantiles, model.Quantile{Quantile: bound, Value: value})
 	default:
-		series.histogram.Buckets = append(series.histogram.Buckets, model.Bucket{UpperBound: bound, CumulativeCount: uint64(value)})
+		series.histogram.Buckets = append(series.histogram.Buckets, model.Bucket{UpperBound: bound, CumulativeCount: uint64(value), Exemplar: p.exemplar})
 	}
 	return nil
 }
@@ -860,7 +873,7 @@ func (p *promParser) metrics() []model.Metric {
 		if f.helpOf != nil && !f.helpSet {
 			help = f.helpOf.help
 		}
-		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary}
+		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar}
 	}
 	return out
 }

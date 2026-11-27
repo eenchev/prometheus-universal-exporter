@@ -81,6 +81,8 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 		return err
 	}
 	switch {
+	case code != 0 && len(enabled) == 0 && l.mechanism == kafkaAWSMSKIAM:
+		return fmt.Errorf("%s takes no SASL login on this listener (%s), as MSK's listeners without IAM access control do: reach port 9098 of a cluster with IAM access control, or leave request.sasl_mechanism out", c.broker, kafkaError(code))
 	case code != 0 && len(enabled) == 0:
 		// A listener without SASL answers so, as Kafka's PLAINTEXT and SSL
 		// listeners do.

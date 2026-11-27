@@ -104,8 +104,8 @@ func kafkaMSKCheck(token, region string) string {
 // kafka-cluster:Connect with the credentials the AWS SDK finds, for the
 // region of request.aws_region, else the SDK's, and every broker of the
 // cluster takes it. A token the broker does not take is refused, as is a
-// target without TLS, a broker without OAUTHBEARER, and a login with no
-// region known.
+// target without TLS, a broker without OAUTHBEARER, a listener without
+// SASL, and a login with no region known.
 func TestAKafkaScrapeLogsInToMSKWithIAM(t *testing.T) {
 	k := kafkaCluster3(t, true)
 	var region atomic.Value
@@ -148,6 +148,10 @@ func TestAKafkaScrapeLogsInToMSKWithIAM(t *testing.T) {
 	k.Edit(func(c *kafkatest.Cluster) { c.Mechanisms = []string{"SCRAM-SHA-512"} })
 	if _, err := kafkaDoc(t, iam(&KafkaConfig{AWSRegion: "eu-west-1"}), target); err == nil || !strings.Contains(err.Error(), "does not take the SASL mechanism OAUTHBEARER, which AWS_MSK_IAM logs in with (UNSUPPORTED_SASL_MECHANISM); it takes SCRAM-SHA-512") {
 		t.Errorf("a listener without OAUTHBEARER: %v", err)
+	}
+	k.Edit(func(c *kafkatest.Cluster) { c.Mechanisms = nil })
+	if _, err := kafkaDoc(t, iam(&KafkaConfig{AWSRegion: "eu-west-1"}), target); err == nil || !strings.Contains(err.Error(), "takes no SASL login on this listener (ILLEGAL_SASL_STATE), as MSK's listeners without IAM access control do: reach port 9098") {
+		t.Errorf("a listener without SASL: %v", err)
 	}
 	kafkaAWSEnvironment(t, "")
 	if _, err := kafkaDoc(t, iam(&KafkaConfig{}), target); err == nil || !strings.Contains(err.Error(), "no AWS region is known for the AWS_MSK_IAM login; set request.aws_region, or AWS_REGION") {

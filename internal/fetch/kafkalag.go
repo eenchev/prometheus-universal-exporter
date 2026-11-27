@@ -24,10 +24,11 @@ import (
 // seconds is null; a partition the group has read to the end lags 0
 // seconds.
 
-// kafkaOffsetPoint is a partition's newest offset and when it was read.
+// kafkaOffsetPoint is a partition's newest offset and when it was read, in
+// nanoseconds since the Unix epoch, which keeps a point to 16 bytes.
 type kafkaOffsetPoint struct {
 	offset int64
-	at     time.Time
+	at     int64
 }
 
 // kafkaPartitionHistory is what is kept of a partition: its points, in the
@@ -49,10 +50,13 @@ const (
 	// further back the longer it is kept, with fewer points.
 	kafkaHistoryPoints = 64
 	// kafkaHistoryIdle is how long a partition or a cluster not read again is
-	// kept, and kafkaMaxHistories how many clusters are, the least recently
-	// read dropped past it.
-	kafkaHistoryIdle  = time.Hour
-	kafkaMaxHistories = 100
+	// kept. kafkaMaxHistories bounds the clusters kept, and
+	// kafkaMaxHistoryPartitions their partitions together, about 50 MiB of
+	// points: past either, the least recently read clusters are dropped, the
+	// one being read kept, as it alone has at most kafkaMaxPartitions.
+	kafkaHistoryIdle          = time.Hour
+	kafkaMaxHistories         = 100
+	kafkaMaxHistoryPartitions = 50_000
 )
 
 // kafkaHistories are the clusters' histories, by collector, target and
@@ -66,8 +70,8 @@ var kafkaHistories = struct {
 var kafkaNow = time.Now
 
 // kafkaRecord keeps the newest offsets of cluster, read at at, and returns
-// the points kept of each of them.
-func kafkaRecord(cluster string, newest map[kafkaPartitionKey]int64, at time.Time) map[kafkaPartitionKey][]kafkaOffsetPoint {
+// the points kept of those of them wanted, the partitions a group lags on.
+func kafkaRecord(cluster string, newest map[kafkaPartitionKey]int64, at time.Time, wanted map[kafkaPartitionKey]bool) map[kafkaPartitionKey][]kafkaOffsetPoint {
 	kafkaHistories.Lock()
 	defer kafkaHistories.Unlock()
 	for key, h := range kafkaHistories.clusters {
@@ -77,15 +81,6 @@ func kafkaRecord(cluster string, newest map[kafkaPartitionKey]int64, at time.Tim
 	}
 	h := kafkaHistories.clusters[cluster]
 	if h == nil {
-		for len(kafkaHistories.clusters) >= kafkaMaxHistories {
-			var oldest string
-			for key, other := range kafkaHistories.clusters {
-				if oldest == "" || other.used.Before(kafkaHistories.clusters[oldest].used) {
-					oldest = key
-				}
-			}
-			delete(kafkaHistories.clusters, oldest)
-		}
 		h = &kafkaClusterHistory{partitions: map[kafkaPartitionKey]*kafkaPartitionHistory{}}
 		kafkaHistories.clusters[cluster] = h
 	}
@@ -95,7 +90,7 @@ func kafkaRecord(cluster string, newest map[kafkaPartitionKey]int64, at time.Tim
 			delete(h.partitions, key)
 		}
 	}
-	out := make(map[kafkaPartitionKey][]kafkaOffsetPoint, len(newest))
+	out := make(map[kafkaPartitionKey][]kafkaOffsetPoint, len(wanted))
 	for key, offset := range newest {
 		p := h.partitions[key]
 		if p == nil {
@@ -103,22 +98,40 @@ func kafkaRecord(cluster string, newest map[kafkaPartitionKey]int64, at time.Tim
 			h.partitions[key] = p
 		}
 		p.add(offset, at)
-		out[key] = slices.Clone(p.points)
+		if wanted[key] {
+			out[key] = slices.Clone(p.points)
+		}
 	}
-	return out
+	for {
+		partitions := 0
+		var oldest string
+		for key, other := range kafkaHistories.clusters {
+			partitions += len(other.partitions)
+			if key != cluster && (oldest == "" || other.used.Before(kafkaHistories.clusters[oldest].used)) {
+				oldest = key
+			}
+		}
+		if oldest == "" || (len(kafkaHistories.clusters) <= kafkaMaxHistories && partitions <= kafkaMaxHistoryPartitions) {
+			return out
+		}
+		delete(kafkaHistories.clusters, oldest)
+	}
 }
 
-// add keeps the newest offset of a partition read at at.
-func (p *kafkaPartitionHistory) add(offset int64, at time.Time) {
-	p.used = at
+// add keeps the newest offset of a partition read at when.
+func (p *kafkaPartitionHistory) add(offset int64, when time.Time) {
+	at := when.UnixNano()
 	n := len(p.points)
+	if n > 0 && at <= p.points[n-1].at {
+		// A scrape that read the offsets before the last one kept, as one
+		// running beside it can, says nothing newer.
+		return
+	}
+	p.used = when
 	if n > 0 && offset < p.points[n-1].offset {
 		// The partition is not the one kept: its topic was deleted and made
 		// again, or its log truncated.
 		p.points, n = p.points[:0], 0
-	}
-	if n > 0 && !at.After(p.points[n-1].at) {
-		return
 	}
 	if n >= 2 && offset == p.points[n-1].offset && offset == p.points[n-2].offset {
 		// A partition not written to: the first point at the offset says when
@@ -155,18 +168,19 @@ func kafkaLagSeconds(points []kafkaOffsetPoint, committed int64, at time.Time) *
 	i, _ := slices.BinarySearchFunc(points, committed+1, func(p kafkaOffsetPoint, offset int64) int {
 		return int(min(max(p.offset-offset, -1), 1))
 	})
+	seconds := func(from, to int64) float64 { return float64(to-from) / 1e9 }
+	now := at.UnixNano()
 	var lag float64
 	if i > 0 {
 		a, b := points[i-1], points[i]
-		span := b.at.Sub(a.at).Seconds()
 		share := float64(committed-a.offset+1) / float64(b.offset-a.offset)
-		lag = at.Sub(a.at).Seconds() - share*span
+		lag = seconds(a.at, now) - share*seconds(a.at, b.at)
 	} else {
 		if n < 2 || last.offset == first.offset {
 			return nil
 		}
-		rate := float64(last.offset-first.offset) / last.at.Sub(first.at).Seconds()
-		lag = at.Sub(first.at).Seconds() + float64(first.offset-1-committed)/rate
+		rate := float64(last.offset-first.offset) / seconds(first.at, last.at)
+		lag = seconds(first.at, now) + float64(first.offset-1-committed)/rate
 	}
 	lag = math.Round(max(lag, 0)*1000) / 1000
 	return &lag

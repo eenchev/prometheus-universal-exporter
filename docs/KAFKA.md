@@ -233,6 +233,20 @@ Redpanda and the cloud services that speak Kafka's protocol too.
   not know is `null`. `configs` is `null` without the key, and for a topic
   whose settings were refused, which `errors` names.
 
+A setting's name has dots, so a rule reads it with brackets, and its value
+is a string, which `tonumber` turns into a number. `retention.ms` is `-1`
+for a topic kept for ever:
+
+```yaml
+      - name: kafka_topic_retention_seconds
+        description: How long a topic keeps its messages, -0.001 for ever
+        items: .topics[] | select(.configs["retention.ms"] != null)
+        expression: (.configs["retention.ms"] | tonumber) / 1000
+        labels:
+          - name: topic
+            expression: .name
+```
+
 **Groups.** These are the chosen groups, by name, with every topic of
 theirs that is chosen.
 
@@ -281,9 +295,11 @@ works out `lag_seconds` from them:
 The estimate is as fine as the scrapes are frequent: with one scrape a
 minute, a message's time is known to within about a minute. What is kept
 is by collector, target and cluster ID, at most 64 points a partition, the
-older ones thinned as more come, so that they reach further back. A
-partition or a cluster not read for an hour is dropped, and so is the
-least recently read cluster past 100. A restart, or another replica of the
+older ones thinned as more come, so that they reach further back: about
+1 KiB a partition. A partition or a cluster not read for an hour is
+dropped, and so is the least recently read cluster past 100 clusters or
+50,000 partitions over them all. A scrape that read its offsets before the
+last one kept, as one running beside it can, adds nothing. A restart, or another replica of the
 exporter, starts with nothing kept. A partition whose newest offset goes
 back, as when its topic is deleted and made again, starts again.
 
@@ -455,7 +471,9 @@ done here: see [Limitations](#limitations).
 - **`takes no SASL login on this listener`.** The listener is Kafka's
   `PLAINTEXT` or `SSL` one, which takes no login; leave the account and
   the token out, or reach the `SASL_PLAINTEXT` or `SASL_SSL` listener,
-  which is often on another port.
+  which is often on another port. With `AWS_MSK_IAM`, the listener is one
+  of MSK's without IAM access control: reach port 9098 of a cluster that has
+  it turned on.
 - **`refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`.**
   The broker does not take the token: it has expired, or it was issued
   for another audience or by an issuer the broker does not trust. The

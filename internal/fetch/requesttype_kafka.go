@@ -1094,7 +1094,19 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 	if doc.ClusterID != nil {
 		id = *doc.ClusterID
 	}
-	history := kafkaRecord(k.c.Name+"\x00"+k.target+"\x00"+id, latest, read)
+	// The history of the partitions a group lags on is wanted.
+	wanted := map[kafkaPartitionKey]bool{}
+	for _, g := range doc.Groups {
+		for _, t := range g.Topics {
+			for _, p := range t.Partitions {
+				key := kafkaPartitionKey{t.Topic, p.Partition}
+				if end, known := latest[key]; known && p.Committed >= 0 && p.Committed < end {
+					wanted[key] = true
+				}
+			}
+		}
+	}
+	history := kafkaRecord(k.c.Name+"\x00"+k.target+"\x00"+id, latest, read, wanted)
 	for i := range doc.Groups {
 		for j := range doc.Groups[i].Topics {
 			t := &doc.Groups[i].Topics[j]
@@ -1117,7 +1129,11 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 					t.Lag = new(int64)
 				}
 				*t.Lag += lag
-				p.LagSeconds = kafkaLagSeconds(history[kafkaPartitionKey{t.Topic, p.Partition}], p.Committed, read)
+				if lag == 0 {
+					p.LagSeconds = new(float64)
+				} else {
+					p.LagSeconds = kafkaLagSeconds(history[kafkaPartitionKey{t.Topic, p.Partition}], p.Committed, read)
+				}
 				switch {
 				case p.LagSeconds == nil:
 					unknown = true

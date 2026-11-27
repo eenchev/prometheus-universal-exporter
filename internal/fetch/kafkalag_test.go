@@ -96,9 +96,12 @@ func TestAKafkaGroupLagsInSeconds(t *testing.T) {
 // What is kept of a partition is bounded: past kafkaHistoryPoints, every
 // other point of the older half goes, the oldest and the newest kept; a
 // partition not written to keeps the first and the last scrape at its
-// offset; a scrape no later than the last is not kept. A partition or a
+// offset; a scrape no later than the last is not kept, nor does its lower
+// offset start the partition again. Only the partitions wanted have their
+// points returned. A partition or a
 // cluster not read for kafkaHistoryIdle is dropped, and past
-// kafkaMaxHistories clusters the least recently read goes.
+// kafkaMaxHistories clusters, or kafkaMaxHistoryPartitions partitions over
+// them, the least recently read goes.
 func TestTheKafkaOffsetHistoryIsBounded(t *testing.T) {
 	kafkaClock(t)
 	start := time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC)
@@ -113,7 +116,7 @@ func TestTheKafkaOffsetHistoryIsBounded(t *testing.T) {
 		t.Errorf("kept %v to %v", p.points[0], p.points[len(p.points)-1])
 	}
 	for i := 1; i < len(p.points); i++ {
-		if !p.points[i].at.After(p.points[i-1].at) || p.points[i].offset <= p.points[i-1].offset {
+		if p.points[i].at <= p.points[i-1].at || p.points[i].offset <= p.points[i-1].offset {
 			t.Errorf("points %d and %d out of order", i-1, i)
 		}
 	}
@@ -122,22 +125,33 @@ func TestTheKafkaOffsetHistoryIsBounded(t *testing.T) {
 		idle.add(7, start.Add(time.Duration(i)*time.Minute))
 	}
 	idle.add(7, start)
-	if len(idle.points) != 2 || !idle.points[0].at.Equal(start) || !idle.points[1].at.Equal(start.Add(4*time.Minute)) {
+	if len(idle.points) != 2 || idle.points[0].at != start.UnixNano() || idle.points[1].at != start.Add(4*time.Minute).UnixNano() {
 		t.Errorf("a partition not written to: %v", idle.points)
 	}
+	// A scrape that read the offsets before the last kept, as one running
+	// beside another can, changes nothing, though its offsets are lower.
+	beside := &kafkaPartitionHistory{}
+	beside.add(100, start)
+	beside.add(105, start.Add(2*time.Second))
+	beside.add(103, start.Add(time.Second))
+	if len(beside.points) != 2 || beside.points[1].offset != 105 {
+		t.Errorf("an older scrape: %v", beside.points)
+	}
 	key := kafkaPartitionKey{"orders", 0}
-	kafkaRecord("a", map[kafkaPartitionKey]int64{key: 1, {"gone", 0}: 1}, start)
-	kafkaRecord("a", map[kafkaPartitionKey]int64{key: 2}, start.Add(kafkaHistoryIdle/2))
-	kafkaRecord("a", map[kafkaPartitionKey]int64{key: 3}, start.Add(kafkaHistoryIdle+time.Second))
+	kafkaRecord("a", map[kafkaPartitionKey]int64{key: 1, {"gone", 0}: 1}, start, nil)
+	kafkaRecord("a", map[kafkaPartitionKey]int64{key: 2}, start.Add(kafkaHistoryIdle/2), nil)
+	if got := kafkaRecord("a", map[kafkaPartitionKey]int64{key: 3, {"other", 0}: 3}, start.Add(kafkaHistoryIdle+time.Second), map[kafkaPartitionKey]bool{key: true}); len(got) != 1 || len(got[key]) != 3 {
+		t.Errorf("the points of the partitions wanted: %v", got)
+	}
 	kafkaHistories.Lock()
-	partitions := len(kafkaHistories.clusters["a"].partitions)
+	kept := len(kafkaHistories.clusters["a"].partitions)
 	kafkaHistories.Unlock()
-	if partitions != 1 {
-		t.Errorf("%d partitions kept, want the one read again", partitions)
+	if kept != 2 {
+		t.Errorf("%d partitions kept, want the two read in the hour", kept)
 	}
 	later := start.Add(3 * kafkaHistoryIdle)
 	for i := range kafkaMaxHistories + 5 {
-		kafkaRecord(fmt.Sprint("cluster ", i), map[kafkaPartitionKey]int64{key: 1}, later.Add(time.Duration(i)*time.Second))
+		kafkaRecord(fmt.Sprint("cluster ", i), map[kafkaPartitionKey]int64{key: 1}, later.Add(time.Duration(i)*time.Second), nil)
 	}
 	kafkaHistories.Lock()
 	_, first := kafkaHistories.clusters["cluster 0"]
@@ -147,5 +161,29 @@ func TestTheKafkaOffsetHistoryIsBounded(t *testing.T) {
 	kafkaHistories.Unlock()
 	if clusters != kafkaMaxHistories || first || !last || stale {
 		t.Errorf("%d clusters kept, the first %v, the last %v, the idle one %v", clusters, first, last, stale)
+	}
+	// Past kafkaMaxHistoryPartitions partitions over every cluster, the
+	// least recently read clusters go, the one being read kept.
+	wide := func(n int) map[kafkaPartitionKey]int64 {
+		offsets := make(map[kafkaPartitionKey]int64, n)
+		for i := range n {
+			offsets[kafkaPartitionKey{"t", int32(i)}] = 1 //nolint:gosec // a test's few partitions
+		}
+		return offsets
+	}
+	much := later.Add(time.Hour)
+	for i := range 6 {
+		kafkaRecord(fmt.Sprint("wide ", i), wide(kafkaMaxPartitions), much.Add(time.Duration(i)*time.Second), nil)
+	}
+	kafkaHistories.Lock()
+	partitions := 0
+	for _, h := range kafkaHistories.clusters {
+		partitions += len(h.partitions)
+	}
+	_, oldestWide := kafkaHistories.clusters["wide 0"]
+	_, newestWide := kafkaHistories.clusters["wide 5"]
+	kafkaHistories.Unlock()
+	if partitions > kafkaMaxHistoryPartitions || oldestWide || !newestWide {
+		t.Errorf("%d partitions kept, the oldest cluster %v, the newest %v", partitions, oldestWide, newestWide)
 	}
 }

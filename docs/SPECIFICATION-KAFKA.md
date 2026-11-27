@@ -158,7 +158,9 @@ message and send no request that changes the cluster.
   newest offset lower than the last kept MUST start the partition's
   history again. At most 64 points a partition MUST be kept, the older
   half thinned past it; a partition or a cluster not read for an hour MUST
-  be dropped, and past 100 clusters the least recently read.
+  be dropped, and past 100 clusters or 50,000 partitions over them the
+  least recently read but the one being read. Offsets read before the
+  last point kept MUST be ignored.
 - The decoder MUST be `json`, as for `grpc`; another decoder, and a
   transform other than `jq`, `yq` and `python`, MUST be refused at load.
 - A failure MUST be reported in the `kafka` stage. The scrape MUST be one

@@ -5,6 +5,7 @@ package exporter
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -72,7 +73,8 @@ func TestATargetsExemplarsThroughAProbe(t *testing.T) {
 
 // OTLP carries a target's exemplars on a sum's point and a histogram's: a
 // trace_id or span_id label that is an id as its trace or span, lower case,
-// any other label as a filtered attribute, and the point's time for an
+// any other label, and an id of zeros, as a filtered attribute, the +Inf
+// bucket's exemplar among the histogram's, and the point's time for an
 // exemplar without one. A gauge's exemplar is not carried.
 func TestOTLPCarriesATargetsExemplars(t *testing.T) {
 	at := time.Unix(1700000000, 0).UTC()
@@ -83,6 +85,7 @@ func TestOTLPCarriesATargetsExemplars(t *testing.T) {
 		{Name: "temperature", Type: model.GaugeMetricType, Value: 20, Exemplar: &model.Exemplar{Value: 1, Labels: map[string]string{"user": "a"}}},
 		{Name: "latency", Type: model.HistogramMetricType, Histogram: &model.Histogram{Count: 2, Sum: 9.25, Buckets: []model.Bucket{
 			{UpperBound: 0.5, CumulativeCount: 1, Exemplar: &model.Exemplar{Value: 0.25, Labels: map[string]string{"trace_id": "t1"}}},
+			{UpperBound: math.Inf(1), CumulativeCount: 2, Exemplar: &model.Exemplar{Value: 9, Labels: map[string]string{"span_id": "0000000000000000"}}},
 		}}},
 	}}
 	out, err := json.Marshal(otlpMetrics(set, "5", nil))
@@ -91,7 +94,7 @@ func TestOTLPCarriesATargetsExemplars(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"exemplars":[{"filteredAttributes":[{"key":"user","value":{"stringValue":"a"}}],"timeUnixNano":"1700000000000000000","asDouble":1,"spanId":"0123456789abcdef","traceId":"0123456789abcdef0123456789abcdef"}]`,
-		`"exemplars":[{"filteredAttributes":[{"key":"trace_id","value":{"stringValue":"t1"}}],"timeUnixNano":"5","asDouble":0.25}]`,
+		`"exemplars":[{"filteredAttributes":[{"key":"trace_id","value":{"stringValue":"t1"}}],"timeUnixNano":"5","asDouble":0.25},{"filteredAttributes":[{"key":"span_id","value":{"stringValue":"0000000000000000"}}],"timeUnixNano":"5","asDouble":9}]`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("no %s in\n%s", want, out)
@@ -119,5 +122,22 @@ func TestAStaticTargetsExemplarsAreServed(t *testing.T) {
 		if !strings.Contains(r.Body.String(), want) {
 			t.Errorf("no %q in\n%s", want, r.Body.String())
 		}
+	}
+}
+
+// A family written as unknown in OpenMetrics, a histogram without its
+// _count or a counter with a negative value, writes no
+// exemplar, which OpenMetrics gives an unknown family's samples none of.
+func TestAnUnknownFamilyWritesNoExemplars(t *testing.T) {
+	x := &model.Exemplar{Value: 1, Labels: map[string]string{"trace_id": "t"}}
+	set := &model.MetricSet{Metrics: []model.Metric{
+		{Name: "latency", Type: model.HistogramMetricType, Histogram: &model.Histogram{Sum: 1, NoCount: true, Buckets: []model.Bucket{
+			{UpperBound: 0.5, CumulativeCount: 1, Exemplar: x}, {UpperBound: math.Inf(1), CumulativeCount: 1, Exemplar: x},
+		}}},
+		{Name: "jobs_total", Type: model.CounterMetricType, Value: -3, Exemplar: x},
+	}}
+	got := string(appendOpenMetrics(nil, set))
+	if strings.Contains(got, " # {") || !strings.Contains(got, "# TYPE latency_bucket unknown\n") || !strings.Contains(got, "# TYPE jobs_total unknown\n") {
+		t.Errorf("got:\n%s", got)
 	}
 }

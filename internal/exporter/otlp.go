@@ -116,11 +116,17 @@ type otlpExemplar struct {
 
 // otlpTraceIDLabel and otlpSpanIDLabel are the labels of a target's exemplar
 // that OTLP carries as the exemplar's trace and span, when they are ids: 32
-// and 16 hex digits, as OpenTelemetry's and Prometheus' clients write them.
+// and 16 hex digits, as OpenTelemetry's and Prometheus' clients write them,
+// not all zeros, which OpenTelemetry takes for no id (otlpID).
 var (
 	otlpTraceIDLabel = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
 	otlpSpanIDLabel  = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
 )
+
+// otlpID is whether value is an id that re matches and that is not all zeros.
+func otlpID(re *regexp.Regexp, value string) bool {
+	return re.MatchString(value) && strings.Trim(value, "0") != ""
+}
 
 // otlpExemplarOf is x as an OTLP point carries it, at the point's time at
 // when x has none. A target's trace_id and span_id labels are its trace and
@@ -134,9 +140,9 @@ func otlpExemplarOf(x *model.Exemplar, at string) otlpExemplar {
 	for _, name := range model.SortedKeys(x.Labels) {
 		value := x.Labels[name]
 		switch {
-		case name == "trace_id" && out.TraceID == "" && otlpTraceIDLabel.MatchString(value):
+		case name == "trace_id" && out.TraceID == "" && otlpID(otlpTraceIDLabel, value):
 			out.TraceID = strings.ToLower(value)
-		case name == "span_id" && out.SpanID == "" && otlpSpanIDLabel.MatchString(value):
+		case name == "span_id" && out.SpanID == "" && otlpID(otlpSpanIDLabel, value):
 			out.SpanID = strings.ToLower(value)
 		default:
 			out.FilteredAttributes = append(out.FilteredAttributes, otlpAttribute{Key: name, Value: otlpValue{StringValue: value}})

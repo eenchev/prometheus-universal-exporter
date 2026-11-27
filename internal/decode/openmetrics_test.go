@@ -60,14 +60,15 @@ func TestOpenMetricsInput(t *testing.T) {
 				}, Count: 2, Sum: 3.4}}},
 		},
 		{
-			name: "an exemplar of a gauge, one that does not read, one too long and one of a label twice are skipped",
-			body: "# TYPE g gauge\ng 1 # {trace_id=\"a\"} 1\n# TYPE c counter\nc_total 1 # trace_id=\"a\" 1\n# TYPE d counter\nd_total 2 # {trace_id=\"" + strings.Repeat("x", 121) + "\"} 1\n# TYPE e counter\ne_total 3 # {a=\"1\",a=\"2\"} 1\n# TYPE f counter\nf_total 4 # {a=\"1\"}\n# EOF\n",
+			name: "an exemplar of a gauge, one that does not read, one too long, one of a label twice, one without a value and one without commas are skipped",
+			body: "# TYPE g gauge\ng 1 # {trace_id=\"a\"} 1\n# TYPE c counter\nc_total 1 # trace_id=\"a\" 1\n# TYPE d counter\nd_total 2 # {trace_id=\"" + strings.Repeat("x", 121) + "\"} 1\n# TYPE e counter\ne_total 3 # {a=\"1\",a=\"2\"} 1\n# TYPE f counter\nf_total 4 # {a=\"1\"}\n# TYPE k counter\nk_total 5 # {a=\"1\" b=\"2\"} 1\n# EOF\n",
 			want: []model.Metric{
 				{Name: "g", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{}},
 				{Name: "c_total", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{}},
 				{Name: "d_total", Type: model.CounterMetricType, Value: 2, Labels: map[string]string{}},
 				{Name: "e_total", Type: model.CounterMetricType, Value: 3, Labels: map[string]string{}},
 				{Name: "f_total", Type: model.CounterMetricType, Value: 4, Labels: map[string]string{}},
+				{Name: "k_total", Type: model.CounterMetricType, Value: 5, Labels: map[string]string{}},
 			},
 		},
 		{

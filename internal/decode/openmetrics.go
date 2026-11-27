@@ -125,7 +125,8 @@ func splitExemplar(s []byte) (rest, exemplar []byte) {
 // readExemplar reads an exemplar, "{labels} value [timestamp]", as what
 // follows its #: its labels, unescaped, its value and its time, a float
 // number of seconds. It is nil for text that is not one, for labels longer
-// than model.MaxExemplarRunes together, and for a label written twice.
+// than model.MaxExemplarRunes together, for a label written twice, and for
+// labels not separated by commas.
 func readExemplar(s []byte) *model.Exemplar {
 	s = skipBlanks(s)
 	if len(s) == 0 || s[0] != '{' {
@@ -180,9 +181,12 @@ func readExemplar(s []byte) *model.Exemplar {
 		if runes += utf8.RuneCountInString(name) + utf8.RuneCountInString(value); runes > model.MaxExemplarRunes {
 			return nil
 		}
-		s = skipBlanks(s[closing+1:])
-		if len(s) > 0 && s[0] == ',' {
+		// A comma or the closing brace follows each label.
+		switch s = skipBlanks(s[closing+1:]); {
+		case len(s) > 0 && s[0] == ',':
 			s = s[1:]
+		case len(s) == 0 || s[0] != '}':
+			return nil
 		}
 	}
 	token, s := cutBlank(skipBlanks(s))

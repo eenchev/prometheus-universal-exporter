@@ -1342,8 +1342,9 @@ OpenMetrics gives no exemplars.
 
 A target's counters and histogram buckets carry the exemplars an
 OpenMetrics target wrote on them. A `trace_id` label of 32 hex digits and a
-`span_id` of 16 become the exemplar's `traceId` and `spanId`, in lower case;
-any other label is one of its `filteredAttributes`. An exemplar the target
+`span_id` of 16 become the exemplar's `traceId` and `spanId`, in lower case,
+unless they are all zeros; any other label is one of its
+`filteredAttributes`. An exemplar the target
 wrote without a timestamp has the point's time. A sum's point carries its
 counter's exemplar in `exemplars`.
 

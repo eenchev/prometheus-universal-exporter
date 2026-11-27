@@ -1024,7 +1024,16 @@ format. Set `Accept: application/openmetrics-text` in `request.headers` to
 ask for OpenMetrics. When a body is read as OpenMetrics:
 
 - timestamps are seconds, with a fraction, and are kept as milliseconds;
-- exemplars (`... 1 # {trace_id="abc"} 0.5`) are skipped;
+- an exemplar (`... 1 # {trace_id="abc"} 0.5`) on a counter's sample or a
+  histogram's bucket is kept with its labels, value and timestamp. A probe or
+  a static target writes it on the same series in OpenMetrics, and the OTLP
+  export carries it on the sum's or the histogram's point: a `trace_id` of 32
+  hex digits and a `span_id` of 16 become the exemplar's trace and span, and
+  other labels its filtered attributes. The Prometheus text format has no
+  exemplars. A rule with `scale` drops the exemplar of the series it scales.
+  An exemplar anywhere else, or one that does not parse, repeats a label or
+  has more than 128 characters of labels, is skipped, and the sample is read
+  without it;
 - a counter `foo`'s sample `foo_total` is the counter `foo_total`, with the
   family's help, as Prometheus names it; a family named `foo_total` is read the
   same way;

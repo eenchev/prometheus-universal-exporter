@@ -1064,10 +1064,11 @@ leaves that bucket to the count — and, the same ones, among the native
 histogram's exemplars, which Prometheus stores with
 `--enable-feature=exemplar-storage`; the OTLP export on the histogram's and
 the exponential histogram's points. The Prometheus text format has no
-exemplars, and is written as before. No other series has any: the
+exemplars, and is written as before. No other self-metric has any: the
 durations of one probe, `http_exporter_scrape_duration_seconds` and
 `http_exporter_target_scrape_duration_seconds`, are gauges, which
-OpenMetrics gives no exemplars.
+OpenMetrics gives no exemplars. A target's series have the exemplars an
+OpenMetrics target wrote on its counters and its histograms' buckets.
 
 ### Python workers
 

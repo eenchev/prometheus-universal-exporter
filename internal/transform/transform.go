@@ -3438,6 +3438,8 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 						return nil, false, ruleFailure(c, *rule, err)
 					}
 					metric.Value = scaled(*rule, metric.Value)
+					// The target's exemplar was of the value as it wrote it.
+					metric.Exemplar = nil
 				}
 				switch {
 				case len(rule.Labels) > 0:

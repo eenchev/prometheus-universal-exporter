@@ -114,7 +114,7 @@ func LoadInputs(p Paths) (*Inputs, error) {
 	var entries *yaml.Node
 	var weights staticWeights
 	if p.StaticTargets != "" {
-		stripped, entries = splitDiscovered(before.staticTargets)
+		stripped, entries = config.SplitDiscoveredTargets(before.staticTargets)
 		stripped, weights, err = stripStaticWeights(stripped)
 		if err != nil {
 			return nil, fmt.Errorf("static target file %s: %w", p.StaticTargets, err)
@@ -373,10 +373,10 @@ func readStaticDocument(raw []byte, f *model.StaticTargetFile) (*staticDocument,
 		key, value := root.Content[i], root.Content[i+1]
 		switch {
 		case key.Value == "targets":
-			targets = resolved(value)
+			targets = config.ResolvedNode(value)
 		case strings.HasPrefix(key.Value, "x-"):
 		default:
-			d.head = append(d.head, resolved(key), resolved(value))
+			d.head = append(d.head, config.ResolvedNode(key), config.ResolvedNode(value))
 		}
 	}
 	if len(f.Targets) == 0 {
@@ -403,50 +403,6 @@ func readStaticDocument(raw []byte, f *model.StaticTargetFile) (*staticDocument,
 		d.targets = append(d.targets, target)
 	}
 	return d, nil
-}
-
-// resolved is a copy of n with every alias replaced by a copy of what it
-// names, every merge key (<<) replaced by the keys it merges in, and no
-// anchors or comments. So a share holds none of the targets an alias could
-// point into, and a replica reads it as the decoder read the file.
-func resolved(n *yaml.Node) *yaml.Node {
-	for n.Kind == yaml.AliasNode && n.Alias != nil {
-		n = n.Alias
-	}
-	out := &yaml.Node{Kind: n.Kind, Style: n.Style, Tag: n.Tag, Value: n.Value}
-	if n.Kind != yaml.MappingNode {
-		for _, child := range n.Content {
-			out.Content = append(out.Content, resolved(child))
-		}
-		return out
-	}
-	// A key written out wins over a merged one, and of two merged ones the
-	// first, as the decoder has them.
-	taken := map[string]bool{}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if !isMergeKey(n.Content[i]) {
-			taken[model.KeyName(n.Content[i])] = true
-		}
-	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		key, value := n.Content[i], n.Content[i+1]
-		if !isMergeKey(key) {
-			out.Content = append(out.Content, resolved(key), resolved(value))
-			continue
-		}
-		for _, entry := range model.MappingEntries(&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{key, value}}) {
-			if name := model.KeyName(entry.Key); !taken[name] {
-				taken[name] = true
-				out.Content = append(out.Content, resolved(entry.Key), resolved(entry.Value))
-			}
-		}
-	}
-	return out
-}
-
-// isMergeKey reports whether key is a merge key, <<, written out.
-func isMergeKey(key *yaml.Node) bool {
-	return key.Kind == yaml.ScalarNode && key.Tag == "!!merge"
 }
 
 // render is the static target file of the targets at indices, in the order

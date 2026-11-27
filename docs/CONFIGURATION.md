@@ -5184,11 +5184,12 @@ The other files have their own schemas, all in `configs/` beside the
 examples and all regenerated with `make schemas` (see
 [Development](DEVELOPMENT.md#the-configuration-schema)):
 
-- the [static target file](STATIC-TARGETS.md):
+- the [static target file](STATIC-TARGETS.md), which may have
+  `discovered_targets` of `dns_sd` sources:
   [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
   `configs/static-targets.example.yaml` points editors at in the same way;
-- the [target allocator](ALLOCATOR.md)'s static target file, which may have
-  `discovered_targets`:
+- the [target allocator](ALLOCATOR.md)'s static target file, whose
+  `discovered_targets` may have every kind of source:
   [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json);
 - the allocator's probe targets file:
   [`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json);

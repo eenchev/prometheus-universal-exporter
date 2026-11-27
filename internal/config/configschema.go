@@ -95,6 +95,14 @@ const staticTargetsSchemaID = schemaBaseURL + "static-targets.schema.json"
 // the targets against the collectors they name.
 func staticTargetsSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.StaticTargetFile{}), "", staticTargetsSchemaRules())
+	properties := schema["properties"].(map[string]any)
+	properties[DiscoveredTargetsKey] = discoveredTargetsSchema(properties["targets"].(map[string]any)["items"].(map[string]any))
+	// targets, or discovered_targets, or both.
+	delete(properties["targets"].(map[string]any), "minItems")
+	schema["anyOf"] = []any{
+		map[string]any{"required": []string{"targets"}, "properties": map[string]any{"targets": map[string]any{"minItems": 1}}},
+		map[string]any{"required": []string{DiscoveredTargetsKey}},
+	}
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = staticTargetsSchemaID
 	allowExtensionKeys(schema)
@@ -1255,7 +1263,7 @@ func requestSchemaRule() map[string]any {
 func staticTargetsSchemaRules() map[string]map[string]any {
 	return withLoginRules("targets[].request", "http and graphite: replaces the collector's request.login for this target, as its own credential replaces the collector's. See docs/AUTHENTICATION.md#logging-in-to-a-target.", map[string]map[string]any{
 		"": {
-			"required":    []string{"interval", "targets"},
+			"required":    []string{"interval"},
 			"description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
 		},
 		"interval":            {"not": fetch.SchemaLeastDuration(time.Second, false), "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s."},

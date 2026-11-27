@@ -40,6 +40,7 @@ var coreTypeNameAllowed = []struct {
 	{"internal/config/config.go", "graphite", 2, "the graphite decoder, which response.graphite applies to"},
 	{"internal/config/config.go", "http", 2, "a URL's scheme, and the http reload trigger"},
 	{"internal/config/configschema.go", "tcp", 1, "a value of the keepalive check of a static target's sql connections"},
+	{"internal/config/staticdiscovery.go", "kubernetes", 2, "the target allocator's kubernetes discovery source, which a discovered_targets entry of the exporter's is refused for"},
 	{"internal/decode/decoders.go", "graphite", 3, "the graphite decoder's name"},
 	{"internal/decode/decoders.go", "sql", 1, "decode.KindRows, the format rows are shown as"},
 	{"internal/decode/graphite.go", "graphite", 2, "the graphite decoder's name"},

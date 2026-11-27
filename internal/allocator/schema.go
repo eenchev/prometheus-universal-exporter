@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -178,7 +179,7 @@ func weightLabelSchema() map[string]any {
 }
 
 // targetTemplateSchema describes a target_template, a probe job's or an
-// entry's (checkTargetTemplate).
+// entry's (discovery.CheckTemplate).
 func targetTemplateSchema() map[string]any {
 	return map[string]any{
 		"type":        "string",
@@ -199,7 +200,7 @@ func discoveryListSchema() map[string]any {
 // discoverySchemaRules adds, by path from a discovery list, what the
 // DiscoveryConfig struct cannot say.
 func discoverySchemaRules() map[string]map[string]any {
-	reserved := model.SortedKeys(reservedTargetLabels)
+	reserved := model.SortedKeys(discovery.ReservedTargetLabels)
 	// written is the rule that an object has the key and that it is not
 	// "", which the allocator takes for the key left out, as the exporter
 	// does.
@@ -209,7 +210,7 @@ func discoverySchemaRules() map[string]map[string]any {
 	labelPattern := labelName.String()
 	// A refresh_interval is at least MinDiscoveryRefresh, or 0, the default.
 	refreshLeast := fetch.SchemaLeastDuration(MinDiscoveryRefresh, true)
-	return map[string]map[string]any{
+	rules := map[string]map[string]any{
 		"[]": {
 			"oneOf": []any{
 				map[string]any{"required": []string{"file_sd"}},
@@ -263,19 +264,8 @@ func discoverySchemaRules() map[string]map[string]any {
 		"[].kubernetes.address_type":      {"enum": []string{"IPv4", "IPv6", "any"}, "description": "The addressType of the EndpointSlices taken: IPv4, the default, IPv6, or any, which takes FQDN slices too. A dual-stack Service has a slice of each family."},
 		"[].kubernetes.refresh_interval":  {"not": refreshLeast, "description": "How often the EndpointSlices are listed, at least 1s. Defaults to 30s."},
 		"[].kubernetes.timeout":           {"description": "How long a listing, every page of it, may take, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
-		"[].dns_sd": {
-			"required":    []string{"names"},
-			"if":          map[string]any{"properties": map[string]any{"type": map[string]any{"enum": []string{"A", "AAAA"}}}, "required": []string{"type"}},
-			"then":        map[string]any{"required": []string{"port"}},
-			"else":        map[string]any{"not": map[string]any{"required": []string{"port"}}},
-			"description": "Names looked up in the DNS as Prometheus's dns_sd_configs looks them up: each SRV record a target at its target and port, or each A or AAAA record a target at its address and port.",
-		},
-		"[].dns_sd.names":            {"minItems": 1, "uniqueItems": true, "description": "The names looked up, each once, as absolute names, such as _metrics._tcp.example.com."},
-		"[].dns_sd.names[]":          {"minLength": 1, "pattern": `^[A-Za-z0-9_.-]+$`},
-		"[].dns_sd.type":             {"enum": config.OptionalEnum([]string{"SRV", "A", "AAAA"}), "description": "The record type asked for: SRV, the default, A or AAAA."},
-		"[].dns_sd.port":             {"minimum": 1, "maximum": 65535, "description": "The port of the targets of an A or AAAA source, required for those and refused for SRV, whose records carry their own."},
-		"[].dns_sd.server":           {"description": "A DNS server, host or host:port (port 53 by default), asked instead of the system's nameservers."},
-		"[].dns_sd.refresh_interval": {"not": refreshLeast, "description": "How often the names are looked up, at least 1s. Defaults to 30s."},
-		"[].dns_sd.timeout":          {"description": "How long the lookups of all the names may take together, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter."},
 	}
+	// A dns_sd source reads alike in the exporter's static target file.
+	maps.Copy(rules, config.DNSSDSchemaRules("[]."))
+	return rules
 }

@@ -625,6 +625,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	// started.
 	started := exporterStart()
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
+	out = append(out, countingSince(s.manager.DiscoveryMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, countingSince(s.otlpLogStatusMetrics(), started)...)
 	out = append(out, countingSince(s.otlpTraceStatusMetrics(), started)...)

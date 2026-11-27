@@ -62,7 +62,7 @@ func constrainedKeys(schema map[string]any) []string {
 // "". Every row's key is a key of its schema, and some fifty are held.
 func TestEveryConstrainedKeyOfTheSchemasIsInATable(t *testing.T) {
 	rows := map[keyFile]map[string]bool{inConfiguration: {}, inTargetFile: {}}
-	for _, key := range slices.Concat(httpSchemaKeys(), httpSigV4SchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys(), binarySchemaKeys(), icmpSchemaKeys(), snmpSchemaKeys(), smtpSchemaKeys(), modbusSchemaKeys(), mqttSchemaKeys(), websocketSchemaKeys(), ftpSchemaKeys(), imapSchemaKeys(), pop3SchemaKeys(), radiusSchemaKeys(), whoisSchemaKeys(), sipSchemaKeys(), amqpSchemaKeys(), natsSchemaKeys(), kafkaSchemaKeys()) {
+	for _, key := range slices.Concat(httpSchemaKeys(), httpSigV4SchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys(), binarySchemaKeys(), icmpSchemaKeys(), snmpSchemaKeys(), smtpSchemaKeys(), modbusSchemaKeys(), mqttSchemaKeys(), websocketSchemaKeys(), ftpSchemaKeys(), imapSchemaKeys(), pop3SchemaKeys(), radiusSchemaKeys(), whoisSchemaKeys(), sipSchemaKeys(), amqpSchemaKeys(), natsSchemaKeys(), kafkaSchemaKeys(), discoveredTargetsSchemaKeys()) {
 		rows[key.file][key.key] = true
 	}
 	held := 0
@@ -72,6 +72,11 @@ func TestEveryConstrainedKeyOfTheSchemasIsInATable(t *testing.T) {
 		}
 		for _, key := range constrainedKeys(schema) {
 			held++
+			// An entry of discovered_targets has every key of a target but
+			// target, under the same schema, so a target's row is its row.
+			if rest, ok := strings.CutPrefix(key, "discovered_targets[]."); ok && file == inTargetFile && rows[file]["targets[]."+rest] {
+				continue
+			}
 			if !rows[file][key] {
 				t.Errorf("%s is held to values, a pattern or a length by its schema and is in no table of schemakeys_*_test.go; add a row that says what the schema and the exporter do with it left out, written \"\", written well and written badly", key)
 			}
@@ -117,7 +122,7 @@ func sizeKeys(schema map[string]any) []string {
 // those and otlp.batch_max_bytes, and the target file none.
 func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T) {
 	marked := map[string]bool{}
-	for _, key := range slices.Concat(httpSchemaKeys(), httpSigV4SchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys(), binarySchemaKeys(), icmpSchemaKeys(), snmpSchemaKeys(), smtpSchemaKeys(), modbusSchemaKeys(), mqttSchemaKeys(), websocketSchemaKeys(), ftpSchemaKeys(), imapSchemaKeys(), pop3SchemaKeys(), radiusSchemaKeys(), whoisSchemaKeys(), sipSchemaKeys(), amqpSchemaKeys(), natsSchemaKeys(), kafkaSchemaKeys()) {
+	for _, key := range slices.Concat(httpSchemaKeys(), httpSigV4SchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys(), sshfileSchemaKeys(), sqlSchemaKeys(), dnsSchemaKeys(), tlscertSchemaKeys(), s3fileSchemaKeys(), kubernetesSchemaKeys(), redisSchemaKeys(), tcpSchemaKeys(), ldapSchemaKeys(), sshexecSchemaKeys(), ntpSchemaKeys(), binarySchemaKeys(), icmpSchemaKeys(), snmpSchemaKeys(), smtpSchemaKeys(), modbusSchemaKeys(), mqttSchemaKeys(), websocketSchemaKeys(), ftpSchemaKeys(), imapSchemaKeys(), pop3SchemaKeys(), radiusSchemaKeys(), whoisSchemaKeys(), sipSchemaKeys(), amqpSchemaKeys(), natsSchemaKeys(), kafkaSchemaKeys(), discoveredTargetsSchemaKeys()) {
 		if key.size {
 			if key.file != inConfiguration {
 				t.Errorf("%s is marked as a size in a file that has none", key.name())

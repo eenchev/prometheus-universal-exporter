@@ -19,6 +19,11 @@ type StaticTargetFile struct {
 	// DefaultStaticTargetConcurrency when unset or 0.
 	Concurrency int            `yaml:"concurrency"`
 	Targets     []StaticTarget `yaml:"targets"`
+	// Discovered are the file's discovered_targets entries, and Written how
+	// many of Targets the file writes; those after them are the entries'
+	// targets, as their sources last found them (config/staticdiscovery.go).
+	Discovered []DiscoveredEntry `yaml:"-"`
+	Written    int               `yaml:"-"`
 }
 
 // DefaultStaticTargetConcurrency is how many static targets are scraped at

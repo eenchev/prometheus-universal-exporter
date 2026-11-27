@@ -3,7 +3,6 @@ package allocator
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -85,23 +85,9 @@ type KubernetesConfig struct {
 	Timeout         model.Duration `yaml:"timeout"`
 }
 
-// DNSSDConfig looks names up in the DNS as Prometheus's dns_sd_configs
-// does: SRV records, each a target at its target host and port, or A or
-// AAAA records, each a target at its address and Port.
-type DNSSDConfig struct {
-	// Names are looked up as absolute names, so the search domains of the
-	// system's resolver are never appended to them.
-	Names []string `yaml:"names"`
-	// Type is SRV, the default, A or AAAA.
-	Type string `yaml:"type"`
-	// Port is the port of an A or AAAA source's targets; an SRV record
-	// carries its own.
-	Port int `yaml:"port"`
-	// Server, host:port, is asked instead of the system's nameservers.
-	Server          string         `yaml:"server"`
-	RefreshInterval model.Duration `yaml:"refresh_interval"`
-	Timeout         model.Duration `yaml:"timeout"`
-}
+// DNSSDConfig looks names up in the DNS, as the exporter's static target
+// file does too (internal/discovery).
+type DNSSDConfig = discovery.DNSSDConfig
 
 // The defaults and bounds of a discovery source.
 const (
@@ -114,15 +100,17 @@ const (
 	DefaultHTTPSDRefresh = time.Minute
 	// DefaultKubernetesRefresh is how often EndpointSlices are listed.
 	DefaultKubernetesRefresh = 30 * time.Second
-	// DefaultDNSSDRefresh is Prometheus's own for DNS service discovery.
-	DefaultDNSSDRefresh = 30 * time.Second
-	// DefaultDNSSDType is the record type a dns_sd source asks for by
-	// default.
-	DefaultDNSSDType = "SRV"
 	// DefaultDiscoveryTimeout bounds an http_sd request, a Kubernetes
 	// listing or a dns_sd source's lookups, or the source's
 	// refresh_interval when that is shorter.
-	DefaultDiscoveryTimeout = 10 * time.Second
+	DefaultDiscoveryTimeout = discovery.DefaultTimeout
+	// DefaultDNSSDRefresh and DefaultDNSSDType are a dns_sd source's, which
+	// internal/discovery runs.
+	DefaultDNSSDRefresh = discovery.DefaultDNSSDRefresh
+	DefaultDNSSDType    = discovery.DefaultDNSSDType
+	// AddressPlaceholder stands for a discovered target's address in a
+	// target_template.
+	AddressPlaceholder = discovery.AddressPlaceholder
 	// DefaultAddressType is the addressType of the EndpointSlices a
 	// kubernetes source takes by default.
 	DefaultAddressType = "IPv4"
@@ -145,9 +133,6 @@ const (
 	// maxDiscoveryAnswerBytes bounds an http_sd answer, a file_sd file and
 	// a page of a Kubernetes listing.
 	maxDiscoveryAnswerBytes = 16 << 20
-	// AddressPlaceholder stands for a discovered target's address in a
-	// target_template.
-	AddressPlaceholder = "{{address}}"
 )
 
 var (
@@ -225,11 +210,6 @@ func (d *DiscoveryConfig) refreshText() string {
 	return fmt.Sprintf("%s's default refresh interval %s", d.kind(), d.refresh())
 }
 
-// reservedTargetLabels are what a discovery source's labels may not set:
-// job is the scrape configuration's, instance the allocator's (a probe's
-// target) or Prometheus's, and static_target the static targets endpoint's.
-var reservedTargetLabels = map[string]bool{"job": true, "instance": true, "static_target": true}
-
 // checkDiscovery checks a discovery list. It fills in each source's name,
 // and the refresh_interval of a source that sets none with defaultRefresh
 // (0 for its kind's own). base is the directory of the file the list is in.
@@ -276,7 +256,7 @@ func (d *DiscoveryConfig) check(base string) error {
 			return fmt.Errorf("labels sets %q, which is not a label name", name)
 		case strings.HasPrefix(name, "__"):
 			return fmt.Errorf("labels sets %q; a label starting with __ is Prometheus's own", name)
-		case reservedTargetLabels[name]:
+		case discovery.ReservedTargetLabels[name]:
 			return fmt.Errorf("labels sets %s, which the allocator, the exporter or Prometheus sets on every target", name)
 		case !model.ValidLabelName(from):
 			return fmt.Errorf("labels sets %s from %q, which is not a label name", name, from)
@@ -291,7 +271,7 @@ func (d *DiscoveryConfig) check(base string) error {
 	case d.HTTPSD != nil:
 		return d.HTTPSD.check(base, d.refresh(), d.refreshText())
 	case d.DNSSD != nil:
-		return d.DNSSD.check(d.refresh(), d.refreshText())
+		return discovery.CheckDNSSD(d.DNSSD, d.refresh(), d.refreshText())
 	default:
 		return d.Kubernetes.check(d.refresh(), d.refreshText())
 	}
@@ -331,7 +311,7 @@ func (h *HTTPSDConfig) check(base string, refresh time.Duration, refreshText str
 	if u.User != nil {
 		return errors.New("http_sd.url must not carry credentials; give a bearer_token_file")
 	}
-	if err := checkTimeout("http_sd", h.Timeout, refresh, refreshText); err != nil {
+	if err := discovery.CheckTimeout("http_sd", h.Timeout, refresh, refreshText); err != nil {
 		return err
 	}
 	if err := fetch.CheckClientTLSKeys(h.TLS); err != nil {
@@ -372,71 +352,7 @@ func (k *KubernetesConfig) check(refresh time.Duration, refreshText string) erro
 	default:
 		return fmt.Errorf("kubernetes.address_type %q must be IPv4, IPv6 or any", k.AddressType)
 	}
-	return checkTimeout("kubernetes", k.Timeout, refresh, refreshText)
-}
-
-func (n *DNSSDConfig) check(refresh time.Duration, refreshText string) error {
-	if len(n.Names) == 0 {
-		return errors.New("dns_sd.names must not be empty")
-	}
-	seen := map[string]bool{}
-	for i, raw := range n.Names {
-		name, err := dnsSDName(raw)
-		if err != nil {
-			return fmt.Errorf("dns_sd.names entry %w", err)
-		}
-		if seen[name] {
-			return fmt.Errorf("dns_sd.names lists %q twice", name)
-		}
-		seen[name] = true
-		n.Names[i] = name
-	}
-	if n.Type == "" {
-		n.Type = DefaultDNSSDType
-	}
-	switch n.Type {
-	case "SRV":
-		if n.Port != 0 {
-			return errors.New("dns_sd.port is set for type SRV, whose records carry their own ports; leave it out")
-		}
-	case "A", "AAAA":
-		if n.Port < 1 || n.Port > 65535 {
-			return fmt.Errorf("dns_sd.port must be a port from 1 to 65535 for type %s, whose records carry no port", n.Type)
-		}
-	default:
-		return fmt.Errorf("dns_sd.type %q must be SRV, A or AAAA", n.Type)
-	}
-	if n.Server != "" {
-		server, err := fetch.ParseDNSServer(n.Server)
-		if err != nil {
-			return fmt.Errorf("dns_sd.server %w", err)
-		}
-		n.Server = server
-	}
-	return checkTimeout("dns_sd", n.Timeout, refresh, refreshText)
-}
-
-// dnsSDName reads a name of dns_sd.names: a DNS name, such as
-// _metrics._tcp.example.com, in lower case without a trailing dot. So a
-// name written twice in two spellings is told, and every replica asks for
-// the same name and labels its targets with it.
-func dnsSDName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", errors.New("is empty")
-	}
-	if strings.ContainsAny(name, "/?#@:[]") {
-		return "", fmt.Errorf("%q is not a DNS name; the server is dns_sd.server and the port dns_sd.port", raw)
-	}
-	if _, err := netip.ParseAddr(name); err == nil {
-		return "", fmt.Errorf("%q is an IP address, not a name to look up", raw)
-	}
-	canonical, err := fetch.CanonicalDNSName(name)
-	var refused *fetch.TargetRefusedError
-	if errors.As(err, &refused) {
-		return "", fmt.Errorf("%q is not a DNS name: %s", raw, refused.Reason)
-	}
-	return canonical, err
+	return discovery.CheckTimeout("kubernetes", k.Timeout, refresh, refreshText)
 }
 
 // port is the port the targets are at: its name, or its number.
@@ -484,18 +400,6 @@ func (d *DiscoveryConfig) timeout() time.Duration {
 		return time.Duration(set)
 	}
 	return min(DefaultDiscoveryTimeout, d.refresh())
-}
-
-// checkTimeout refuses a timeout set longer than refresh, the interval the
-// source is asked at, which refreshText names.
-func checkTimeout(kind string, set model.Duration, refresh time.Duration, refreshText string) error {
-	switch {
-	case set < 0:
-		return fmt.Errorf("%s.timeout must not be negative", kind)
-	case time.Duration(set) > refresh:
-		return fmt.Errorf("%s.timeout %s is longer than %s", kind, time.Duration(set), refreshText)
-	}
-	return nil
 }
 
 // resolvePath is path taken against base when it is relative; "" stays "".
@@ -579,20 +483,4 @@ func splitSelector(selector string) []string {
 		}
 	}
 	return append(parts, selector[start:])
-}
-
-// checkTargetTemplate refuses a target_template without the address.
-func checkTargetTemplate(template string) error {
-	if template != "" && !strings.Contains(template, AddressPlaceholder) {
-		return fmt.Errorf("target_template %q has no %s, which stands for each discovered target's address", template, AddressPlaceholder)
-	}
-	return nil
-}
-
-// fromTemplate is the target of the discovered address under template.
-func fromTemplate(template, address string) string {
-	if template == "" {
-		return address
-	}
-	return strings.ReplaceAll(template, AddressPlaceholder, address)
 }

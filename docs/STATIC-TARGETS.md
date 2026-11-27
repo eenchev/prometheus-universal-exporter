@@ -294,18 +294,18 @@ A target may also set `shard_key`, which the exporter ignores. It is for the
 the target's name to choose the replica that scrapes the target, so targets
 that share a key share a replica.
 
-**Allocator keys.** The exporter discovers no targets. A file with the
-allocator's `discovered_targets` key
-([Discovering targets](ALLOCATOR.md#discovering-targets)) is refused, with
-an error that names the allocator, because the exporter alone would scrape
-none of what it describes. So is a file with the allocator's weights,
-`default_weight` at its top level or `weight` or `weight_label` on a target
-([Weights and capacity](ALLOCATOR.md#weights-and-capacity)): the exporter
-scrapes every target of its file, and the allocator removes the weights
-before it hands a replica its share. The allocator writes each discovered
-target out as a separate target before it hands a replica its share. The
-file's schema, `configs/static-targets.schema.json`, refuses these keys too.
-The allocator's file has its own schema that accepts them,
+**Allocator keys.** A file with the allocator's weights, `default_weight` at
+its top level or `weight` or `weight_label` on a target or a
+`discovered_targets` entry
+([Weights and capacity](ALLOCATOR.md#weights-and-capacity)), is refused, with
+an error that names the allocator: the exporter scrapes every target of its
+file, and the allocator removes the weights before it hands a replica its
+share. A `discovered_targets` entry is read when its sources are all
+`dns_sd` ones ([Discovering targets by DNS](#discovering-targets-by-dns)); an
+entry with a `file_sd`, `http_sd` or `kubernetes` source is refused, naming
+the allocator, which asks those. The file's schema,
+`configs/static-targets.schema.json`, refuses these keys too. The
+allocator's file has its own schema that accepts them,
 [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json).
 
 Check a target file together with its configuration before deploying it:
@@ -354,6 +354,118 @@ starts from the last successful scrape of that target.
   date itself would be.
 - A target's own `target`, `request.path`, `body` and `headers` are written
   out as they are, including any clock placeholders.
+
+## Discovering targets by DNS
+
+A list of targets that DNS already holds need not be written out. A
+`discovered_targets` entry is a static target written once for every target
+that its `dns_sd` sources find. The exporter looks the names up itself, and
+puts the targets they make in force beside the file's own, as they change:
+
+```yaml
+interval: 1m
+targets:
+  - name: legacy
+    collector: node
+    target: http://legacy.internal:9100/metrics
+discovered_targets:
+  - name: node                       # targets are named node_<address>
+    collector: node
+    target_template: http://{{address}}/metrics
+    interval: 30s
+    labels:
+      team: infra
+    discovery:
+      - dns_sd:
+          names: [_metrics._tcp.nodes.example.com]
+        labels:
+          service: __meta_dns_name
+      - name: legacy_hosts
+        dns_sd:
+          names: [legacy.example.com]
+          type: A
+          port: 9100
+          refresh_interval: 1m
+```
+
+A file may have `targets`, `discovered_targets` or both. The keys, the
+names of the targets and the checks are the
+[target allocator's](ALLOCATOR.md#discovering-targets), so the same file
+works with the allocator in front of several replicas, or with one exporter
+on its own.
+
+**The entry.** It is a static target without `target`, with `name`,
+`discovery`, and optionally `target_template`.
+
+- Every other key (`collector`, `interval`, `request`, `labels`, `params`,
+  `export_via_otlp`, `otlp`) is the static target's own, written into every
+  target that the entry makes.
+- It is checked at load as such a target, with the address `192.0.2.1:9100`
+  in place of a discovered one. So an `http` collector without a
+  `target_template` that makes a URL is refused then.
+- `target_template` makes the target from the address a source found,
+  `{{address}}` standing for it. Without one, the address is the target.
+- `shard_key: address` is the allocator's, and the exporter, which scrapes
+  every target, takes it and does nothing with it.
+
+**Names.** Each target is named `<name>_<address>`, with the address
+escaped so that no two addresses share a name: `10.0.0.5:9100` makes
+`node_10_0_0_5_3A9100`. An address with other characters, or a long one, is
+cut and followed by `_X` and 16 hex digits of its SHA-256, and so is one
+whose name the file already gives to a written target. A name depends on
+the entry, the address and the file alone, so a target keeps its name, its
+`static_target` label and its series from one lookup to the next. No
+entry's `name` may be another entry's followed by `_`.
+
+**Sources.** Each source of `discovery` sets `dns_sd`, and may set `name`
+(by default `dns_sd_` and its place, such as `dns_sd_0`), `labels` and
+`max_targets` (10000 by default). Its `dns_sd` keys are the allocator's:
+
+- `names`, looked up as absolute names, so the system's search domains are
+  never appended;
+- `type`, `SRV` (the default), `A` or `AAAA`; an A or AAAA source sets
+  `port`, which SRV refuses;
+- `server`, asked instead of the system's nameservers, `host` or
+  `host:port`;
+- `refresh_interval`, how often the names are looked up, at least `1s`,
+  `30s` by default, and `timeout`, which bounds the lookups of all the names
+  together, `10s` by default, or the refresh interval when that is shorter.
+
+Each SRV record is a target at its target host, in lower case, and its port.
+Each A or AAAA record is a target at its address and `port`. A target has the
+meta label `__meta_dns_name`, and an SRV one `__meta_dns_srv_record_target`
+and `__meta_dns_srv_record_port`, which `labels` copies to a label:
+`service: __meta_dns_name` gives each target the label `service`. No label
+starting with `__` reaches a target, and the entry's own `labels` win over
+the source's.
+
+**What is looked up, and when.**
+
+- Each source is looked up when the file that has it is put in force, at
+  startup or on a reload, and then every refresh interval.
+- An answer that differs from the source's last puts the targets in force
+  again, as a reload of the file would: a new target is first scraped within
+  ten seconds, and a target gone stops being scraped and leaves the
+  endpoint. The change is logged, and is no reload: the
+  [reload series](SELF-METRICS.md#configuration-reloads) leave it out.
+- A name that does not exist, or has no records of the type, gives no
+  targets. Any other failure, such as a server failure or no answer in
+  time, keeps the targets of the source's last answer, and is logged once
+  while it stays the same.
+- A source that has not answered yet gives no targets, so at startup an
+  entry's targets come once its first lookup ends.
+- A reload that keeps an entry's name and a source's settings keeps what
+  the source found, so its targets stay in force through the reload. A
+  source the reload changed is looked up at once.
+- A discovered target that the checks refuse, or whose name another target
+  has, is left out, and is logged once while the reason stays the same.
+
+The sources are in the self-metrics:
+`http_exporter_discovery_targets`, `http_exporter_discovery_refreshes_total`
+and `http_exporter_discovery_last_success_timestamp_seconds`, each by
+`entry` and `source` ([Self-metrics](SELF-METRICS.md#discovered-static-targets)).
+The exporter asks `dns_sd` sources alone. For `file_sd`, `http_sd` or
+`kubernetes`, run the [target allocator](ALLOCATOR.md#discovering-targets).
 
 ## Credentials and TLS of a target
 

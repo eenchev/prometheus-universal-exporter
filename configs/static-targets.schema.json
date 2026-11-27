@@ -2,6 +2,23 @@
   "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/static-targets.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "anyOf": [
+    {
+      "properties": {
+        "targets": {
+          "minItems": 1
+        }
+      },
+      "required": [
+        "targets"
+      ]
+    },
+    {
+      "required": [
+        "discovered_targets"
+      ]
+    }
+  ],
   "description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
   "patternProperties": {
     "^x-.+": {
@@ -13,6 +30,3147 @@
       "description": "How many targets are scraped at once. A target due while all are busy waits for a slot within its interval, and is skipped if none frees. Omit or 0 for the default, 8.",
       "minimum": 0,
       "type": "integer"
+    },
+    "discovered_targets": {
+      "description": "Static targets written once for every target that their dns_sd sources find, beside or in place of targets. The exporter asks the sources itself, and puts the targets in force as they change. See docs/STATIC-TARGETS.md#discovering-targets-by-dns.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A static target written for every target its discovery finds, checked at load with the address 192.0.2.1:9100 in place of a discovered one.",
+        "properties": {
+          "collector": {
+            "description": "The collector of the configuration that scrapes this target.",
+            "minLength": 1,
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "discovery": {
+            "description": "dns_sd sources, the one kind the exporter asks itself; the target allocator asks file_sd, http_sd and kubernetes ones too. See docs/STATIC-TARGETS.md#discovering-targets-by-dns.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One dns_sd source.",
+              "properties": {
+                "dns_sd": {
+                  "additionalProperties": false,
+                  "description": "Names looked up in the DNS as Prometheus's dns_sd_configs looks them up: each SRV record a target at its target and port, or each A or AAAA record a target at its address and port.",
+                  "else": {
+                    "not": {
+                      "required": [
+                        "port"
+                      ]
+                    }
+                  },
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "A",
+                          "AAAA"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  "properties": {
+                    "names": {
+                      "description": "The names looked up, each once, as absolute names, such as _metrics._tcp.example.com.",
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_.-]+$",
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "port": {
+                      "description": "The port of the targets of an A or AAAA source, required for those and refused for SRV, whose records carry their own.",
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "refresh_interval": {
+                      "description": "How often the names are looked up, at least 1s. Defaults to 30s.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "not": {
+                        "not": {
+                          "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                        },
+                        "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                        "type": "string"
+                      },
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "server": {
+                      "description": "A DNS server, host or host:port (port 53 by default), asked instead of the system's nameservers.",
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "timeout": {
+                      "description": "How long the lookups of all the names may take together, no longer than refresh_interval. Defaults to 10s, or refresh_interval when that is shorter.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "type": {
+                      "description": "The record type asked for: SRV, the default, A or AAAA.",
+                      "enum": [
+                        "SRV",
+                        "A",
+                        "AAAA",
+                        ""
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "names"
+                  ],
+                  "then": {
+                    "required": [
+                      "port"
+                    ]
+                  },
+                  "type": "object"
+                },
+                "labels": {
+                  "additionalProperties": {
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                    "type": "string"
+                  },
+                  "description": "Labels set from the source's own, each target's label of the key taking the value of the label the value names, such as service: __meta_dns_name. Not job, instance or static_target, nor a name starting with __.",
+                  "propertyNames": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "pattern": "^__"
+                        },
+                        {
+                          "enum": [
+                            "instance",
+                            "job",
+                            "static_target"
+                          ]
+                        }
+                      ]
+                    },
+                    "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"
+                  },
+                  "type": "object"
+                },
+                "max_targets": {
+                  "description": "How many targets one answer may hold; one with more is a failure. 0 or left out takes 10000.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "name": {
+                  "description": "Unique in its list, in the self-metrics and logs. Letters, digits, _, . and -, not starting with . or -. Defaults to dns_sd_ and its place, such as dns_sd_0.",
+                  "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dns_sd"
+              ],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "export_via_otlp": {
+            "description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false.",
+            "type": "boolean"
+          },
+          "interval": {
+            "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
+            "maximum": 0,
+            "minimum": 0,
+            "not": {
+              "not": {
+                "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+              },
+              "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+              "type": "string"
+            },
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
+            "propertyNames": {
+              "minLength": 1,
+              "not": {
+                "enum": [
+                  "static_target",
+                  "job",
+                  "instance"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "name": {
+            "description": "The entry's name, which each target it makes is named after: \u003cname\u003e_\u003caddress\u003e, the address escaped (10.0.0.5:9100 is 10_0_0_5_3A9100) or, when it holds other characters or is long, cut and followed by _X and 16 hex digits of its SHA-256. Required, unique among the entries, and not another entry's name followed by _.",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "otlp": {
+            "additionalProperties": false,
+            "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true.",
+            "properties": {
+              "instance_id": {
+                "description": "Give the target's resource the attribute service.instance.id, the target's name, so every target is a resource of its own. Not beside a service.instance.id of otlp.resource_attributes. Defaults to false.",
+                "type": "boolean"
+              },
+              "labels_as_resource": {
+                "description": "Labels of the target's labels that its resource carries as attributes in place of the target's data points, each named once. Not one its resource has as an attribute already, from otlp.resource_attributes here or exporter-wide; that, and a name that is not among the target's labels, the exporter checks. See docs/OTLP.md#static-target-labels-as-resource-attributes.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              "resource_attributes": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "service_name": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Values of the collector's {{param_\u003cname\u003e}} placeholders, as a probe's param_\u003cname\u003e parameters give them. Each must be used by a placeholder. A value may hold clock placeholders, such as {{date@Europe/Sofia}}, which each scrape fills in, and no {{param_...}} one. See docs/STATIC-TARGETS.md#dates-and-times-in-a-parameter.",
+            "propertyNames": {
+              "pattern": "^param_[A-Za-z0-9_]+$"
+            },
+            "type": "object"
+          },
+          "request": {
+            "additionalProperties": false,
+            "description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe.",
+            "not": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "properties": {
+                        "bearer_token": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "bearer_token_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "bearer_token_file"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "required": [
+                    "basic_auth",
+                    "basic_auth_file"
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "basic_auth"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "basic_auth_file"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "bearer_token": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "bearer_token_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "bearer_token_file"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "accept_codes": {
+                "description": "grpc: replaces the collector's request.accept_codes for this target.",
+                "items": {
+                  "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Cc][Aa][Nn][Cc][Ee][Ll][Ll][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Ii][Nn][Vv][Aa][Ll][Ii][Dd]_[Aa][Rr][Gg][Uu][Mm][Ee][Nn][Tt]|[Dd][Ee][Aa][Dd][Ll][Ii][Nn][Ee]_[Ee][Xx][Cc][Ee][Ee][Dd][Ee][Dd]|[Nn][Oo][Tt]_[Ff][Oo][Uu][Nn][Dd]|[Aa][Ll][Rr][Ee][Aa][Dd][Yy]_[Ee][Xx][Ii][Ss][Tt][Ss]|[Pp][Ee][Rr][Mm][Ii][Ss][Ss][Ii][Oo][Nn]_[Dd][Ee][Nn][Ii][Ee][Dd]|[Rr][Ee][Ss][Oo][Uu][Rr][Cc][Ee]_[Ee][Xx][Hh][Aa][Uu][Ss][Tt][Ee][Dd]|[Ff][Aa][Ii][Ll][Ee][Dd]_[Pp][Rr][Ee][Cc][Oo][Nn][Dd][Ii][Tt][Ii][Oo][Nn]|[Aa][Bb][Oo][Rr][Tt][Ee][Dd]|[Oo][Uu][Tt]_[Oo][Ff]_[Rr][Aa][Nn][Gg][Ee]|[Uu][Nn][Ii][Mm][Pp][Ll][Ee][Mm][Ee][Nn][Tt][Ee][Dd]|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Dd][Aa][Tt][Aa]_[Ll][Oo][Ss][Ss]|[Uu][Nn][Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee][Dd])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "accept_status": {
+                "anyOf": [
+                  {
+                    "maxItems": 1
+                  },
+                  {
+                    "items": {
+                      "not": {
+                        "const": "any"
+                      }
+                    }
+                  }
+                ],
+                "description": "http and graphite: replaces the collector's request.accept_status for this target; [any] alone accepts every status from 100 to 599.",
+                "items": {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$|^any$",
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "type": "array"
+              },
+              "auth_password_file": {
+                "description": "snmp, of snmp_version 3 with authNoPriv or authPriv: replaces the collector's auth_password_file for this target, the password of the target's own username or, without one, of the collector's. No {{param_...}} placeholder.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "basic_auth": {
+                "additionalProperties": false,
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "description": "http, graphite and grpc: the username of the target's own Basic credential. Not with a colon, which ends the username in the credential (RFC 7617).",
+                    "not": {
+                      "pattern": ":",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "basic_auth_file": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "password": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "username": {
+                        "not": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ],
+                "description": "http, graphite and grpc: the files of the target's own Basic credential, both required. Not with basic_auth or a bearer token.",
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "type": "object"
+              },
+              "bearer_token": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "bearer_token_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "bind_dn": {
+                "description": "ldap: replaces the collector's bind_dn for this target, with the target's own password_file, which it requires.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "community_file": {
+                "description": "snmp, of snmp_version 1 or 2: replaces the collector's community_file for this target. No {{param_...}} placeholder.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "connections": {
+                "additionalProperties": false,
+                "description": "sql: replaces, key by key, the collector's request.connections for this target; not max_targets, which is the collector's and refused here.",
+                "not": {
+                  "required": [
+                    "max_targets"
+                  ]
+                },
+                "properties": {
+                  "idle_timeout": {
+                    "description": "sql: how long an idle connection to this target is kept; 0 keeps it.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "keepalive": {
+                    "additionalProperties": false,
+                    "description": "sql: how a kept connection to this target is found broken.",
+                    "properties": {
+                      "check": {
+                        "description": "sql: tcp or ping.",
+                        "enum": [
+                          "tcp",
+                          "ping",
+                          ""
+                        ],
+                        "type": "string"
+                      },
+                      "interval": {
+                        "description": "sql: how often a connection to this target is checked; at least 1s, 0 for none.",
+                        "maximum": 0,
+                        "minimum": 0,
+                        "not": {
+                          "not": {
+                            "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                          },
+                          "pattern": "^\\+?((0*(([1-9][0-9]{0,8})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,5})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,2})?(\\.[0-9]*)?))ms|(0*((\\.[0-9]*)?))s|(0*((\\.(|0(0[0-9]*)?|01(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000([0-1][0-9]*)?|0002(7)*(([0-6][0-9]*)?)))?))h)$",
+                          "type": "string"
+                        },
+                        "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                        "type": [
+                          "string",
+                          "integer"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "max_idle_per_target": {
+                    "description": "sql: how many connections to this target are kept idle; 0 keeps none.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_lifetime": {
+                    "description": "sql: how long a connection to this target is used; 0 uses it as long as it works.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "max_per_target": {
+                    "description": "sql: the most connections open to this target at once; 0 sets no limit.",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_targets": {
+                    "description": "A collector's setting, which a static target cannot set: refused here, whatever its value.",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "enable_http2": {
+                "type": "boolean"
+              },
+              "follow_redirects": {
+                "type": "boolean"
+              },
+              "from": {
+                "description": "graphite: replaces the collector's request.from for this target.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "http and graphite: headers sent to this target, as written, without placeholders. A name is an HTTP token, set once whatever its case, and not Accept-Encoding.",
+                "propertyNames": {
+                  "not": {
+                    "pattern": "^[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"
+                  },
+                  "pattern": "^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$"
+                },
+                "type": "object"
+              },
+              "insecure_skip_verify": {
+                "type": "boolean"
+              },
+              "ip_family": {
+                "description": "http and graphite: replaces the collector's request.ip_family: ip4, ip6, prefer_ip4 or prefer_ip6.",
+                "enum": [
+                  "ip4",
+                  "ip6",
+                  "prefer_ip4",
+                  "prefer_ip6"
+                ],
+                "type": "string"
+              },
+              "login": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "properties": {
+                      "type": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "else": {
+                      "allOf": [
+                        {
+                          "properties": {
+                            "url": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "url"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "steps": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "steps"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_steps": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_steps"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "values": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "values"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "secret_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "secret_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "expires_at": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "expires_at"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "keep": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "keep"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "keep_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "keep_file"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "steps"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "properties": {
+                            "token": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "token"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "steps": {
+                              "minItems": 1
+                            }
+                          },
+                          "required": [
+                            "steps"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "url": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "url"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "scopes": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "scopes"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "not": {
+                            "allOf": [
+                              {
+                                "properties": {
+                                  "expires_in": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "expires_in"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "expires_at": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "expires_at"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "else": {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "properties": {
+                                    "keep": {
+                                      "not": {
+                                        "const": ""
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "keep"
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          "if": {
+                            "properties": {
+                              "refresh_steps": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "refresh_steps"
+                            ]
+                          },
+                          "then": {
+                            "properties": {
+                              "keep": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "keep"
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "json"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "token": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "token_header": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token_header"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "token_cookie": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "token_cookie"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "field_files": {
+                              "minProperties": 1
+                            }
+                          },
+                          "required": [
+                            "field_files"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "scopes": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "scopes"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "jwt"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "properties": {
+                            "signing_key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "signing_key_file"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_id_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_id_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "grant_type": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "grant_type"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "endpoint_params": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "endpoint_params"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "auth_style": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "auth_style"
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "type": {
+                          "const": "oauth2"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "client_id": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "client_id"
+                              ]
+                            },
+                            {
+                              "properties": {
+                                "client_id_file": {
+                                  "not": {
+                                    "const": ""
+                                  }
+                                }
+                              },
+                              "required": [
+                                "client_id_file"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "fields": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "fields"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "field_files": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "field_files"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_header"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "token_cookie": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "token_cookie"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "expires_in": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "expires_in"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "signing_key_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "signing_key_file"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "issuer": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "issuer"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "subject": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "subject"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "audience": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "audience"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "key_id": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "key_id"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "claims": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "claims"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "lifetime": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "lifetime"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "exchange": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "exchange"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "else": {
+                            "allOf": [
+                              {
+                                "properties": {
+                                  "client_secret_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "client_secret_file"
+                                ]
+                              },
+                              {
+                                "not": {
+                                  "anyOf": [
+                                    {
+                                      "properties": {
+                                        "refresh_token_file": {
+                                          "not": {
+                                            "const": ""
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "refresh_token_file"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          "if": {
+                            "properties": {
+                              "grant_type": {
+                                "const": "refresh_token"
+                              }
+                            },
+                            "required": [
+                              "grant_type"
+                            ]
+                          },
+                          "then": {
+                            "allOf": [
+                              {
+                                "properties": {
+                                  "refresh_token_file": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "refresh_token_file"
+                                ]
+                              },
+                              {
+                                "if": {
+                                  "not": {
+                                    "anyOf": [
+                                      {
+                                        "properties": {
+                                          "client_secret_file": {
+                                            "not": {
+                                              "const": ""
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "client_secret_file"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "then": {
+                                  "not": {
+                                    "properties": {
+                                      "auth_style": {
+                                        "const": "header"
+                                      }
+                                    },
+                                    "required": [
+                                      "auth_style"
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "token_cookie": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "token_cookie"
+                      ]
+                    },
+                    "then": {
+                      "allOf": [
+                        {
+                          "not": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "header": {
+                                    "not": {
+                                      "const": ""
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "header"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "not": {
+                            "required": [
+                              "prefix"
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "description": "http and graphite: replaces the collector's request.login for this target, as its own credential replaces the collector's. See docs/AUTHENTICATION.md#logging-in-to-a-target.",
+                "properties": {
+                  "audience": {
+                    "description": "jwt: whom the JWT is meant for, its aud claim; the login's url when left out, as RFC 7523 has it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "auth_style": {
+                    "description": "oauth2: how the client's id and secret are sent: header, as a Basic credential, the default, or params, as parameters of the form.",
+                    "enum": [
+                      "header",
+                      "params",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "claims": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "jwt: further claims of the JWT, each text; not those the login sets itself.",
+                    "propertyNames": {
+                      "minLength": 1,
+                      "not": {
+                        "enum": [
+                          "iss",
+                          "sub",
+                          "aud",
+                          "iat",
+                          "exp",
+                          "scope"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "client_id": {
+                    "description": "oauth2: the client's id. Exactly one of client_id and client_id_file.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_id_file": {
+                    "description": "oauth2: the file holding the client's id, read at every login.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "client_secret_file": {
+                    "description": "oauth2: the file holding the client's secret, read at every login. Required with the client credentials grant; with refresh_token, left out for a public client, which sends its id as a form parameter.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "endpoint_params": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "oauth2: further parameters of the token request, such as audience or resource. Not grant_type, scope, client_id, client_secret or refresh_token, which the grant sets.",
+                    "propertyNames": {
+                      "minLength": 1,
+                      "not": {
+                        "enum": [
+                          "grant_type",
+                          "scope",
+                          "client_id",
+                          "client_secret",
+                          "refresh_token"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "exchange": {
+                    "description": "jwt: how the JWT is handed to url: form, the default, as the assertion of a JWT bearer grant (RFC 7523), answered as an OAuth 2.0 token is; or bearer, as the request's own credential, Authorization: Bearer, with no body, as a GitHub App asks for an installation's token.",
+                    "enum": [
+                      "form",
+                      "bearer",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "description": "steps: the name of the value that is when the token expires: seconds or milliseconds since 1970, RFC 3339 or an HTTP date. Not with expires_in.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "expires_in": {
+                    "description": "json: the jq expression of the token's lifetime in seconds in the answer's body, such as .expires_in; null when the answer does not say. steps: the name of the value that is the token's lifetime in seconds. Left out, or null, the token's own expiry, as its cookie or its JWT exp claim says it, then ttl, applies.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "field_files": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "json: members of the JSON object posted, each read from its file at every login, such as {username: /var/run/secrets/login/username, password: /var/run/secrets/login/password}. Required: at least one. A field is in fields or here, not both.",
+                    "type": "object"
+                  },
+                  "fields": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "json: members of the JSON object posted, as written: for what is no secret, such as a tenant.",
+                    "type": "object"
+                  },
+                  "grant_type": {
+                    "description": "oauth2: client_credentials, the default, for a service's own access, or refresh_token, to act on a user's account with the refresh token of refresh_token_file, which the user's consent gave once, such as Gmail's API's. See docs/AUTHENTICATION.md#a-users-refresh-token.",
+                    "enum": [
+                      "client_credentials",
+                      "refresh_token",
+                      ""
+                    ],
+                    "type": "string"
+                  },
+                  "header": {
+                    "description": "The header the token is sent in, Authorization when left out. Its name reads as a credential's — it has auth, token, key, session or the like in it — so that what shows a request's headers withholds it. Not with token_cookie, whose cookie is sent in Cookie.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "issuer": {
+                    "description": "jwt: who the JWT is from, its iss claim: a service account's address, an app's id. Required unless the key file is a service account's JSON key.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "keep": {
+                    "additionalProperties": {
+                      "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
+                      "maximum": 0,
+                      "minimum": 0,
+                      "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                      "type": [
+                        "string",
+                        "integer"
+                      ]
+                    },
+                    "description": "steps: the values of steps that refresh_steps send, each with how long it is used, such as {refresh_token: 720h}; 0 for as long as refresh_steps succeed with it. A value's cookie or JWT expiry shortens it. With refresh_steps.",
+                    "type": "object"
+                  },
+                  "keep_file": {
+                    "description": "steps: an absolute path the token and the values kept are written to after each login, readable by the exporter's user alone, and read at each login, so that a restart, or another exporter sharing the file, makes no login while they last. Its directory must exist and be writable, such as a volume of its own. It holds secrets.",
+                    "pattern": "^$|^/",
+                    "type": "string"
+                  },
+                  "key_id": {
+                    "description": "jwt: the kid of the JWT's header, which tells the endpoint which of the issuer's keys signed it.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "lifetime": {
+                    "description": "jwt: how long the JWT is valid, at most 1h; 5m when left out. It is not the lifetime of the token the endpoint answers, which the answer, or ttl, says.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "prefix": {
+                    "description": "What the token is sent after: \"Bearer \" in Authorization and nothing in another header when left out; \"\" sends the token alone. Not with token_cookie.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "refresh_steps": {
+                    "description": "steps: the requests that make a new token of the values kept (keep), as a long-lived token traded for a short-lived one: made in place of steps while the values kept last, and steps made when they fail. With keep.",
+                    "items": {
+                      "additionalProperties": false,
+                      "allOf": [
+                        {
+                          "properties": {
+                            "url": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "url"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "required": [
+                              "form",
+                              "json"
+                            ]
+                          }
+                        }
+                      ],
+                      "properties": {
+                        "extract": {
+                          "additionalProperties": {
+                            "additionalProperties": false,
+                            "maxProperties": 1,
+                            "minProperties": 1,
+                            "properties": {
+                              "cookie": {
+                                "description": "A cookie the answer sets; its Max-Age or Expires is the value's expiry.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "form": {
+                                "description": "A field of the body read as a form, as an OAuth 1.0a token endpoint answers.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "header": {
+                                "description": "A header of the answer.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "json": {
+                                "description": "A jq expression on the body read as JSON, giving text or a number.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "regex": {
+                                "description": "A regular expression on the body: its first group, or the whole match without one.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "description": "The values the step reads from its answer, by name, each from exactly one of regex, json, form, header and cookie. The last step reads the token.",
+                          "propertyNames": {
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                          },
+                          "type": "object"
+                        },
+                        "form": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The fields of a form body, sent as application/x-www-form-urlencoded. Not with json.",
+                          "type": "object"
+                        },
+                        "headers": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1.",
+                          "type": "object"
+                        },
+                        "json": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The members of a JSON object body, each text. Not with form.",
+                          "type": "object"
+                        },
+                        "method": {
+                          "description": "GET, or POST when the step sends form or json, when left out.",
+                          "enum": [
+                            "GET",
+                            "POST",
+                            "PUT",
+                            "PATCH",
+                            ""
+                          ],
+                          "type": "string"
+                        },
+                        "oauth1": {
+                          "additionalProperties": false,
+                          "description": "Signs the step with OAuth 1.0a's HMAC-SHA1 (RFC 5849), in its Authorization header. See docs/AUTHENTICATION.md#signing-a-step-with-oauth-10a.",
+                          "properties": {
+                            "consumer_key": {
+                              "description": "The consumer's key, or {{login.\u003cname\u003e}}.",
+                              "minLength": 1,
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "consumer_secret": {
+                              "description": "The consumer's secret, or {{login.\u003cname\u003e}}, best a secret_files value.",
+                              "minLength": 1,
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "token": {
+                              "description": "The token the step is signed with, such as {{login.oauth_token}}; with token_secret.",
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "token_secret": {
+                              "description": "The token's secret; with token.",
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "consumer_key",
+                            "consumer_secret"
+                          ],
+                          "type": "object"
+                        },
+                        "query": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "Parameters added to the url's query, their values holding {{login.\u003cname\u003e}} as need be.",
+                          "type": "object"
+                        },
+                        "status": {
+                          "description": "The statuses that answer the step when it succeeds: 2xx when left out. A redirect, which a login never follows, is read when listed, such as [302], its Location with a header extract.",
+                          "items": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          },
+                          "type": "array"
+                        },
+                        "url": {
+                          "description": "Required. Where the step is sent: an absolute http or https URL, or a path from the root resolved against the target's scheme, host and port, as login.url is. Without placeholders: a value the step sends goes in its query.",
+                          "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "refresh_token_file": {
+                    "description": "oauth2, with grant_type: refresh_token: required. The file holding the refresh token, read at every login; one the endpoint answers in its place is used until the file changes.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "relogin_on": {
+                    "description": "The statuses of the target's answer, 4xx, that drop the token it was sent and send the request again, once, with a new login's: [401] when left out. Such as [401, 403], for a target that answers an expired session 403. The list replaces 401.",
+                    "items": {
+                      "maximum": 499,
+                      "minimum": 400,
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "scopes": {
+                    "description": "oauth2: the scopes asked for, sent as the scope parameter. jwt: the scopes asked for, the JWT's scope claim.",
+                    "items": {
+                      "pattern": "^[^\\s\"\\\\]+$",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "secret_files": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "steps: values the steps send as {{login.\u003cname\u003e}}, each read from its file at every login, such as {password: /var/run/secrets/site/password}. A name is in values or here, not both.",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "type": "object"
+                  },
+                  "signing_key_file": {
+                    "description": "jwt: required. The file of the private key the JWT is signed with, read at every login: a PEM key, RSA (RS256), elliptic curve P-256 or P-384 (ES256, ES384) or Ed25519 (EdDSA), or the JSON key file of a Google service account, whose client_email and private_key_id are the issuer and the key's id unless the login says its own.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "steps": {
+                    "description": "steps: required, the requests of a whole login, made in order, at most 16. Each step's query, headers, form, json and oauth1 values may hold {{login.\u003cname\u003e}}, a value given or read by a step before it.",
+                    "items": {
+                      "additionalProperties": false,
+                      "allOf": [
+                        {
+                          "properties": {
+                            "url": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "url"
+                          ]
+                        },
+                        {
+                          "not": {
+                            "required": [
+                              "form",
+                              "json"
+                            ]
+                          }
+                        }
+                      ],
+                      "properties": {
+                        "extract": {
+                          "additionalProperties": {
+                            "additionalProperties": false,
+                            "maxProperties": 1,
+                            "minProperties": 1,
+                            "properties": {
+                              "cookie": {
+                                "description": "A cookie the answer sets; its Max-Age or Expires is the value's expiry.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "form": {
+                                "description": "A field of the body read as a form, as an OAuth 1.0a token endpoint answers.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "header": {
+                                "description": "A header of the answer.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "json": {
+                                "description": "A jq expression on the body read as JSON, giving text or a number.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              },
+                              "regex": {
+                                "description": "A regular expression on the body: its first group, or the whole match without one.",
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "description": "The values the step reads from its answer, by name, each from exactly one of regex, json, form, header and cookie. The last step reads the token.",
+                          "propertyNames": {
+                            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                          },
+                          "type": "object"
+                        },
+                        "form": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The fields of a form body, sent as application/x-www-form-urlencoded. Not with json.",
+                          "type": "object"
+                        },
+                        "headers": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "Headers sent, such as User-Agent or Accept, their values holding {{login.\u003cname\u003e}} as need be. Not Host, Content-Type, Content-Length, Transfer-Encoding, Connection, Cookie or Accept-Encoding, which the step sets, nor Authorization with oauth1.",
+                          "type": "object"
+                        },
+                        "json": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "The members of a JSON object body, each text. Not with form.",
+                          "type": "object"
+                        },
+                        "method": {
+                          "description": "GET, or POST when the step sends form or json, when left out.",
+                          "enum": [
+                            "GET",
+                            "POST",
+                            "PUT",
+                            "PATCH",
+                            ""
+                          ],
+                          "type": "string"
+                        },
+                        "oauth1": {
+                          "additionalProperties": false,
+                          "description": "Signs the step with OAuth 1.0a's HMAC-SHA1 (RFC 5849), in its Authorization header. See docs/AUTHENTICATION.md#signing-a-step-with-oauth-10a.",
+                          "properties": {
+                            "consumer_key": {
+                              "description": "The consumer's key, or {{login.\u003cname\u003e}}.",
+                              "minLength": 1,
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "consumer_secret": {
+                              "description": "The consumer's secret, or {{login.\u003cname\u003e}}, best a secret_files value.",
+                              "minLength": 1,
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "token": {
+                              "description": "The token the step is signed with, such as {{login.oauth_token}}; with token_secret.",
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            },
+                            "token_secret": {
+                              "description": "The token's secret; with token.",
+                              "type": [
+                                "string",
+                                "number",
+                                "boolean"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "consumer_key",
+                            "consumer_secret"
+                          ],
+                          "type": "object"
+                        },
+                        "query": {
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          },
+                          "description": "Parameters added to the url's query, their values holding {{login.\u003cname\u003e}} as need be.",
+                          "type": "object"
+                        },
+                        "status": {
+                          "description": "The statuses that answer the step when it succeeds: 2xx when left out. A redirect, which a login never follows, is read when listed, such as [302], its Location with a header extract.",
+                          "items": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          },
+                          "type": "array"
+                        },
+                        "url": {
+                          "description": "Required. Where the step is sent: an absolute http or https URL, or a path from the root resolved against the target's scheme, host and port, as login.url is. Without placeholders: a value the step sends goes in its query.",
+                          "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "subject": {
+                    "description": "jwt: who the JWT is about, its sub claim, such as the user a service account acts for; none when left out.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "tls": {
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "key_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "key_file"
+                          ]
+                        },
+                        "then": {
+                          "properties": {
+                            "cert_file": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "cert_file"
+                          ]
+                        }
+                      }
+                    ],
+                    "description": "The login's own tls settings, for a login server whose certificate the collector's request.tls does not verify; left out, request.tls. Never what a probe or a static target changes of request.tls.",
+                    "properties": {
+                      "ca_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "cert_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "insecure_skip_verify": {
+                        "type": "boolean"
+                      },
+                      "key_file": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "server_name": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "token": {
+                    "description": "json: the jq expression of the token in the answer's JSON body, such as .access_token, with $status and $headers as in a rule. Exactly one of token, token_header and token_cookie. steps: required, the name of the value that is the token, which a step reads.",
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "token_cookie": {
+                    "description": "json: the cookie the answer sets that is the session, such as JSESSIONID; it is sent back in the Cookie header, and its Max-Age or Expires is its lifetime.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "token_header": {
+                    "description": "json: the header of the answer that holds the token, such as X-Subject-Token.",
+                    "pattern": "^$|^[!#$%\u0026'*+.^_`|~0-9A-Za-z-]+$",
+                    "type": "string"
+                  },
+                  "ttl": {
+                    "description": "How long a token is used when the answer does not say: no expires_in, an oauth2 answer without expires_in, a cookie without Max-Age or Expires, a token_header. Left out, such a token is used until the target answers 401.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "type": {
+                    "description": "Required. json: post a JSON object of fields and field_files to url and read the token from the answer. oauth2: ask the token endpoint url for a token with the client credentials grant (RFC 6749 section 4.4), or the refresh token grant (section 6) with grant_type: refresh_token. steps: make the requests of steps in order, one cookie jar between them, each reading values of its answer that the steps after it send, one of them the token. See docs/AUTHENTICATION.md#a-login-of-several-steps.",
+                    "enum": [
+                      "json",
+                      "oauth2",
+                      "jwt",
+                      "steps"
+                    ],
+                    "type": "string"
+                  },
+                  "url": {
+                    "description": "Required, but for steps, whose steps each have one. Where the login is sent: an absolute http or https URL, the same for every target, or a path from the root such as /api/login, resolved against the target's scheme, host and port alone, so each target is logged in to; a path relative to the target's is refused. Of a scheme allowed_schemes allows, held to allowed_targets and denied_targets; without credentials, a fragment or placeholders. A login follows no redirect.",
+                    "pattern": "^([A-Za-z][A-Za-z0-9+.-]*:|/([^/]|$))",
+                    "type": "string"
+                  },
+                  "values": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    },
+                    "description": "steps: values the steps send as {{login.\u003cname\u003e}}, as written: for what is no secret, such as a user name or an app's client id.",
+                    "propertyNames": {
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "message": {
+                "description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders.",
+                "propertyNames": {
+                  "pattern": "^[0-9a-z_.-]+$"
+                },
+                "type": "object"
+              },
+              "method": {
+                "description": "Replaces the collector's HTTP method: GET, POST, PUT, PATCH, DELETE or HEAD, in upper case or lower case, and sent in upper case.",
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "HEAD",
+                  "get",
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+                  "head",
+                  ""
+                ],
+                "type": "string"
+              },
+              "new_connection": {
+                "type": "boolean"
+              },
+              "passphrase_file": {
+                "description": "sshfile, with the target's private_key_file: the file of its passphrase.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "password_file": {
+                "description": "sshfile and sql: the target's own password file; see private_key_file. redis and ldap: replaces the collector's password_file for this target: the password of the target's own username or bind_dn, or, without one, of the collector's.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "path": {
+                "description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "priv_password_file": {
+                "description": "snmp, of snmp_version 3 with authPriv: replaces the collector's priv_password_file for this target. No {{param_...}} placeholder.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "private_key_file": {
+                "description": "sshfile: the target's own private key file. A target that sets any of private_key_file, passphrase_file and password_file replaces all three of the collector's with its own. sql, the snowflake driver: the target's own key, which replaces the collector's credential file as password_file does.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "rate_limit": {
+                "additionalProperties": false,
+                "description": "http and graphite: replaces the collector's request.rate_limit for this target's requests, which have a limit of their own for each origin they go to, apart from the collector's other targets'. See docs/REQUESTS.md#rate-limiting.",
+                "properties": {
+                  "burst": {
+                    "description": "How many requests may be sent at once after a pause. 1 when left out.",
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "requests_per_second": {
+                    "description": "Required. The requests a second on average, greater than 0.",
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "requests_per_second"
+                ],
+                "type": "object"
+              },
+              "request_timeout": {
+                "description": "snmp: replaces the collector's request_timeout for this target: how long each request waits for its answer before it is sent again, at least 10ms; 0 keeps the collector's. The scrape as a whole ends at timeout.",
+                "maximum": 0,
+                "minimum": 0,
+                "not": {
+                  "not": {
+                    "pattern": "^\\+?((0*((\\.[0-9]*)?))ns|(0*((\\.(|0|00(0[0-9]*)?))?))(us|µs|μs)|(0*((\\.(|0|00|000|0000|00000(0[0-9]*)?))?))ms|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000(0[0-9]*)?))?))s|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000(0[0-9]*)?|00000000001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000|000000|0000000|00000000|000000000|0000000000|00000000000|000000000000([0-1][0-9]*)?|0000000000002(7)*(([0-6][0-9]*)?)))?))h)$"
+                  },
+                  "pattern": "^\\+?((0*(([1-9][0-9]{0,6})?(\\.[0-9]*)?))ns|(0*(([1-9][0-9]{0,3})?(\\.[0-9]*)?))(us|µs|μs)|(0*(([1-9][0-9]{0,0})?(\\.[0-9]*)?))ms|(0*((\\.(|0(0[0-9]*)?))?))s|(0*((\\.(|0|00|000(0[0-9]*)?|0001(6)*(([0-5][0-9]*)?)))?))m|(0*((\\.(|0|00|000|0000|00000([0-1][0-9]*)?|000002(7)*(([0-6][0-9]*)?)))?))h)$",
+                  "type": "string"
+                },
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "retries": {
+                "description": "snmp: replaces the collector's retries for this target: how many times a request unanswered is sent again, from 0 to 5.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retry": {
+                "additionalProperties": false,
+                "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
+                "properties": {
+                  "attempts": {
+                    "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10.",
+                    "maximum": 10,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "backoff": {
+                    "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
+                    "maximum": 0,
+                    "minimum": 0,
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  },
+                  "codes": {
+                    "description": "grpc: replaces the collector's request.retry.codes for this target.",
+                    "items": {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*([Cc][Aa][Nn][Cc][Ee][Ll][Ll][Ee][Dd]|[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Ii][Nn][Vv][Aa][Ll][Ii][Dd]_[Aa][Rr][Gg][Uu][Mm][Ee][Nn][Tt]|[Dd][Ee][Aa][Dd][Ll][Ii][Nn][Ee]_[Ee][Xx][Cc][Ee][Ee][Dd][Ee][Dd]|[Nn][Oo][Tt]_[Ff][Oo][Uu][Nn][Dd]|[Aa][Ll][Rr][Ee][Aa][Dd][Yy]_[Ee][Xx][Ii][Ss][Tt][Ss]|[Pp][Ee][Rr][Mm][Ii][Ss][Ss][Ii][Oo][Nn]_[Dd][Ee][Nn][Ii][Ee][Dd]|[Rr][Ee][Ss][Oo][Uu][Rr][Cc][Ee]_[Ee][Xx][Hh][Aa][Uu][Ss][Tt][Ee][Dd]|[Ff][Aa][Ii][Ll][Ee][Dd]_[Pp][Rr][Ee][Cc][Oo][Nn][Dd][Ii][Tt][Ii][Oo][Nn]|[Aa][Bb][Oo][Rr][Tt][Ee][Dd]|[Oo][Uu][Tt]_[Oo][Ff]_[Rr][Aa][Nn][Gg][Ee]|[Uu][Nn][Ii][Mm][Pp][Ll][Ee][Mm][Ee][Nn][Tt][Ee][Dd]|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Dd][Aa][Tt][Aa]_[Ll][Oo][Ss][Ss]|[Uu][Nn][Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee][Dd])[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]*$",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "non_idempotent": {
+                    "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
+                    "type": "boolean"
+                  },
+                  "retry_after": {
+                    "description": "http and graphite: replaces the collector's request.retry.retry_after for this target.",
+                    "type": "boolean"
+                  },
+                  "statuses": {
+                    "description": "http and graphite: replaces the collector's request.retry.statuses for this target.",
+                    "items": {
+                      "maximum": 599,
+                      "minimum": 100,
+                      "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                      "type": [
+                        "integer",
+                        "string"
+                      ]
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "targets": {
+                "description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "timeout": {
+                "description": "How long a scrape of this target may take. At most the target's interval.",
+                "maximum": 0,
+                "minimum": 0,
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "tls": {
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "key_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "key_file"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "cert_file": {
+                          "not": {
+                            "const": ""
+                          }
+                        }
+                      },
+                      "required": [
+                        "cert_file"
+                      ]
+                    }
+                  }
+                ],
+                "description": "redis, ldap, tcp, sql, grpc, http and graphite: replaces the collector's whole request.tls block for this target, keys it leaves out not being taken from the collector's. Written, even as tls: {}, it asks for TLS, so a target cannot leave out TLS its collector asks for; for http and graphite, whose URL's scheme decides, it is the block every https request of the target's trips is made with, its redirects' and its login's, and is not written beside the target's insecure_skip_verify. A client certificate is cert_file and key_file together. Its values hold no {{param_...}} placeholders. See docs/STATIC-TARGETS.md#credentials-and-tls-of-a-target.",
+                "properties": {
+                  "ca_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "cert_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "insecure_skip_verify": {
+                    "type": "boolean"
+                  },
+                  "key_file": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "server_name": {
+                    "not": {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    },
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "until": {
+                "description": "graphite: replaces the collector's request.until for this target.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "username": {
+                "description": "sshfile and sql: replaces the collector's request.username for this target. redis: replaces the collector's ACL user for this target, with the target's own password_file, which it requires. snmp: replaces an SNMPv3 collector's user for this target. Neither it nor a credential file key of a target holds {{param_...}} placeholders: they are used as written.",
+                "not": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                      "type": "string"
+                    },
+                    {
+                      "pattern": "\\{\\{",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "shard_key": {
+            "description": "The target allocator's: address allocates each target by its address. The exporter scrapes every target, and reads it for the file to be the allocator's too.",
+            "enum": [
+              "address",
+              ""
+            ],
+            "type": "string"
+          },
+          "target_template": {
+            "description": "Makes a target of each discovered address, {{address}} standing for it, such as http://{{address}}/metrics; without one the address is the target.",
+            "pattern": "^$|\\{\\{address\\}\\}",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "collector",
+          "discovery"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
     },
     "interval": {
       "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s.",
@@ -3031,13 +6189,11 @@
         ],
         "type": "object"
       },
-      "minItems": 1,
       "type": "array"
     }
   },
   "required": [
-    "interval",
-    "targets"
+    "interval"
   ],
   "title": "prometheus-universal-exporter static target file",
   "type": "object"

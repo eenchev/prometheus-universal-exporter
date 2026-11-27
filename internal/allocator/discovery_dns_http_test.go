@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -45,7 +46,7 @@ func TestADNSSDSourceServesItsTargets(t *testing.T) {
 		t.Fatalf("served %v, want %s", targets, want)
 	}
 	labels := groups[2].Labels
-	for name, want := range map[string]string{dnsNameLabel: "_metrics._tcp.a.test", dnsSRVTargetLabel: "node-c.test", dnsSRVPortLabel: "9200", "service": "_metrics._tcp.a.test"} {
+	for name, want := range map[string]string{discovery.DNSNameLabel: "_metrics._tcp.a.test", discovery.DNSSRVTargetLabel: "node-c.test", discovery.DNSSRVPortLabel: "9200", "service": "_metrics._tcp.a.test"} {
 		if labels[name] != want {
 			t.Errorf("label %s is %q, want %q", name, labels[name], want)
 		}

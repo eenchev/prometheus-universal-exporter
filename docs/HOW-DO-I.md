@@ -87,6 +87,7 @@ that covers it, usually with an example to copy. New here? Start with
 | --- | --- |
 | Have Prometheus scrape through the exporter | [Getting started](GETTING-STARTED.md#4-point-prometheus-at-it) |
 | Have the exporter scrape a fixed list on its own | [Static targets](STATIC-TARGETS.md) |
+| Have the exporter scrape the targets that DNS SRV or A records list | [Discovering targets by DNS](STATIC-TARGETS.md#discovering-targets-by-dns) |
 | Deploy on Kubernetes | [Install with Helm](../README.md#install-with-helm), the [chart README](../charts/prometheus-universal-exporter/README.md) and [Prometheus Operator](PROMETHEUS-OPERATOR.md) |
 | Spread targets over several replicas | [Target allocator](ALLOCATOR.md) |
 | Change the configuration without a restart | [Watching the configuration](CONFIGURATION.md#watching-the-configuration) and [Reloading on demand](CONFIGURATION.md#reloading-on-demand) |

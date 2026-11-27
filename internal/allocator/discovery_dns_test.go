@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/tier"
@@ -17,7 +18,7 @@ import (
 // changes of it, as a load would check it.
 func dnsSource(t *testing.T, s *testutil.DNSStub, limit int, edit func(*DNSSDConfig), names ...string) (*Allocator, *sourceState) {
 	t.Helper()
-	d := DiscoveryConfig{DNSSD: &DNSSDConfig{Names: names, Server: s.Addr}, Labels: map[string]string{"service": dnsNameLabel}}
+	d := DiscoveryConfig{DNSSD: &DNSSDConfig{Names: names, Server: s.Addr}, Labels: map[string]string{"service": discovery.DNSNameLabel}}
 	if edit != nil {
 		edit(d.DNSSD)
 	}
@@ -55,9 +56,9 @@ func TestDNSSDFindsTheTargetsOfSRVRecords(t *testing.T) {
 		t.Fatalf("found %v, want %v", addresses(s.found), want)
 	}
 	want := []map[string]string{
-		{dnsNameLabel: "_metrics._tcp.b.test", dnsSRVTargetLabel: "node-a.test", dnsSRVPortLabel: "9100", "service": "_metrics._tcp.b.test"},
-		{dnsNameLabel: "_metrics._tcp.b.test", dnsSRVTargetLabel: "node-b.test", dnsSRVPortLabel: "9100", "service": "_metrics._tcp.b.test"},
-		{dnsNameLabel: "_metrics._tcp.a.test", dnsSRVTargetLabel: "node-c.test", dnsSRVPortLabel: "9200", "service": "_metrics._tcp.a.test"},
+		{discovery.DNSNameLabel: "_metrics._tcp.b.test", discovery.DNSSRVTargetLabel: "node-a.test", discovery.DNSSRVPortLabel: "9100", "service": "_metrics._tcp.b.test"},
+		{discovery.DNSNameLabel: "_metrics._tcp.b.test", discovery.DNSSRVTargetLabel: "node-b.test", discovery.DNSSRVPortLabel: "9100", "service": "_metrics._tcp.b.test"},
+		{discovery.DNSNameLabel: "_metrics._tcp.a.test", discovery.DNSSRVTargetLabel: "node-c.test", discovery.DNSSRVPortLabel: "9200", "service": "_metrics._tcp.a.test"},
 	}
 	for i := range want {
 		if !maps.Equal(s.found[i].Labels, want[i]) {
@@ -95,7 +96,7 @@ func TestDNSSDFindsTheTargetsOfAddressRecords(t *testing.T) {
 			t.Errorf("%s: found %v, want %v", c.recordType, addresses(s.found), c.want)
 		}
 		for _, d := range s.found {
-			if want := map[string]string{dnsNameLabel: "web.test", "service": "web.test"}; !maps.Equal(d.Labels, want) {
+			if want := map[string]string{discovery.DNSNameLabel: "web.test", "service": "web.test"}; !maps.Equal(d.Labels, want) {
 				t.Errorf("%s: %s has the labels %v, want %v", c.recordType, d.Address, d.Labels, want)
 			}
 		}

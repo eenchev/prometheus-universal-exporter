@@ -377,9 +377,11 @@ no entry's `name` may be another entry's followed by `_` (`node` and
 
 `shard_key` may only be `address`, which allocates each target by its
 address, so the targets of several entries at one address share a replica;
-left out, a target is allocated by its name. The exporter refuses
-`discovered_targets` ([Static targets](STATIC-TARGETS.md)): only the
-allocator discovers.
+left out, a target is allocated by its name. An exporter on its own reads
+an entry whose sources are all `dns_sd` ones and asks them itself
+([Discovering targets by DNS](STATIC-TARGETS.md#discovering-targets-by-dns)),
+so a file of such entries works with the allocator or without it; it refuses
+an entry of the other kinds, which the allocator alone asks.
 
 `target_template` makes the target from the address a source found,
 `{{address}}` standing for it; without one the address is the target. A

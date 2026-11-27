@@ -2,8 +2,6 @@ package allocator
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/allocapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
@@ -45,33 +44,6 @@ const sampleAddress = "192.0.2.1:9100"
 
 // targetName is a static target's name (config's targetNameRE).
 var targetName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-
-// splitDiscovered takes discovered_targets out of a static target file's
-// text. It returns the text of the rest, which the exporter's loader reads,
-// and the entries, with aliases and merge keys replaced by what they stand
-// for. Text without the key, or that is no mapping, is given back as it is.
-func splitDiscovered(raw []byte) ([]byte, *yaml.Node) {
-	var doc yaml.Node
-	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return raw, nil
-	}
-	root := doc.Content[0]
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != config.DiscoveredTargetsKey {
-			continue
-		}
-		entries := resolved(root.Content[i+1])
-		root.Content = slices.Delete(root.Content, i, i+2)
-		var b bytes.Buffer
-		enc := yaml.NewEncoder(&b)
-		enc.SetIndent(2)
-		if enc.Encode(&doc) != nil || enc.Close() != nil {
-			return raw, nil
-		}
-		return b.Bytes(), entries
-	}
-	return raw, nil
-}
 
 // readDiscoveredEntries reads and checks the discovered_targets entries.
 // Each entry is checked as a static target of the file, with head as its
@@ -114,7 +86,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	}
 	e := &discoveredEntry{weight: defaultWeight}
 	var shardKey string
-	var discovery, weight *yaml.Node
+	var sources, weight *yaml.Node
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key, value := node.Content[i], node.Content[i+1]
 		switch key.Value {
@@ -129,7 +101,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 		case "shard_key":
 			shardKey = value.Value
 		case "discovery":
-			discovery = value
+			sources = value
 		case "target":
 			return nil, errors.New("target is set, but an entry's targets are the ones its discovery finds; write target_template to make a target of each discovered address")
 		default:
@@ -139,7 +111,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	if !targetName.MatchString(e.name) {
 		return nil, fmt.Errorf("name %q is required and must be letters, digits and underscores, not starting with a digit: each discovered target is named <name>_<address>", e.name)
 	}
-	if discovery == nil {
+	if sources == nil {
 		return nil, fmt.Errorf("entry %q has no discovery; a target of its own belongs under targets", e.name)
 	}
 	if weight != nil {
@@ -152,7 +124,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	if e.weightLabel != "" && !model.ValidLabelName(e.weightLabel) {
 		return nil, fmt.Errorf("entry %q weight_label %q is not a label name; name the discovered label a target's weight is read from, such as __meta_pue_weight", e.name, e.weightLabel)
 	}
-	if err := decodeStrict(discovery, &e.discovery); err != nil {
+	if err := decodeStrict(sources, &e.discovery); err != nil {
 		return nil, fmt.Errorf("entry %q discovery: %w", e.name, err)
 	}
 	if len(e.discovery) == 0 {
@@ -161,7 +133,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	if err := checkDiscovery(e.discovery, base, defaultRefresh); err != nil {
 		return nil, fmt.Errorf("entry %q: %w", e.name, err)
 	}
-	if err := checkTargetTemplate(e.template); err != nil {
+	if err := discovery.CheckTemplate(e.template); err != nil {
 		return nil, fmt.Errorf("entry %q: %w", e.name, err)
 	}
 	switch shardKey {
@@ -171,7 +143,7 @@ func readDiscoveredEntry(node *yaml.Node, head []*yaml.Node, conf *model.Config,
 	default:
 		return nil, fmt.Errorf("entry %q shard_key %q is not %s; leave it out to allocate each target by its name", e.name, shardKey, ShardKeyAddress)
 	}
-	t, err := checkStaticTarget(head, e.node(e.name, fromTemplate(e.template, sampleAddress), nil))
+	t, err := checkStaticTarget(head, e.node(e.name, discovery.FromTemplate(e.template, sampleAddress), nil))
 	if err == nil {
 		err = config.ValidateStaticTargetsAgainst(&model.StaticTargetFile{Targets: []model.StaticTarget{*t}}, conf)
 	}
@@ -290,8 +262,8 @@ type checkedTarget struct {
 //   - A probe job's discovered target comes after those the job writes and
 //     those of the sources before it. One already listed, or that the
 //     collector refuses, is left out.
-//   - An entry's discovered target is named by discoveredName. When the file
-//     writes a target of that name, it is named <entry>_ and hashedAddress
+//   - An entry's discovered target is named by discovery.Name. When the file
+//     writes a target of that name, it is named <entry>_ and discovery.HashedAddress
 //     instead. So its name depends on its entry, its address and the file
 //     alone, and stays the same from one discovery to the next.
 //   - A target the checks refuse is left out.
@@ -345,7 +317,7 @@ func (in *Inputs) expandProbeJob(j *ProbeJob, found map[string][]discovered, ski
 			continue
 		}
 		for _, d := range found[s.key] {
-			target := fromTemplate(j.TargetTemplate, d.Address)
+			target := discovery.FromTemplate(j.TargetTemplate, d.Address)
 			if seen[target] {
 				continue
 			}
@@ -378,101 +350,13 @@ func probeLabels(labels map[string]string) map[string]string {
 	out := map[string]string{}
 	for name, value := range labels {
 		switch {
-		case value == "", !model.ValidLabelName(name), reservedTargetLabels[name] && name != "static_target", name == MemberMetaLabel:
+		case value == "", !model.ValidLabelName(name), discovery.ReservedTargetLabels[name] && name != "static_target", name == MemberMetaLabel:
 		case strings.HasPrefix(name, "__") && !strings.HasPrefix(name, "__meta_"):
 		default:
 			out[name] = value
 		}
 	}
 	return out
-}
-
-// staticLabels are the labels of a discovered static target that it
-// keeps: those the exporter takes on a static target, none starting with
-// __, which only relabeling, absent here, would read.
-func staticLabels(labels map[string]string) map[string]string {
-	out := map[string]string{}
-	for name, value := range labels {
-		if value == "" || strings.HasPrefix(name, "__") || reservedTargetLabels[name] || model.CheckLabelName(name) != nil {
-			continue
-		}
-		out[name] = value
-	}
-	return out
-}
-
-// maxEscapedAddress is the longest escapeAddress writes; a longer address,
-// such as a long host name, is named by hashedAddress, so a name stays of a
-// size fit for a label value and a log line.
-const maxEscapedAddress = 128
-
-// discoveredName is the name of the target that the entry named entry makes
-// of address. It is <entry>_ and the escaped address, or its hashedAddress
-// when escapeAddress does not take it. It depends on the two alone, never on
-// the other targets, so a target is never renamed when another comes or
-// goes. It is injective: two addresses of one entry never share a name. Since
-// no entry's name is another's followed by _ (checked at load), the targets
-// of two entries never share one either. escapeAddress is injective on what
-// it takes. A hashedAddress always holds _ followed by an upper-case letter,
-// and an escaped address never does, so the two forms never meet. Two
-// hashedAddresses meet only if two addresses share 64 bits of SHA-256.
-func discoveredName(entry, address string) string {
-	if escaped, ok := escapeAddress(address); ok {
-		return entry + "_" + escaped
-	}
-	return entry + "_" + hashedAddress(address)
-}
-
-// escapeAddress writes an address made of lower-case letters, digits, ., :,
-// -, [ and ] in the characters of a name. It keeps an IPv4 or IPv6 address
-// with its port, and a lower-case host name, readable. A letter or digit is
-// written as itself, . as _, and :, -, [ and ] as _ and their byte in
-// upper-case hex (_3A, _2D, _5B, _5D). So 10.0.0.5:9100 is 10_0_0_5_3A9100.
-// It is injective. Reading left to right, _ followed by a digit and an
-// upper-case letter is one of the four escapes, since an upper-case letter
-// appears in nothing else. Any other _ is a dot. So the address is read back
-// whole. Any other address, or one escaped longer than maxEscapedAddress, is
-// not taken.
-func escapeAddress(address string) (string, bool) {
-	var b strings.Builder
-	for i := 0; i < len(address); i++ {
-		switch c := address[i]; {
-		case c >= 'a' && c <= 'z' || c >= '0' && c <= '9':
-			b.WriteByte(c)
-		case c == '.':
-			b.WriteByte('_')
-		case c == ':' || c == '-' || c == '[' || c == ']':
-			_, _ = fmt.Fprintf(&b, "_%02X", c)
-		default:
-			return "", false
-		}
-		if b.Len() > maxEscapedAddress {
-			return "", false
-		}
-	}
-	return b.String(), true
-}
-
-// hashedAddressPrefix is how much of the address hashedAddress keeps.
-const hashedAddressPrefix = 48
-
-// hashedAddress names an address that escapeAddress does not take. The name
-// is the address's first hashedAddressPrefix bytes, lower-cased, with every
-// byte but a letter or a digit written _, which only helps a reader. Then
-// come _X and 16 hex digits of the address's SHA-256, which tell it apart.
-func hashedAddress(address string) string {
-	prefix := address[:min(len(address), hashedAddressPrefix)]
-	readable := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + 'a' - 'A'
-		}
-		return '_'
-	}, prefix)
-	sum := sha256.Sum256([]byte(address))
-	return readable + "_X" + hex.EncodeToString(sum[:8])
 }
 
 // weightFallback is a discovered target whose weight_label gave no weight,
@@ -507,7 +391,7 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 					continue
 				}
 				addresses[d.Address] = true
-				c := &candidate{entry: e, address: d.Address, target: fromTemplate(e.template, d.Address), labels: staticLabels(d.Labels), name: discoveredName(e.name, d.Address), weight: e.weight}
+				c := &candidate{entry: e, address: d.Address, target: discovery.FromTemplate(e.template, d.Address), labels: discovery.StaticLabels(d.Labels), name: discovery.Name(e.name, d.Address), weight: e.weight}
 				if e.weightLabel != "" {
 					value, present := d.Labels[e.weightLabel]
 					if w, reason := labelWeight(value, present); reason != "" {
@@ -528,7 +412,7 @@ func (in *Inputs) expandStatic(out *Inputs, found map[string][]discovered, check
 		// takes the form that is the address's digest: it stays so while
 		// the file does, whatever else discovery finds.
 		if _, written := in.targetIndex[c.name]; written {
-			c.name = c.entry.name + "_" + hashedAddress(c.address)
+			c.name = c.entry.name + "_" + discovery.HashedAddress(c.address)
 		}
 	}
 	targets := &model.StaticTargetFile{Interval: in.Targets.Interval, Concurrency: in.Targets.Concurrency, Targets: slices.Clone(in.Targets.Targets)}

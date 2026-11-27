@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -65,7 +66,7 @@ func (s *sourceState) fetch(ctx context.Context, logger *slog.Logger) ([]discove
 		}
 		return flatten(groups, d.Labels, s.limit)
 	case d.DNSSD != nil:
-		return refreshDNSSD(ctx, d.DNSSD, d.Labels, s.limit, d.timeout())
+		return discovery.RefreshDNSSD(ctx, d.DNSSD, d.Labels, s.limit, d.timeout())
 	default:
 		return refreshKubernetes(ctx, d.Kubernetes, d.Labels, s.limit, d.timeout(), logger)
 	}

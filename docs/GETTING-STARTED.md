@@ -143,9 +143,23 @@ targets:
       city: Sofia
 ```
 
-Start the exporter with `--static-targets-file=static-targets.yaml` (with
-Docker, mount the file as you did `config.yaml`) and
-scrape `http://localhost:8080/static-targets` like any other exporter. The
+Start the exporter with the file:
+
+```sh
+# With Docker: mount the file beside config.yaml, and name it by its path in
+# the container. Flags after the image take the place of its own, whose
+# configuration path and port are the defaults anyway.
+docker run -p 8080:8080 \
+  -v "$PWD/config.yaml:/etc/prometheus-universal-exporter/config.yaml:ro" \
+  -v "$PWD/static-targets.yaml:/etc/prometheus-universal-exporter/static-targets.yaml:ro" \
+  ghcr.io/eenchev/prometheus-universal-exporter:latest \
+  --static-targets-file=/etc/prometheus-universal-exporter/static-targets.yaml
+
+# Or from a checkout.
+go run . --config.file=config.yaml --static-targets-file=static-targets.yaml
+```
+
+Then scrape `http://localhost:8080/static-targets` like any other exporter. The
 page <http://localhost:8080/static-targets/status> shows each target's last
 scrape. See [Static targets](STATIC-TARGETS.md).
 

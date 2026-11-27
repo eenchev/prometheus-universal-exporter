@@ -32,6 +32,10 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 
 ### Fixed
 
+- An `http` or `graphite` probe whose target holds a control character, such
+  as a NUL, is answered `400` before anything is sent, as a bad parameter is.
+  It was answered `502` and logged, counted and backed off from as the
+  target's failure.
 - Debug page: a chain step's details lay its answer out as the *Response*
   panel does, its headers then, after a blank line, its body, where the
   headers were indented as request headers are and the body was labelled

@@ -72,9 +72,32 @@ func TestOpenMetricsInput(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown is untyped, and UNIT is ignored",
+			name: "unknown is untyped, and a UNIT its name does not end in is ignored",
 			body: "# TYPE u unknown\n# UNIT u seconds\nu 7\n# EOF\n",
 			want: []model.Metric{{Name: "u", Type: model.UntypedMetricType, Value: 7, Labels: map[string]string{}}},
+		},
+		{
+			name: "a family's UNIT is its series' unit, a counter's, a histogram's and one before its TYPE",
+			body: "# TYPE wait_seconds counter\n# UNIT wait_seconds seconds\nwait_seconds_total 3\n" +
+				"# UNIT size_bytes bytes\n# TYPE size_bytes histogram\nsize_bytes_bucket{le=\"+Inf\"} 1\nsize_bytes_count 1\nsize_bytes_sum 9\n# EOF\n",
+			want: []model.Metric{
+				{Name: "wait_seconds_total", Type: model.CounterMetricType, Value: 3, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Unit: "seconds"}},
+				{Name: "size_bytes", Type: model.HistogramMetricType, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Unit: "bytes"}, Histogram: &model.Histogram{
+					Buckets: []model.Bucket{{UpperBound: posInf, CumulativeCount: 1}}, Count: 1, Sum: 9}},
+			},
+		},
+		{
+			name: "a UNIT of a sample's name, a second one, one of an odd unit and an info's or a stateset's are ignored",
+			body: "# TYPE a_seconds counter\n# UNIT a_seconds_total total\na_seconds_total 1\n" +
+				"# TYPE b_seconds gauge\n# UNIT b_seconds seconds\n# UNIT b_seconds seconds\nb_seconds 2\n" +
+				"# TYPE c_s gauge\n# UNIT c_s s-1\nc_s 3\n" +
+				"# TYPE d_bytes info\n# UNIT d_bytes bytes\nd_bytes_info 1\n# EOF\n",
+			want: []model.Metric{
+				{Name: "a_seconds_total", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{}},
+				{Name: "b_seconds", Type: model.GaugeMetricType, Value: 2, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Unit: "seconds"}},
+				{Name: "c_s", Type: model.GaugeMetricType, Value: 3, Labels: map[string]string{}},
+				{Name: "d_bytes_info", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Kind: model.GaugeKindInfo}},
+			},
 		},
 		{
 			name: "histogram with _created",
@@ -89,16 +112,16 @@ func TestOpenMetricsInput(t *testing.T) {
 				Quantiles: []model.Quantile{{Quantile: 0.5, Value: 0.2}}, Count: 4, Sum: 1}}},
 		},
 		{
-			name: "info is the gauge foo_info",
+			name: "info is the gauge foo_info, of the kind info",
 			body: "# TYPE build info\n# HELP build Build information.\nbuild_info{version=\"1.2\"} 1\n# EOF\n",
-			want: []model.Metric{{Name: "build_info", Help: "Build information.", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"version": "1.2"}}},
+			want: []model.Metric{{Name: "build_info", Help: "Build information.", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"version": "1.2"}, OpenMetrics: &model.OpenMetricsFamily{Kind: model.GaugeKindInfo}}},
 		},
 		{
-			name: "stateset is a gauge",
+			name: "stateset is a gauge of the kind stateset",
 			body: "# TYPE state stateset\nstate{state=\"up\"} 1\nstate{state=\"down\"} 0\n# EOF\n",
 			want: []model.Metric{
-				{Name: "state", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"state": "up"}},
-				{Name: "state", Type: model.GaugeMetricType, Value: 0, Labels: map[string]string{"state": "down"}},
+				{Name: "state", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"state": "up"}, OpenMetrics: &model.OpenMetricsFamily{Kind: model.GaugeKindStateSet}},
+				{Name: "state", Type: model.GaugeMetricType, Value: 0, Labels: map[string]string{"state": "down"}, OpenMetrics: &model.OpenMetricsFamily{Kind: model.GaugeKindStateSet}},
 			},
 		},
 		{

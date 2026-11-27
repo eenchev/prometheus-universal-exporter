@@ -29,7 +29,8 @@ var otlpPerUnitSuffixes = map[string]string{"second": "s", "minute": "min", "hou
 
 // otlpNameOf is the name and unit a series called name is exported with, as
 // a metric of kind. Under otlp.metric_names: prometheus, it is name as the
-// exposition writes it, with no unit. Under otel, it is the OpenTelemetry
+// exposition writes it, with no unit but the one a target gave the series
+// (otlpUnitCode, which the caller adds). Under otel, it is the OpenTelemetry
 // name: a counter's _total is taken off, then a unit suffix (otlpUnitOf). A
 // histogram's or a summary's name is its family's, which ends in a unit
 // suffix the same way a gauge's does.
@@ -70,6 +71,16 @@ func otlpUnitOf(name string) (string, string) {
 		}
 	}
 	return name, ""
+}
+
+// otlpUnitCode is the OTLP unit of the unit an OpenMetrics target gave a
+// family, which its name ends in: the UCUM code of a unit of
+// otlpUnitSuffixes, such as s for seconds, or the unit as it was written.
+func otlpUnitCode(unit string) string {
+	if code, known := otlpUnitSuffixes[unit]; known {
+		return code
+	}
+	return unit
 }
 
 // cutLastWord splits name before its last _: what comes before, which is

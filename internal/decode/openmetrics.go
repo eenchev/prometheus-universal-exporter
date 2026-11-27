@@ -26,7 +26,9 @@ import (
 //   - A family's type may be unknown, read as untyped. It may be stateset,
 //     read as a gauge, whose samples already are one per state with the
 //     value 1 or 0. It may be info, read as the gauge foo_info with its
-//     value, 1, as Prometheus reads it. It may be gaugehistogram, read as
+//     value, 1, as Prometheus reads it. Both kinds of gauge keep the type
+//     they were read as (model.GaugeKind), for an OpenMetrics answer to
+//     write them with. It may be gaugehistogram, read as
 //     the gauges foo_bucket (its le a plain label), foo_gcount and foo_gsum,
 //     since a gauge histogram's buckets go up and down and a histogram's
 //     may not.
@@ -35,8 +37,9 @@ import (
 //     it, with the counter's type and help; a family already named foo_total
 //     is read the same way. _created samples of counters, histograms and
 //     summaries are read and dropped: the model has no creation time.
-//   - UNIT lines are ignored, and # EOF ends the exposition: anything but
-//     blank lines after it is an error. A body without it is accepted.
+//   - A UNIT line gives its family's series their unit (openMetricsUnit).
+//     # EOF ends the exposition: anything but blank lines after it is an
+//     error. A body without it is accepted.
 //
 // A body is OpenMetrics when its Content-Type is application/openmetrics-text,
 // or, for a file or a target that does not say which format it is, when its
@@ -78,8 +81,10 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 			alias(name+"_total", family, promRoleNone)
 		}
 		alias(base+"_created", family, promRoleCreated)
-	case "gauge", "stateset":
+	case "gauge":
 		family.typ = model.GaugeMetricType
+	case "stateset":
+		family.typ, family.kind = model.GaugeMetricType, model.GaugeKindStateSet
 	case "unknown", "untyped":
 		family.typ = model.UntypedMetricType
 	case "summary":
@@ -89,7 +94,7 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 		family.typ = model.HistogramMetricType
 		alias(name+"_created", family, promRoleCreated)
 	case "info":
-		family.typ = model.GaugeMetricType
+		family.typ, family.kind = model.GaugeMetricType, model.GaugeKindInfo
 		if !strings.HasSuffix(name, "_info") {
 			family.exported = name + "_info"
 			alias(name+"_info", family, promRoleNone)
@@ -109,6 +114,45 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 		return model.Errorf("unknown metric type %s", model.Quoted(raw))
 	}
 	return nil
+}
+
+// openMetricsUnit handles what follows UNIT on an OpenMetrics UNIT line: the
+// name of a family and its unit, which the family's series have. OpenMetrics
+// has a family's name end in _ and its unit, as in foo_seconds and its
+// samples foo_seconds_total. A UNIT line of another form, of a sample's name
+// rather than its family's, or a second one for a family, is ignored, as all
+// of them were before units were kept, so that a target's unit never fails a
+// scrape.
+func (p *promParser) openMetricsUnit(s []byte) error {
+	rest := skipBlanks(s)
+	if len(rest) == 0 {
+		return nil
+	}
+	name, rest, err := p.readName(rest, promMetricNameStart, promMetricNameByte)
+	if err != nil || len(rest) == 0 || !isBlank(rest[0]) {
+		return nil //nolint:nilerr // an odd UNIT line is ignored
+	}
+	unit := bytes.TrimRight(skipBlanks(rest), " \t")
+	if len(unit) == 0 || !isUnit(unit) {
+		return nil
+	}
+	family, role, err := p.family(name)
+	if err != nil || role != promRoleNone || family.name != string(name) || family.unit != "" || !strings.HasSuffix(family.name, "_"+string(unit)) {
+		return nil //nolint:nilerr // an odd UNIT line is ignored
+	}
+	family.unit = string(unit)
+	return nil
+}
+
+// isUnit reports whether s can be a unit: letters, digits, _ and :, as a
+// metric name has, which it ends.
+func isUnit(s []byte) bool {
+	for _, c := range s {
+		if c != '_' && c != ':' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // splitExemplar cuts the exemplar that may end a sample line off the rest of

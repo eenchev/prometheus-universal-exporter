@@ -487,7 +487,8 @@ exported. See [The debug page](CONFIGURATION.md#the-debug-page).
 `otlp.metric_names` is how the export names metrics.
 
 - `prometheus`, the default, names each metric as the exposition writes it,
-  `http_requests_total` and `request_duration_seconds`, with no unit.
+  `http_requests_total` and `request_duration_seconds`, with no unit but
+  the one its target gave it (below).
 - `otel` names them as OpenTelemetry does: a counter's name loses its
   `_total`, and a name that ends in a unit loses it to the metric's `unit`
   field, a [UCUM](https://ucum.org/ucum) code. The counter
@@ -538,8 +539,14 @@ samples. The exporter's own metrics are named the same way:
 A family [exported as gauges](#delivery) under the names of its samples, as a
 counter whose value is `NaN` is, keeps those names and has no unit: they are
 the samples the exposition writes, which no OpenTelemetry metric is named
-after. A Prometheus target's `# UNIT` line of OpenMetrics is not read: the
-exporter keeps no unit of a family, so the unit is the name's.
+after.
+
+A series whose OpenMetrics target gave its family a unit, in a `# UNIT`
+line, has that unit under either naming: the UCUM code of the table above,
+`s` for `seconds`, or the unit as the target wrote it, `requests`, for one
+not in the table. Under `otel` the unit of the name's own suffix comes
+first, so the name loses only a suffix of the table, as for any other
+series.
 
 Two names that the translation makes one (a gauge `jobs` and a counter
 `jobs_total`, or a gauge `latency` and a gauge `latency_seconds`) are one

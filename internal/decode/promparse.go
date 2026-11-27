@@ -219,11 +219,34 @@ type promFamily struct {
 	// helpOf, when set, is the family whose HELP this one's series carry:
 	// an OpenMetrics gauge histogram's, for the gauges it is read as.
 	helpOf *promFamily
+	// unit is the family's OpenMetrics UNIT, and kind the OpenMetrics type
+	// of a family read as gauges, info or stateset (openmetrics.go);
+	// openMetrics is the two as its series carry them, made once.
+	unit        string
+	kind        model.GaugeKind
+	openMetrics *model.OpenMetricsFamily
 	// kept says whether the family's series are stored, once decided by
 	// promOptions.keep at its first series, and uncounted that they are
 	// stored without counting against promOptions.limit (promOptions.counts).
 	kept, keptKnown bool
 	uncounted       bool
+}
+
+// openMetricsFamily is what the family's series carry of its unit and its
+// kind, nil for neither. An info and a stateset have no unit in
+// OpenMetrics.
+func (f *promFamily) openMetricsFamily() *model.OpenMetricsFamily {
+	unit := f.unit
+	if f.kind != "" {
+		unit = ""
+	}
+	if unit == "" && f.kind == "" {
+		return nil
+	}
+	if f.openMetrics == nil {
+		f.openMetrics = &model.OpenMetricsFamily{Unit: unit, Kind: f.kind}
+	}
+	return f.openMetrics
 }
 
 // exportedName is the name of the family's series.
@@ -349,6 +372,9 @@ func (p *promParser) comment(s []byte) error {
 	if p.options.openMetrics && string(keyword) == "EOF" && len(bytes.TrimSpace(rest)) == 0 {
 		p.eof = true
 		return nil
+	}
+	if p.options.openMetrics && string(keyword) == "UNIT" {
+		return p.openMetricsUnit(rest)
 	}
 	if string(keyword) != "HELP" && string(keyword) != "TYPE" {
 		return nil
@@ -873,7 +899,7 @@ func (p *promParser) metrics() []model.Metric {
 		if f.helpOf != nil && !f.helpSet {
 			help = f.helpOf.help
 		}
-		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar}
+		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar, OpenMetrics: f.openMetricsFamily()}
 	}
 	return out
 }

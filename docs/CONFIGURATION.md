@@ -1041,10 +1041,23 @@ ask for OpenMetrics. When a body is read as OpenMetrics:
 - `_created` samples of counters, histograms and summaries are dropped,
   because the exporter has no creation time to export;
 - `unknown` is `untyped`, `stateset` is a gauge, and `info` is the gauge
-  `foo_info`. A `gaugehistogram` becomes the gauges `foo_bucket` (with `le`
-  as a plain label), `foo_gcount` and `foo_gsum`, because a histogram's
+  `foo_info`. A probe or a static target writes a `stateset` and an `info`
+  family as one again in OpenMetrics, and as gauges in the text format, as
+  long as each series still fits the type: an `info` named `foo_info` of the
+  value 1, a `stateset` of 0 or 1 with its state's label, the family's name.
+  A family a rule renames, scales or relabels so that a series no longer
+  fits is a gauge. A `gaugehistogram` becomes the gauges `foo_bucket` (with
+  `le` as a plain label), `foo_gcount` and `foo_gsum`, because a histogram's
   buckets may only go up, while a gauge histogram's go up and down;
-- `# UNIT` lines are ignored, and nothing but blank lines may follow `# EOF`.
+- a `# UNIT` line gives its family's series their unit. It must name the
+  family, which ends in `_` and the unit, as `# UNIT wait_seconds seconds`
+  for the counter `wait_seconds` and its sample `wait_seconds_total` does;
+  another, a second one for a family, and one of an `info` or a `stateset`
+  are ignored. OpenMetrics answers write the unit as the target did, while
+  the family's name still ends in it, and the OTLP export gives the series
+  that unit ([Metric names](OTLP.md#metric-names)). The text format has no
+  units. A rule with `scale` drops the unit of the series it scales;
+- nothing but blank lines may follow `# EOF`.
 
 All non-Python transforms use the same collector-level metric declaration.
 Each entry has `name`, `description`, `type`, `labels`, and a

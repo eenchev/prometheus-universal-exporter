@@ -157,8 +157,8 @@ func readSampleLine(line string, openMetrics bool) (exposedSample, error) {
 // strictFamily is one family of an OpenMetrics answer as a strict parser
 // reads it.
 type strictFamily struct {
-	name, typ string
-	samples   []exposedSample
+	name, typ, unit string
+	samples         []exposedSample
 }
 
 // readOpenMetrics splits an OpenMetrics answer into its families the way a
@@ -184,7 +184,7 @@ func readOpenMetrics(answer string) ([]*strictFamily, error) {
 			return nil, errors.New("blank line")
 		case strings.HasPrefix(line, "#"):
 			parts := strings.SplitN(line, " ", 4)
-			if len(parts) < 4 || (parts[1] != "TYPE" && parts[1] != "HELP") {
+			if len(parts) < 4 || (parts[1] != "TYPE" && parts[1] != "HELP" && parts[1] != "UNIT") {
 				return nil, fmt.Errorf("invalid line %q", line)
 			}
 			if current == nil || current.name != parts[2] {
@@ -193,6 +193,12 @@ func readOpenMetrics(answer string) ([]*strictFamily, error) {
 				allowed = []string{current.name}
 			} else if len(current.samples) > 0 {
 				return nil, fmt.Errorf("metadata after samples: %q", line)
+			}
+			if parts[1] == "UNIT" {
+				if current.unit != "" || !strings.HasSuffix(current.name, "_"+parts[3]) {
+					return nil, fmt.Errorf("invalid UNIT line %q", line)
+				}
+				current.unit = parts[3]
 			}
 			if parts[1] == "TYPE" {
 				if current.typ != "" || parts[3] == "untyped" {
@@ -238,6 +244,8 @@ func strictSuffixes(typ string) []string {
 		return []string{"_count", "_sum", "_bucket", "_created"}
 	case "summary":
 		return []string{"", "_count", "_sum", "_created"}
+	case "info":
+		return []string{"_info"}
 	}
 	return []string{""}
 }
@@ -251,7 +259,9 @@ func strictSuffixes(typ string) []string {
 // ascending order of le, none NaN, their counts never falling, +Inf last and
 // equal to _count, _sum and _count together, and no _sum beside a negative
 // bound; a summary's quantiles within 0 to 1 and their values not negative;
-// and a series' samples together, their timestamps all set or all not.
+// an info's samples 1, and a stateset's 0 or 1 with their state's label; a
+// UNIT the family's name ends in, and none for an info or a stateset; and a
+// series' samples together, their timestamps all set or all not.
 func strictOpenMetricsError(answer string) error {
 	families, err := readOpenMetrics(answer)
 	if err != nil {
@@ -341,12 +351,21 @@ func strictFamilyError(f *strictFamily) error {
 		if f.typ == "summary" && s.name == f.name && s.value < 0 {
 			return fmt.Errorf("quantile value %v is negative", s.value)
 		}
+		if f.typ == "info" && s.value != 1 {
+			return fmt.Errorf("info value %v is not 1", s.value)
+		}
+		if _, state := s.labels[f.name]; f.typ == "stateset" && (!state || s.value != 0 && s.value != 1) {
+			return fmt.Errorf("stateset sample %v without its state, or neither 0 nor 1", s)
+		}
 		switch suffix {
 		case "_total", "_sum", "_count", "_bucket":
 			if math.IsNaN(s.value) || s.value < 0 {
 				return fmt.Errorf("%s is %v, and cannot be NaN or negative", s.name, s.value)
 			}
 		}
+	}
+	if (f.typ == "info" || f.typ == "stateset") && f.unit != "" {
+		return fmt.Errorf("an %s has the unit %s", f.typ, f.unit)
 	}
 	if f.typ == "histogram" {
 		return strictHistogramError(f)

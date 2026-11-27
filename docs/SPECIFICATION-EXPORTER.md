@@ -3150,9 +3150,16 @@ reads it (`internal/decode/openmetrics.go`), without `prometheus/common`, and:
 - `unknown` MUST be read as untyped, `stateset` as a gauge, `info` as the
   gauge `foo_info`, and `gaugehistogram` as the gauges `foo_bucket` (with `le`
   a plain label), `foo_gcount` and `foo_gsum`, each with the family's help;
-  any other type MUST be an error;
-- `# UNIT` lines MUST be ignored, and a line other than a blank one after
-  `# EOF` MUST be an error; a body without `# EOF` is accepted.
+  any other type MUST be an error. A `stateset`'s and an `info`'s series MUST
+  keep the type they were read as, for the OpenMetrics answer (§ 21);
+- a `# UNIT` line MUST give the series of the family it names their unit,
+  when it names the family itself, not one of its samples, the family's name
+  ends in `_` and the unit, the unit has only a metric name's characters, and
+  the family has had no unit yet; any other `# UNIT` line, and one of an
+  `info` or a `stateset`, MUST be ignored. A `prometheus` rule's `scale`
+  MUST drop the unit and the kept type of the series it changes;
+- a line other than a blank one after `# EOF` MUST be an error; a body
+  without `# EOF` is accepted.
 
 The text format 0.0.4 MUST be read as before: integer millisecond timestamps,
 `_created` and `_total` as families of their own, and `unknown` an error. The
@@ -5928,7 +5935,16 @@ OpenMetrics requires: a family's series together, in the order the family
 first appears; a counter's family named without `_total` and its samples with
 it; `untyped` as `unknown`; HELP with `\`, `\n` and `\"` escaped; timestamps in
 seconds; `le` and `quantile` values as canonical floats (`1.0`); and `# EOF`
-last. No `_created` sample MUST be written for a series read from a target,
+last. A family read as an OpenMetrics `info` or `stateset` (§ 14.1) MUST be
+written as one while each of its series fits the type, an `info`'s named
+`foo_info`, `foo` not empty, of the value 1, a `stateset`'s of 0 or 1 with a
+label of the family's name, and while no other family claims an `info`'s
+`foo`; else it MUST be written as the gauge it is in the text format, which
+has neither type. An `info` `foo` claims `foo` and `foo_info`, and gives way
+before a counter does. A family's unit (§ 14.1) MUST be written as its
+`# UNIT` while all its series have it and the family's name ends in `_` and
+the unit, and never for an `info` or a `stateset`; the text format MUST NOT
+write units. No `_created` sample MUST be written for a series read from a target,
 since the exporter does not know when a target's counter started; the
 exporter's own counters, histograms and summaries have one where the
 configuration asks for it (§ 22.1b).

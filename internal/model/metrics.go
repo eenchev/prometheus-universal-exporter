@@ -52,7 +52,57 @@ type Metric struct {
 	// Exemplar is a counter's exemplar, as an OpenMetrics target wrote it
 	// after the counter's sample; nil for none.
 	Exemplar *Exemplar `json:"-"`
+	// OpenMetrics is what an OpenMetrics target said of the series' family
+	// besides its type and help, shared by the family's series; nil for
+	// none, as for every series not read from one.
+	OpenMetrics *OpenMetricsFamily `json:"-"`
 }
+
+// OpenMetricsFamily is what an OpenMetrics target said of a family that the
+// model has no other place for: its unit and the OpenMetrics type of a gauge.
+// It is a pointer of Metric, nil for nearly every series, so that a series
+// takes no more room for it.
+type OpenMetricsFamily struct {
+	// Unit is the unit of the family's UNIT line, such as seconds; empty for
+	// none.
+	Unit string
+	// Kind is the OpenMetrics type of a gauge read from an info or a
+	// stateset family; empty for any other.
+	Kind GaugeKind
+}
+
+// Unit is the unit an OpenMetrics target gave the series' family; empty for
+// none.
+func (m *Metric) Unit() string {
+	if m.OpenMetrics == nil {
+		return ""
+	}
+	return m.OpenMetrics.Unit
+}
+
+// Kind is the OpenMetrics type of a gauge an OpenMetrics target wrote as an
+// info or a stateset family (GaugeKindInfo, GaugeKindStateSet); empty for any
+// other series.
+func (m *Metric) Kind() GaugeKind {
+	if m.OpenMetrics == nil {
+		return ""
+	}
+	return m.OpenMetrics.Kind
+}
+
+// GaugeKind is the OpenMetrics type a gauge was read as, where that is not
+// gauge: info or stateset. The model has them as gauges, as Prometheus does.
+type GaugeKind string
+
+const (
+	// GaugeKindInfo is a gauge read from an OpenMetrics info family: the
+	// series foo_info, of the value 1, whose labels are what it informs of.
+	GaugeKindInfo GaugeKind = "info"
+	// GaugeKindStateSet is a gauge read from an OpenMetrics stateset
+	// family foo: a series for each state, named by its label foo, of the
+	// value 1 for the states that hold and 0 for those that do not.
+	GaugeKindStateSet GaugeKind = "stateset"
+)
 
 // Histogram is the value of a histogram series. NoSum and NoCount say that
 // the source gave no _sum or no _count sample, so none is written for it. A

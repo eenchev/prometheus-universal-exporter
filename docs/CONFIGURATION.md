@@ -3925,9 +3925,11 @@ Kafka cluster that the target, a broker, is one of: its metadata, the newest
 and oldest offsets of the partitions of the chosen topics, and each chosen
 consumer group's state, members and committed offsets, on a connection to
 each broker it needs. It logs in with `username` and `password_file`, or the
-token in `bearer_token_file`, by `sasl_mechanism`. `include_topics`,
+token in `bearer_token_file`, by `sasl_mechanism`, or to Amazon MSK with
+IAM by `sasl_mechanism: AWS_MSK_IAM`, for `aws_region`. `include_topics`,
 `exclude_topics`, `internal_topics`, `include_groups` and `exclude_groups`
-choose what it reports. `tls` is for a target written `tls://`, and
+choose what it reports. `log_dirs` adds the disk the brokers, the topics and
+the partitions take, and `topic_configs` the topics' settings it names. `tls` is for a target written `tls://`, and
 `max_response_bytes`, `allowed_targets` and `denied_targets` apply too. The
 decoder is `json`. Its table is in [Kafka](KAFKA.md#a-collector).
 <!-- /request-types -->

@@ -365,6 +365,9 @@ A scrape is bounded by these:
 - **Partitions and groups:** at most 10,000 partitions of the chosen topics
   and 1,000 chosen groups are reported. More fail the scrape, saying to
   narrow the patterns.
+- **`log_dirs`:** each broker lists every replica it holds, of every topic,
+  chosen or not, and those answers count in the response limit. Raise the
+  limit for a cluster of many partitions.
 - **SCRAM's iterations:** a login hashes the password at most 100,000 times,
   as a broker asks. Kafka itself asks at most 16,384.
 

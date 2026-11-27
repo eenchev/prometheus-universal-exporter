@@ -15,7 +15,7 @@ import (
 // one:
 //
 //   - request.log_dirs asks every broker for its log directories and the
-//     size of each replica in them (DescribeLogDirs v1, Kafka 1.1 on). A
+//     size of each replica in them (DescribeLogDirs v1, Kafka 2.0 on). A
 //     broker lists only its own, so each is asked. Kafka answers a login
 //     without the DESCRIBE permission on the cluster with no directories,
 //     which is reported as an error.

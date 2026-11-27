@@ -69,7 +69,7 @@ type KafkaConfig struct {
 	// a username and OAUTHBEARER with a bearer_token_file.
 	SASLMechanism string `yaml:"sasl_mechanism"`
 	// AWSRegion is the region an AWS_MSK_IAM login signs for; left out, the
-	// region of a broker's MSK name, else the AWS SDK's configuration's.
+	// region of the target's MSK name, else the AWS SDK's configuration's.
 	AWSRegion string `yaml:"aws_region"`
 	// IncludeTopics and IncludeGroups are regular expressions, one of
 	// which a topic's or a group's whole name matches to be reported, every

@@ -14,9 +14,12 @@
 #
 #   docker run -d -p 9092:9092 apache/kafka:3.9.1
 #
-# One series is more than kafka_exporter's, kafka_scrape_errors: the
-# brokers, groups and partitions a scrape could not ask, whose series are
-# then missing, which kafka_exporter only logs.
+# Two series are more than kafka_exporter's: kafka_consumergroup_lag_seconds,
+# how long ago the first message a group has not read was written, by
+# topic, known from a partition's second scrape on (docs/KAFKA.md, Lag in
+# seconds); and kafka_scrape_errors, the brokers, groups and partitions a
+# scrape could not ask, whose series are then missing, which kafka_exporter
+# only logs.
 collectors:
   - name: kafka
     request:
@@ -131,6 +134,12 @@ collectors:
         description: Current Approximate Lag of a ConsumerGroup at Topic for all partitions
         items: .groups[] | .topics[]
         expression: .lag // 0
+        labels: *grouptopic
+
+      - name: kafka_consumergroup_lag_seconds
+        description: Seconds since the first message a ConsumerGroup has not read at Topic was written, its slowest partition's
+        items: .groups[] | .topics[] | select(.lag_seconds != null)
+        expression: .lag_seconds
         labels: *grouptopic
 
       - name: kafka_consumergroup_members

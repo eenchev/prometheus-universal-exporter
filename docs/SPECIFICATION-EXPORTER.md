@@ -3152,12 +3152,14 @@ reads it (`internal/decode/openmetrics.go`), without `prometheus/common`, and:
   a plain label), `foo_gcount` and `foo_gsum`, each with the family's help;
   any other type MUST be an error. A `stateset`'s and an `info`'s series MUST
   keep the type they were read as, for the OpenMetrics answer (§ 21);
-- a `# UNIT` line MUST give the series of the family it names their unit,
-  when it names the family itself, not one of its samples, the family's name
-  ends in `_` and the unit, the unit has only a metric name's characters, and
-  the family has had no unit yet; any other `# UNIT` line, and one of an
-  `info` or a `stateset`, MUST be ignored. A `prometheus` rule's `scale`
-  MUST drop the unit and the kept type of the series it changes;
+- a family's first `# UNIT` line MUST give its series their unit, when the
+  line names the family itself, the family's name ends in `_` and the unit,
+  and the unit has only a metric name's characters, wherever the line is among
+  the family's lines; any other `# UNIT` line, and one of an `info` or a
+  `stateset`, MUST be ignored. A `# UNIT` line MUST NOT make a family of its
+  own: a name it gives that a later family's samples have, as `x_count` of a
+  summary `x`, MUST stay that family's. A `prometheus` rule's `scale` MUST
+  drop the unit and the kept type of the series it changes;
 - a line other than a blank one after `# EOF` MUST be an error; a body
   without `# EOF` is accepted.
 

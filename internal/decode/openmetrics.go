@@ -117,12 +117,14 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 }
 
 // openMetricsUnit handles what follows UNIT on an OpenMetrics UNIT line: the
-// name of a family and its unit, which the family's series have. OpenMetrics
-// has a family's name end in _ and its unit, as in foo_seconds and its
-// samples foo_seconds_total. A UNIT line of another form, of a sample's name
-// rather than its family's, or a second one for a family, is ignored, as all
-// of them were before units were kept, so that a target's unit never fails a
-// scrape.
+// name of a family and its unit, which the family's series have
+// (promParser.units). OpenMetrics has a family's name end in _ and its unit,
+// as in foo_seconds and its samples foo_seconds_total. A UNIT line of another
+// form, of a name no family has, such as a sample's, or a second one for a
+// name, is ignored, as all of them were before units were kept, so that a
+// target's unit never fails a scrape. The line names no family of its own: a
+// name it gives that a later family's samples have, as x_count of the summary
+// x, stays theirs.
 func (p *promParser) openMetricsUnit(s []byte) error {
 	rest := skipBlanks(s)
 	if len(rest) == 0 {
@@ -136,11 +138,15 @@ func (p *promParser) openMetricsUnit(s []byte) error {
 	if len(unit) == 0 || !isUnit(unit) {
 		return nil
 	}
-	family, role, err := p.family(name)
-	if err != nil || role != promRoleNone || family.name != string(name) || family.unit != "" || !strings.HasSuffix(family.name, "_"+string(unit)) {
-		return nil //nolint:nilerr // an odd UNIT line is ignored
+	if !strings.HasSuffix(string(name), "_"+string(unit)) {
+		return nil
 	}
-	family.unit = string(unit)
+	if _, set := p.units[string(name)]; !set {
+		if p.units == nil {
+			p.units = map[string]string{}
+		}
+		p.units[string(name)] = string(unit)
+	}
 	return nil
 }
 

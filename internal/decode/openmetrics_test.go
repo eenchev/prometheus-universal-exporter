@@ -87,16 +87,18 @@ func TestOpenMetricsInput(t *testing.T) {
 			},
 		},
 		{
-			name: "a UNIT of a sample's name, a second one, one of an odd unit and an info's or a stateset's are ignored",
+			name: "a UNIT of a sample's name, a second one, one of an odd unit and an info's are ignored, and one of a later summary's _count keeps it the summary's",
 			body: "# TYPE a_seconds counter\n# UNIT a_seconds_total total\na_seconds_total 1\n" +
 				"# TYPE b_seconds gauge\n# UNIT b_seconds seconds\n# UNIT b_seconds seconds\nb_seconds 2\n" +
 				"# TYPE c_s gauge\n# UNIT c_s s-1\nc_s 3\n" +
-				"# TYPE d_bytes info\n# UNIT d_bytes bytes\nd_bytes_info 1\n# EOF\n",
+				"# TYPE d_bytes info\n# UNIT d_bytes bytes\nd_bytes_info 1\n" +
+				"# UNIT x_count count\n# TYPE x summary\nx{quantile=\"0.5\"} 1\nx_count 2\nx_sum 3\n# EOF\n",
 			want: []model.Metric{
 				{Name: "a_seconds_total", Type: model.CounterMetricType, Value: 1, Labels: map[string]string{}},
 				{Name: "b_seconds", Type: model.GaugeMetricType, Value: 2, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Unit: "seconds"}},
 				{Name: "c_s", Type: model.GaugeMetricType, Value: 3, Labels: map[string]string{}},
 				{Name: "d_bytes_info", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{}, OpenMetrics: &model.OpenMetricsFamily{Kind: model.GaugeKindInfo}},
+				{Name: "x", Type: model.SummaryMetricType, Labels: map[string]string{}, Summary: &model.Summary{Quantiles: []model.Quantile{{Quantile: 0.5, Value: 1}}, Count: 2, Sum: 3}},
 			},
 		},
 		{

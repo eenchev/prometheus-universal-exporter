@@ -219,10 +219,9 @@ type promFamily struct {
 	// helpOf, when set, is the family whose HELP this one's series carry:
 	// an OpenMetrics gauge histogram's, for the gauges it is read as.
 	helpOf *promFamily
-	// unit is the family's OpenMetrics UNIT, and kind the OpenMetrics type
-	// of a family read as gauges, info or stateset (openmetrics.go);
-	// openMetrics is the two as its series carry them, made once.
-	unit        string
+	// kind is the OpenMetrics type of a family read as gauges, info or
+	// stateset (openmetrics.go); openMetrics is it and the family's unit
+	// as its series carry them, made once.
 	kind        model.GaugeKind
 	openMetrics *model.OpenMetricsFamily
 	// kept says whether the family's series are stored, once decided by
@@ -232,11 +231,11 @@ type promFamily struct {
 	uncounted       bool
 }
 
-// openMetricsFamily is what the family's series carry of its unit and its
-// kind, nil for neither. An info and a stateset have no unit in
-// OpenMetrics.
-func (f *promFamily) openMetricsFamily() *model.OpenMetricsFamily {
-	unit := f.unit
+// openMetricsFamily is what the family's series carry of its unit, the one
+// units has for its name, and of its kind, nil for neither. An info and a
+// stateset have no unit in OpenMetrics.
+func (f *promFamily) openMetricsFamily(units map[string]string) *model.OpenMetricsFamily {
+	unit := units[f.name]
 	if f.kind != "" {
 		unit = ""
 	}
@@ -279,6 +278,9 @@ type promParser struct {
 	// aliases are the OpenMetrics sample names that belong to a family
 	// other than their own, with the role they have in it.
 	aliases map[string]promAlias
+	// units are the units of OpenMetrics UNIT lines, by the name they give,
+	// the first for a name (openMetricsUnit).
+	units map[string]string
 	// series are the series kept, in the order their first samples were
 	// read, and unordered says that this is not the families' order.
 	// uncounted is how many of them do not count against the limit.
@@ -899,7 +901,7 @@ func (p *promParser) metrics() []model.Metric {
 		if f.helpOf != nil && !f.helpSet {
 			help = f.helpOf.help
 		}
-		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar, OpenMetrics: f.openMetricsFamily()}
+		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar, OpenMetrics: f.openMetricsFamily(p.units)}
 	}
 	return out
 }

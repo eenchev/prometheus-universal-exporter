@@ -23,7 +23,9 @@ import (
 //   - PLAIN sends the user and the password in one message (RFC 4616);
 //   - SCRAM-SHA-256 and SCRAM-SHA-512 prove the password without sending
 //     it, and check that the broker knows it too (RFC 5802, RFC 7677);
-//   - OAUTHBEARER sends a token (RFC 7628), read from bearer_token_file.
+//   - OAUTHBEARER sends a token (RFC 7628), read from bearer_token_file;
+//   - AWS_MSK_IAM sends, as OAUTHBEARER, a token signed with the AWS
+//     credentials the SDK finds, as Amazon MSK takes (kafkaawsiam.go).
 
 // The mechanisms, as request.sasl_mechanism and Kafka write them.
 const (
@@ -31,10 +33,11 @@ const (
 	kafkaScram256    = "SCRAM-SHA-256"
 	kafkaScram512    = "SCRAM-SHA-512"
 	kafkaOAuthBearer = "OAUTHBEARER"
+	kafkaAWSMSKIAM   = "AWS_MSK_IAM"
 )
 
 // kafkaMechanisms are the mechanisms a collector may name.
-var kafkaMechanisms = []string{kafkaPlain, kafkaScram256, kafkaScram512, kafkaOAuthBearer}
+var kafkaMechanisms = []string{kafkaPlain, kafkaScram256, kafkaScram512, kafkaOAuthBearer, kafkaAWSMSKIAM}
 
 // kafkaScramMaxIterations bounds the iterations a broker may ask a SCRAM
 // login to hash the password with: Kafka refuses more than 16,384, and a
@@ -50,10 +53,20 @@ type kafkaLogin struct {
 	token     string
 }
 
+// kafkaWireMechanism is the mechanism a login asks the broker for:
+// AWS_MSK_IAM's is OAUTHBEARER.
+func kafkaWireMechanism(mechanism string) string {
+	if mechanism == kafkaAWSMSKIAM {
+		return kafkaOAuthBearer
+	}
+	return mechanism
+}
+
 // login runs the SASL exchange of l on c.
 func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
+	wire := kafkaWireMechanism(l.mechanism)
 	w := kafkaWriter{}
-	w.string(l.mechanism)
+	w.string(wire)
 	r, err := c.roundTrip(kafkaSaslHandshake, kafkaSaslHandshake.version, w.b)
 	if err != nil {
 		return err
@@ -68,11 +81,16 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 		return err
 	}
 	switch {
+	case code != 0 && len(enabled) == 0 && l.mechanism == kafkaAWSMSKIAM:
+		return fmt.Errorf("%s takes no SASL login on this listener (%s), as MSK's listeners without IAM access control do: reach port 9098 of a cluster with IAM access control, or leave request.sasl_mechanism out", c.broker, kafkaError(code))
 	case code != 0 && len(enabled) == 0:
 		// A listener without SASL answers so, as Kafka's PLAINTEXT and SSL
 		// listeners do.
 		return fmt.Errorf("%s takes no SASL login on this listener (%s): leave request.username, password_file and bearer_token_file out, or reach a listener that takes one", c.broker, kafkaError(code))
 	case code != 0:
+		if wire != l.mechanism {
+			return fmt.Errorf("%s does not take the SASL mechanism %s, which %s logs in with (%s); it takes %s: reach the listener of IAM's logins, port 9098 on MSK", c.broker, wire, l.mechanism, kafkaError(code), brokerSaid(strings.Join(enabled, ", ")))
+		}
 		return fmt.Errorf("%s does not take the SASL mechanism %s (%s); it takes %s: set request.sasl_mechanism to one of them", c.broker, l.mechanism, kafkaError(code), brokerSaid(strings.Join(enabled, ", ")))
 	}
 	authenticate := func(message []byte) ([]byte, error) {
@@ -103,7 +121,7 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 	case kafkaPlain:
 		_, err := authenticate([]byte("\x00" + l.username + "\x00" + l.password))
 		return err
-	case kafkaOAuthBearer:
+	case kafkaOAuthBearer, kafkaAWSMSKIAM:
 		answer, err := authenticate([]byte("n,,\x01auth=Bearer " + l.token + "\x01\x01"))
 		if err != nil || len(answer) == 0 {
 			return err
@@ -113,16 +131,19 @@ func (c *kafkaConn) login(l kafkaLogin, authenticateVersion int16) error {
 		// 3.2.2); the client ends the exchange with %x01, which the broker
 		// then fails.
 		_, _ = authenticate([]byte{1})
-		return fmt.Errorf("%s refused the OAUTHBEARER login of the token: %s", c.broker, brokerSaid(string(answer)))
+		return fmt.Errorf("%s refused the %s login of %s: %s", c.broker, l.mechanism, kafkaLoginName(l), brokerSaid(string(answer)))
 	}
 	return c.scram(l, authenticate)
 }
 
-// kafkaLoginName names the account of a login in a refusal: its user, or
-// the token's file.
+// kafkaLoginName names the account of a login in a refusal: its user, the
+// token, or the AWS credentials that signed one.
 func kafkaLoginName(l kafkaLogin) string {
-	if l.mechanism == kafkaOAuthBearer {
+	switch l.mechanism {
+	case kafkaOAuthBearer:
 		return "the token"
+	case kafkaAWSMSKIAM:
+		return "the AWS credentials"
 	}
 	return strconv.Quote(l.username)
 }

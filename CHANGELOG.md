@@ -26,6 +26,17 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   OAUTHBEARER, over TLS or not, from Kafka 2.1 on. It adds no dependency.
   `examples/kafka` writes kafka_exporter's series from it, so its dashboards
   and alerts keep working ([Kafka](docs/KAFKA.md)).
+- `kafka`: each group's lag in seconds, `lag_seconds`, by partition and by
+  topic: how long ago the first message the group has not read was written,
+  estimated from the scrapes' newest offsets
+  ([Lag in seconds](docs/KAFKA.md#lag-in-seconds)). `examples/kafka`
+  writes it as `kafka_consumergroup_lag_seconds`.
+- `kafka`: `log_dirs: true` reports the disk each broker's log directories,
+  each topic and each partition take, and `topic_configs` the topics'
+  settings it names, such as `retention.ms` and `cleanup.policy`.
+- `kafka`: `sasl_mechanism: AWS_MSK_IAM` logs in to Amazon MSK with IAM,
+  signing with the credentials the AWS SDK finds, in the builds that have
+  the `s3file` type ([Amazon MSK with IAM](docs/KAFKA.md#amazon-msk-with-iam)).
 - The allocator's status page diagram gives each exporter's targets and its
   share of their weight on its box, such as `12 targets · 34%`, and draws an
   overloaded exporter's box in red.

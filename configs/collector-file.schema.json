@@ -2926,6 +2926,11 @@
                 ],
                 "type": "string"
               },
+              "aws_region": {
+                "description": "kafka: the region an AWS_MSK_IAM login signs for, such as eu-west-1; left out, the region of the target's MSK name, such as b-1.prod.abc123.c2.kafka.eu-west-1.amazonaws.com, else the AWS SDK's configuration's, such as AWS_REGION.",
+                "pattern": "^([a-z0-9][a-z0-9-]*)?$",
+                "type": "string"
+              },
               "aws_sigv4": {
                 "additionalProperties": false,
                 "description": "http: sign each request with AWS Signature Version 4, with the credentials the AWS SDK's default chain finds, so the collector reads an AWS API. In the builds that have the s3file request type. See docs/AUTHENTICATION.md#signing-requests-for-aws.",
@@ -3797,6 +3802,10 @@
               },
               "list": {
                 "description": "pop3: also ask LIST, each message's size, for the size of the largest: largest_bytes in the document. The answer has a line for each message of the mailbox, held to the response limit; no message is fetched.",
+                "type": "boolean"
+              },
+              "log_dirs": {
+                "description": "kafka: ask every broker the disk its log directories and its replicas take (DescribeLogDirs), for each broker's log_dirs and disk_bytes, each topic's disk_bytes and each partition's size_bytes. Needs the DESCRIBE permission on the cluster. false when left out.",
                 "type": "boolean"
               },
               "login": {
@@ -6789,12 +6798,13 @@
                 "type": "boolean"
               },
               "sasl_mechanism": {
-                "description": "kafka: the SASL mechanism of the login. PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 send username and password_file, OAUTHBEARER sends bearer_token_file. Left out, PLAIN with a username, OAUTHBEARER with a bearer_token_file, and no login without either.",
+                "description": "kafka: the SASL mechanism of the login. PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 send username and password_file, OAUTHBEARER sends bearer_token_file, and AWS_MSK_IAM a token signed with the AWS credentials the AWS SDK finds, to an Amazon MSK listener of IAM's logins over TLS. Left out, PLAIN with a username, OAUTHBEARER with a bearer_token_file, and no login without either.",
                 "enum": [
                   "PLAIN",
                   "SCRAM-SHA-256",
                   "SCRAM-SHA-512",
                   "OAUTHBEARER",
+                  "AWS_MSK_IAM",
                   ""
                 ],
                 "type": "string"
@@ -7678,6 +7688,16 @@
                   }
                 },
                 "type": "object"
+              },
+              "topic_configs": {
+                "description": "kafka: the settings of each chosen topic to report in its configs, such as retention.ms, retention.bytes and cleanup.policy, at most 100 (DescribeConfigs); none when left out. Needs the DESCRIBE_CONFIGS permission on the topics.",
+                "items": {
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,99}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
               },
               "topics": {
                 "description": "mqtt, required: the topic filters subscribed to, such as sensors/+/temperature or plant/#. Each may contain {{param_name}} placeholders, a value being one level of a topic: no /, + or #. See docs/MQTT.md.",

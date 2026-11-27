@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
@@ -22,7 +24,8 @@ import (
 // one, and whether it is under-replicated; each group's committed offset
 // and lag by partition, -1 for a partition it committed none of, and by
 // topic, and its members. Kafka's own topics and the console consumers'
-// groups are left out, and no rule of it fails.
+// groups are left out, and no rule of it fails. A group's lag in seconds,
+// by topic, is written from the second scrape on.
 func TestTheKafkaExampleWritesKafkaExportersSeries(t *testing.T) {
 	const path = "examples/kafka/config.yaml"
 	cfg, err := config.Load(path)
@@ -72,9 +75,19 @@ func TestTheKafkaExampleWritesKafkaExportersSeries(t *testing.T) {
 			t.Errorf("no %q in\n%s", want, body)
 		}
 	}
-	for _, absent := range []string{"__consumer_offsets", "console-consumer", "rule_failures"} {
+	for _, absent := range []string{"__consumer_offsets", "console-consumer", "rule_failures", "kafka_consumergroup_lag_seconds"} {
 		if strings.Contains(body, absent) {
 			t.Errorf("%q in\n%s", absent, body)
 		}
+	}
+	// A group's lag in seconds is known from the second scrape of a
+	// partition that has been written to since the first.
+	time.Sleep(20 * time.Millisecond)
+	k.Edit(func(c *kafkatest.Cluster) { c.Topics[0].Partitions[0].Newest = 220 })
+	recorder = httptest.NewRecorder()
+	exp.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector=kafka&target="+k.Brokers[0].Addr, nil))
+	body = recorder.Body.String()
+	if !regexp.MustCompile(`(?m)^kafka_consumergroup_lag_seconds\{consumergroup="billing",topic="orders"\} (0\.\d*[1-9]\d*|[1-9][\d.]*)$`).MatchString(body) {
+		t.Errorf("no lag in seconds in\n%s", body)
 	}
 }

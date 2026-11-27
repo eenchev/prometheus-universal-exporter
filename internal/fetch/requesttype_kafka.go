@@ -65,9 +65,12 @@ import (
 // KafkaConfig is a kafka collector's own request keys.
 type KafkaConfig struct {
 	// SASLMechanism is the login's mechanism: PLAIN, SCRAM-SHA-256,
-	// SCRAM-SHA-512 or OAUTHBEARER. Left out, it is PLAIN with a username
-	// and OAUTHBEARER with a bearer_token_file.
+	// SCRAM-SHA-512, OAUTHBEARER or AWS_MSK_IAM. Left out, it is PLAIN with
+	// a username and OAUTHBEARER with a bearer_token_file.
 	SASLMechanism string `yaml:"sasl_mechanism"`
+	// AWSRegion is the region an AWS_MSK_IAM login signs for; left out, the
+	// region of the target's MSK name, else the AWS SDK's configuration's.
+	AWSRegion string `yaml:"aws_region"`
 	// IncludeTopics and IncludeGroups are regular expressions, one of
 	// which a topic's or a group's whole name matches to be reported, every
 	// one when left out; ExcludeTopics and ExcludeGroups leave out those one
@@ -79,6 +82,12 @@ type KafkaConfig struct {
 	// InternalTopics reports Kafka's own topics too, such as
 	// __consumer_offsets.
 	InternalTopics bool `yaml:"internal_topics"`
+	// LogDirs asks every broker for the disk its log directories and its
+	// replicas take (DescribeLogDirs), and TopicConfigs the settings of
+	// each chosen topic it names, such as retention.ms (DescribeConfigs)
+	// (kafkadisk.go).
+	LogDirs      bool     `yaml:"log_dirs"`
+	TopicConfigs []string `yaml:"topic_configs"`
 }
 
 // kafkaRequest is a kafka collector's own keys.
@@ -98,6 +107,8 @@ const (
 	kafkaMaxPartitions = 10000
 	kafkaMaxPatterns   = 100
 	kafkaMaxPattern    = 1000
+	// kafkaMaxConfigs bounds the settings request.topic_configs names.
+	kafkaMaxConfigs = 100
 )
 
 // kafkaPorts gives each scheme of a target its port.
@@ -188,7 +199,15 @@ func (kafkaRequester) Validate(c *model.Collector) error {
 		return fmt.Errorf("collector %q request.bearer_token_file has a placeholder; the token is the configuration's", c.Name)
 	case mechanism == kafkaOAuthBearer && req.BearerTokenFile == "":
 		return fmt.Errorf("collector %q request.sasl_mechanism is OAUTHBEARER, which sends a token: set request.bearer_token_file", c.Name)
-	case mechanism != "" && mechanism != kafkaOAuthBearer && req.Username == "":
+	case r.AWSRegion != "" && mechanism != kafkaAWSMSKIAM:
+		return fmt.Errorf("collector %q sets request.aws_region without request.sasl_mechanism AWS_MSK_IAM, the login it signs for", c.Name)
+	case r.AWSRegion != "" && !kafkaRegionName.MatchString(r.AWSRegion):
+		return fmt.Errorf("collector %q request.aws_region is %q; want a region's name, such as eu-west-1", c.Name, r.AWSRegion)
+	case mechanism == kafkaAWSMSKIAM && (req.Username != "" || req.PasswordFile != "" || req.BearerTokenFile != ""):
+		return fmt.Errorf("collector %q sets request.sasl_mechanism AWS_MSK_IAM beside request.username, password_file or bearer_token_file; the login signs its token with the AWS credentials the AWS SDK finds", c.Name)
+	case mechanism == kafkaAWSMSKIAM && kafkaAWSBuilt() != nil:
+		return fmt.Errorf("collector %q request.sasl_mechanism: %w", c.Name, kafkaAWSBuilt())
+	case mechanism != "" && mechanism != kafkaOAuthBearer && mechanism != kafkaAWSMSKIAM && req.Username == "":
 		return fmt.Errorf("collector %q request.sasl_mechanism is %s, which sends a user and a password: set request.username and password_file", c.Name, mechanism)
 	}
 	for _, p := range []struct {
@@ -210,8 +229,22 @@ func (kafkaRequester) Validate(c *model.Collector) error {
 			}
 		}
 	}
+	if len(r.TopicConfigs) > kafkaMaxConfigs {
+		return fmt.Errorf("collector %q request.topic_configs names more than %d settings", c.Name, kafkaMaxConfigs)
+	}
+	for i, name := range r.TopicConfigs {
+		if !kafkaConfigName.MatchString(name) {
+			return fmt.Errorf("collector %q request.topic_configs[%d] is %q; want the name of a topic's setting, such as retention.ms or cleanup.policy", c.Name, i, name)
+		}
+		if slices.Index(r.TopicConfigs, name) != i {
+			return fmt.Errorf("collector %q request.topic_configs names %q twice", c.Name, name)
+		}
+	}
 	return checkBrokerAccount(c)
 }
+
+// kafkaConfigName is the name of a topic's setting.
+var kafkaConfigName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
 
 // kafkaPattern compiles patterns of names, one of which a name matches
 // whole; none is nil, which kafkaChosen reads as its default.
@@ -236,7 +269,8 @@ func kafkaKeyRules() map[string]map[string]any {
 	}
 	item := map[string]any{"minLength": 1, "maxLength": kafkaMaxPattern}
 	return map[string]map[string]any{
-		"sasl_mechanism":   {"enum": append(slices.Clone(kafkaMechanisms), ""), "description": "kafka: the SASL mechanism of the login. PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 send username and password_file, OAUTHBEARER sends bearer_token_file. Left out, PLAIN with a username, OAUTHBEARER with a bearer_token_file, and no login without either."},
+		"sasl_mechanism":   {"enum": append(slices.Clone(kafkaMechanisms), ""), "description": "kafka: the SASL mechanism of the login. PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 send username and password_file, OAUTHBEARER sends bearer_token_file, and AWS_MSK_IAM a token signed with the AWS credentials the AWS SDK finds, to an Amazon MSK listener of IAM's logins over TLS. Left out, PLAIN with a username, OAUTHBEARER with a bearer_token_file, and no login without either."},
+		"aws_region":       {"pattern": `^([a-z0-9][a-z0-9-]*)?$`, "description": "kafka: the region an AWS_MSK_IAM login signs for, such as eu-west-1; left out, the region of the target's MSK name, such as b-1.prod.abc123.c2.kafka.eu-west-1.amazonaws.com, else the AWS SDK's configuration's, such as AWS_REGION."},
 		"include_topics":   pattern("regular expressions, one of which the whole name of a topic matches to be reported, at most 100; every topic when left out."),
 		"include_topics[]": item,
 		"exclude_topics":   pattern("regular expressions whose topics are left out, whole names matched, at most 100."),
@@ -246,6 +280,9 @@ func kafkaKeyRules() map[string]map[string]any {
 		"exclude_groups":   pattern("regular expressions whose consumer groups are left out, whole names matched, at most 100."),
 		"exclude_groups[]": item,
 		"internal_topics":  {"description": "kafka: report Kafka's own topics too, such as __consumer_offsets; false when left out."},
+		"log_dirs":         {"description": "kafka: ask every broker the disk its log directories and its replicas take (DescribeLogDirs), for each broker's log_dirs and disk_bytes, each topic's disk_bytes and each partition's size_bytes. Needs the DESCRIBE permission on the cluster. false when left out."},
+		"topic_configs":    {"maxItems": kafkaMaxConfigs, "uniqueItems": true, "description": "kafka: the settings of each chosen topic to report in its configs, such as retention.ms, retention.bytes and cleanup.policy, at most 100 (DescribeConfigs); none when left out. Needs the DESCRIBE_CONFIGS permission on the topics."},
+		"topic_configs[]":  {"pattern": `^[a-z0-9][a-z0-9._-]{0,99}$`},
 	}
 }
 
@@ -263,6 +300,26 @@ func kafkaToken(c *model.Collector) (string, error) {
 		return "", fmt.Errorf("request.bearer_token_file %s is empty", c.Request.BearerTokenFile)
 	}
 	return token, nil
+}
+
+// kafkaMSKHost is a broker's name in Amazon MSK, provisioned or
+// serverless, which says its region.
+var kafkaMSKHost = regexp.MustCompile(`\.kafka(?:-serverless)?\.([a-z0-9-]+)\.amazonaws\.com\.?$`)
+
+// kafkaRegionName is an AWS region's name.
+var kafkaRegionName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// kafkaAWSRegion is the region an AWS_MSK_IAM login to host signs for:
+// request.aws_region, else host's, else "" for the AWS SDK's
+// configuration's.
+func kafkaAWSRegion(c *model.Collector, host string) string {
+	if region := kafkaRequest(c).AWSRegion; region != "" {
+		return region
+	}
+	if m := kafkaMSKHost.FindStringSubmatch(strings.ToLower(host)); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // kafkaTooLarge is the failure of a scrape whose answers pass limit.
@@ -297,6 +354,18 @@ type (
 		// chosen or not, that it leads and that it holds a replica of.
 		LeaderOf int `json:"leader_of"`
 		Replicas int `json:"replicas"`
+		// LogDirs are its log directories and DiskBytes the bytes they hold,
+		// null without request.log_dirs or when the broker did not answer.
+		LogDirs   []kafkaLogDirDoc `json:"log_dirs"`
+		DiskBytes *int64           `json:"disk_bytes"`
+	}
+	kafkaLogDirDoc struct {
+		Dir string `json:"dir"`
+		// Bytes is what the directory's replicas take, null when the broker
+		// gave the directory an error, such as KAFKA_STORAGE_ERROR for a
+		// disk that failed.
+		Bytes *int64 `json:"bytes"`
+		Error string `json:"error"`
 	}
 	kafkaTopicDoc struct {
 		Name              string `json:"name"`
@@ -311,7 +380,14 @@ type (
 		NotPreferredLeader int `json:"not_preferred_leader"`
 		// Messages is newest minus oldest over the partitions, null when an
 		// offset of one is missing.
-		Messages   *int64              `json:"messages"`
+		Messages *int64 `json:"messages"`
+		// DiskBytes is what every replica of the topic takes on the brokers'
+		// disks, null without request.log_dirs or when a broker holding one
+		// did not answer. Configs are the settings request.topic_configs
+		// names, by name, each null when the broker does not show it, as it
+		// shows no password, and the whole null without the key.
+		DiskBytes  *int64              `json:"disk_bytes"`
+		Configs    map[string]*string  `json:"configs"`
 		Partitions []kafkaPartitionDoc `json:"partitions"`
 	}
 	kafkaPartitionDoc struct {
@@ -325,7 +401,10 @@ type (
 		Offline         bool    `json:"offline"`
 		Newest          *int64  `json:"newest"`
 		Oldest          *int64  `json:"oldest"`
-		Error           string  `json:"error"`
+		// SizeBytes is what the leader's replica takes on its disk, null
+		// without request.log_dirs.
+		SizeBytes *int64 `json:"size_bytes"`
+		Error     string `json:"error"`
 	}
 	kafkaGroupDoc struct {
 		Group        string  `json:"group"`
@@ -341,18 +420,24 @@ type (
 		Group string `json:"group"`
 		Topic string `json:"topic"`
 		// CommittedSum adds the committed offsets up, and Lag the lag of
-		// the partitions that have one, null when none has.
+		// the partitions that have one, null when none has. LagSeconds is
+		// the longest of the partitions', null while one that lags has none
+		// (kafkalag.go).
 		CommittedSum int64                    `json:"committed_sum"`
 		Lag          *int64                   `json:"lag"`
+		LagSeconds   *float64                 `json:"lag_seconds"`
 		Partitions   []kafkaGroupPartitionDoc `json:"partitions"`
 	}
 	kafkaGroupPartitionDoc struct {
 		Partition int32 `json:"partition"`
 		// Committed is -1, and Lag null, for a partition the group has
-		// committed no offset of.
-		Committed int64  `json:"committed"`
-		Lag       *int64 `json:"lag"`
-		Error     string `json:"error"`
+		// committed no offset of. LagSeconds is how long ago the first
+		// message the group has not read was written, as the scrapes of the
+		// partition say, null until they can (kafkalag.go).
+		Committed  int64    `json:"committed"`
+		Lag        *int64   `json:"lag"`
+		LagSeconds *float64 `json:"lag_seconds"`
+		Error      string   `json:"error"`
 	}
 )
 
@@ -375,7 +460,15 @@ func (kafkaRequester) Fetch(ctx context.Context, target string, c *model.Collect
 	if login.token, err = kafkaToken(c); err != nil {
 		return nil, err
 	}
-	k := &kafkaCluster{ctx: ctx, c: c, login: login, limit: responseLimit(c), nodes: map[int32]*kafkaNode{}}
+	if login.mechanism == kafkaAWSMSKIAM {
+		if address.scheme != "tls" {
+			return nil, errors.New("an AWS_MSK_IAM login sends a signed token, which MSK takes over TLS only: write the target tls://host:9098")
+		}
+		if login.token, err = kafkaMSKToken(ctx, kafkaAWSRegion(c, address.host)); err != nil {
+			return nil, err
+		}
+	}
+	k := &kafkaCluster{ctx: ctx, c: c, target: kafkaLabel(address), login: login, limit: responseLimit(c), nodes: map[int32]*kafkaNode{}}
 	k.budget.left.Store(k.limit)
 	if address.scheme == "tls" {
 		if k.tls, err = brokerTLSConfig(c); err != nil {
@@ -397,8 +490,11 @@ func (kafkaRequester) Fetch(ctx context.Context, target string, c *model.Collect
 // kafkaCluster is a scrape's view of a cluster: its login, its byte
 // budget and a connection to each broker it has asked.
 type kafkaCluster struct {
-	ctx    context.Context
-	c      *model.Collector
+	ctx context.Context
+	c   *model.Collector
+	// target is the target's url label, which with the collector and the
+	// cluster's ID names the history of its offsets (kafkalag.go).
+	target string
 	login  kafkaLogin
 	tls    *tls.Config
 	limit  int64
@@ -507,6 +603,13 @@ func (k *kafkaCluster) greet(conn *kafkaConn) error {
 		return fmt.Errorf("%s refused ApiVersions v%d (%s): it is older than Kafka 2.1, which the kafka type needs", conn.broker, kafkaAPIVersions.version, kafkaError(code))
 	}
 	needed := slices.Clone(kafkaAPIs)
+	own := kafkaRequest(k.c)
+	if own.LogDirs {
+		needed = append(needed, kafkaDescribeLogDirs)
+	}
+	if len(own.TopicConfigs) > 0 {
+		needed = append(needed, kafkaDescribeConfigs)
+	}
 	if k.login.mechanism != "" {
 		needed = append(needed, kafkaSaslHandshake, kafkaSaslAuthenticate)
 	}
@@ -631,6 +734,12 @@ func (k *kafkaCluster) scrape(address netAddress) (*kafkaDocument, error) {
 		return nil, err
 	}
 	if err := k.offsets(doc, failed); err != nil {
+		return nil, err
+	}
+	if err := k.logDirs(doc, failed); err != nil {
+		return nil, err
+	}
+	if err := k.configs(boot, doc, failed); err != nil {
 		return nil, err
 	}
 	if err := k.ctx.Err(); err != nil {
@@ -950,6 +1059,7 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 			newest[key] = kafkaOffset{err: err.Error()}
 		}
 	}
+	read := kafkaNow()
 	latest := map[kafkaPartitionKey]int64{}
 	for i := range doc.Topics {
 		t := &doc.Topics[i]
@@ -980,9 +1090,29 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 			t.Messages = &messages
 		}
 	}
+	id := ""
+	if doc.ClusterID != nil {
+		id = *doc.ClusterID
+	}
+	// The history of the partitions a group lags on is wanted.
+	wanted := map[kafkaPartitionKey]bool{}
+	for _, g := range doc.Groups {
+		for _, t := range g.Topics {
+			for _, p := range t.Partitions {
+				key := kafkaPartitionKey{t.Topic, p.Partition}
+				if end, known := latest[key]; known && p.Committed >= 0 && p.Committed < end {
+					wanted[key] = true
+				}
+			}
+		}
+	}
+	history := kafkaRecord(k.c.Name+"\x00"+k.target+"\x00"+id, latest, read, wanted)
 	for i := range doc.Groups {
 		for j := range doc.Groups[i].Topics {
 			t := &doc.Groups[i].Topics[j]
+			// A topic's lag in seconds is its slowest partition's, unknown
+			// while a partition that lags has none.
+			unknown := false
 			for m := range t.Partitions {
 				p := &t.Partitions[m]
 				end, known := latest[kafkaPartitionKey{t.Topic, p.Partition}]
@@ -999,6 +1129,20 @@ func (k *kafkaCluster) offsets(doc *kafkaDocument, failed func(error) bool) erro
 					t.Lag = new(int64)
 				}
 				*t.Lag += lag
+				if lag == 0 {
+					p.LagSeconds = new(float64)
+				} else {
+					p.LagSeconds = kafkaLagSeconds(history[kafkaPartitionKey{t.Topic, p.Partition}], p.Committed, read)
+				}
+				switch {
+				case p.LagSeconds == nil:
+					unknown = true
+				case t.LagSeconds == nil || *p.LagSeconds > *t.LagSeconds:
+					t.LagSeconds = p.LagSeconds
+				}
+			}
+			if unknown {
+				t.LagSeconds = nil
 			}
 		}
 	}

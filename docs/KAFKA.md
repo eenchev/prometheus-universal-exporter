@@ -5,7 +5,10 @@ how it stands:
 
 - its brokers;
 - its topics, with each partition's leader, replicas and offsets;
-- its consumer groups, with their state, members and lag.
+- its consumer groups, with their state, members and lag, in messages and
+  in seconds;
+- when asked, the disk each broker and each topic takes, and the topics'
+  settings, such as their retention.
 
 It hands the answer to the transforms as one JSON document.
 
@@ -29,9 +32,11 @@ go build -tags "$(sh tools/request-type-tags.sh '' '' kafka)" .
 
 The build tag is `request_type_kafka`. A build without the type refuses a
 configuration with a `kafka` collector at startup, on a reload and with
-`--dry-run`, and the error says how to build one that has it. The type uses
-only the standard library and adds no dependency: the protocol and the SASL
-logins are written in the exporter.
+`--dry-run`, and the error says how to build one that has it. The type adds
+no dependency: the protocol and the SASL logins are written in the
+exporter. The `AWS_MSK_IAM` login signs with the AWS SDK that the `s3file`
+request type links, so it is in the builds that have both, as the default
+build with `kafka` added does (see [Amazon MSK with IAM](#amazon-msk-with-iam)).
 
 ## A collector
 
@@ -77,16 +82,21 @@ collectors:
 | `type` | — | **Required.** `kafka`. |
 | `username`, `password_file` | — | The account of a PLAIN or SCRAM login, both or neither. The file is read at each scrape. |
 | `bearer_token_file` | — | The token of an OAUTHBEARER login, in place of an account. The file is read at each scrape. |
-| `sasl_mechanism` | see notes | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` or `OAUTHBEARER`. Left out, `PLAIN` with a username, `OAUTHBEARER` with a token file, and no login without either. |
+| `sasl_mechanism` | see notes | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER` or `AWS_MSK_IAM`. Left out, `PLAIN` with a username, `OAUTHBEARER` with a token file, and no login without either. |
+| `aws_region` | see notes | The region an `AWS_MSK_IAM` login signs for, such as `eu-west-1`. Left out, the region in the target's MSK name, else the AWS SDK's configuration's, such as `AWS_REGION`. Set only with `AWS_MSK_IAM`. |
 | `include_topics`, `exclude_topics` | every topic | Regular expressions ([RE2](https://github.com/google/re2/wiki/Syntax)), at most 100 each. A topic is reported when its whole name matches one of `include_topics`, or that key is left out, and none of `exclude_topics`. |
 | `internal_topics` | `false` | Report Kafka's own topics too, such as `__consumer_offsets`. Without it they are left out whatever `include_topics` says. |
 | `include_groups`, `exclude_groups` | every group | The same, for consumer groups. |
+| `log_dirs` | `false` | Ask every broker for its log directories and the size of each replica in them (`DescribeLogDirs`): each broker's `log_dirs` and `disk_bytes`, each topic's `disk_bytes` and each partition's `size_bytes`. The login needs the `DESCRIBE` permission on the cluster. |
+| `topic_configs` | — | The names of the settings of each chosen topic to report in its `configs`, such as `retention.ms`, `retention.bytes` and `cleanup.policy`, at most 100 (`DescribeConfigs`). The login needs the `DESCRIBE_CONFIGS` permission on the topics. |
 | `tls` | — | How each broker's certificate is verified, and a client certificate, as for [any type that speaks TLS](REQUESTS.md#tls), when the target says `tls://`. |
 | `max_response_bytes` | `10MiB` | The most bytes the brokers' answers come to, together, in one scrape. |
 | `allowed_targets`, `denied_targets` | — | The hosts the collector may and may not reach, as for [any type that reaches a host](REQUESTS.md#restricting-targets). They apply to every broker, by the name the cluster gives it and by the address it is reached at. |
 
 No other request key applies, and setting one is a startup error. The
-patterns, the account and the token's file take no placeholder. A probe
+patterns, the account, the token's file, the region and the settings'
+names take no placeholder. A setting's name is lower case letters,
+digits, `.`, `_` and `-`, as Kafka's are, and one named twice is refused. A probe
 takes `timeout` and `param_<name>` parameters for the collector's
 [label values](REQUESTS.md#in-label-values).
 
@@ -133,14 +143,20 @@ from the exporter, as from any Kafka client.
 4. It asks each partition's leader for the partition's newest and oldest
    offsets (`ListOffsets`). It does so after the committed offsets, so that
    a lag read at once is not negative.
+5. With `log_dirs`, it asks every broker for its log directories and its
+   replicas' sizes (`DescribeLogDirs`).
+6. With `topic_configs`, it asks the target's broker for the settings of
+   the chosen topics (`DescribeConfigs`).
 
 Each broker is reached on its own connection, logged in like the first.
 The brokers are asked at once, and every connection is closed when the
 scrape ends.
 
 Each request is sent at the version a Kafka 2.1 client sends: Metadata v7,
-ListOffsets v4, OffsetFetch v5, DescribeGroups v2, ListGroups v2 and
-ApiVersions v2. Kafka 4 keeps those versions and removed
+ListOffsets v4, OffsetFetch v5, DescribeGroups v2, ListGroups v2,
+ApiVersions v2, DescribeConfigs v2 and DescribeLogDirs v1. A broker is
+asked to speak the last two only when the collector sends them. Kafka 4
+keeps those versions and removed
 the older ones, so one version of each reaches every broker from 2.1 on, and
 Redpanda and the cloud services that speak Kafka's protocol too.
 
@@ -153,21 +169,24 @@ Redpanda and the cloud services that speak Kafka's protocol too.
   "cluster_id": "MkU3OEVBNTcwNTJENDM2Qg",
   "controller": 1,
   "brokers": [
-    {"id": 1, "host": "kafka1.example.com", "port": 9092, "rack": "eu-1a", "controller": true, "leader_of": 41, "replicas": 120}
+    {"id": 1, "host": "kafka1.example.com", "port": 9092, "rack": "eu-1a", "controller": true, "leader_of": 41, "replicas": 120,
+     "log_dirs": [{"dir": "/var/lib/kafka/data", "bytes": 52428800, "error": ""}], "disk_bytes": 52428800}
   ],
   "topics": [
     {"name": "orders", "internal": false, "error": "", "partition_count": 3, "replication_factor": 3,
      "offline": 0, "under_replicated": 1, "not_preferred_leader": 1, "messages": 160,
+     "disk_bytes": 3145728, "configs": {"retention.ms": "604800000", "cleanup.policy": "delete"},
      "partitions": [
        {"partition": 0, "leader": 1, "replicas": [1, 2, 3], "isr": [1, 2, 3], "offline_replicas": [],
-        "preferred_leader": true, "under_replicated": false, "offline": false, "newest": 100, "oldest": 10, "error": ""}
+        "preferred_leader": true, "under_replicated": false, "offline": false, "newest": 100, "oldest": 10,
+        "size_bytes": 1048576, "error": ""}
      ]}
   ],
   "groups": [
     {"group": "billing", "protocol_type": "consumer", "state": "Stable", "members": 2, "coordinator": 2, "error": "",
      "topics": [
-       {"group": "billing", "topic": "orders", "committed_sum": 145, "lag": 10,
-        "partitions": [{"partition": 0, "committed": 90, "lag": 10, "error": ""}]}
+       {"group": "billing", "topic": "orders", "committed_sum": 145, "lag": 10, "lag_seconds": 42.5,
+        "partitions": [{"partition": 0, "committed": 90, "lag": 10, "lag_seconds": 42.5, "error": ""}]}
      ]}
   ],
   "errors": [],
@@ -180,6 +199,13 @@ Redpanda and the cloud services that speak Kafka's protocol too.
 - `leader_of` and `replicas` count the partitions that a broker leads and
   holds a replica of, over every topic, chosen or not.
 - `rack` is `null` for a broker without one.
+- With `log_dirs`, `log_dirs` lists the broker's log directories, each with
+  the bytes its replicas take, and `disk_bytes` adds them up. A directory
+  with an error, such as `KAFKA_STORAGE_ERROR` for a disk that failed, has
+  `bytes: null` and holds nothing in the sum. Both are `null` without the
+  key, and for a broker that could not be asked, which `errors` names.
+  The bytes are what Kafka's logs take, every topic's, not what the disk
+  holds besides.
 
 **Topics.** These are the chosen topics, by name.
 
@@ -196,6 +222,30 @@ Redpanda and the cloud services that speak Kafka's protocol too.
 - A topic that the metadata refused, such as one the account may not
   describe, has its `error`, for example `TOPIC_AUTHORIZATION_FAILED`, and
   no partitions.
+- With `log_dirs`, a topic's `disk_bytes` is what all its replicas take,
+  copies that a broker is moving to another directory included, and a
+  partition's `size_bytes` is what its leader's replica takes. A topic's
+  is `null` when a broker that holds one of its replicas could not be
+  asked, and a partition's when its leader did not list it.
+- With `topic_configs`, `configs` maps each setting named to its value as
+  a string, as Kafka works it out: the topic's own, else the broker's
+  default. A setting that Kafka does not show, such as a password, or does
+  not know is `null`. `configs` is `null` without the key, and for a topic
+  whose settings were refused, which `errors` names.
+
+A setting's name has dots, so a rule reads it with brackets, and its value
+is a string, which `tonumber` turns into a number. `retention.ms` is `-1`
+for a topic kept for ever:
+
+```yaml
+      - name: kafka_topic_retention_seconds
+        description: How long a topic keeps its messages, -0.001 for ever
+        items: .topics[] | select(.configs["retention.ms"] != null)
+        expression: (.configs["retention.ms"] | tonumber) / 1000
+        labels:
+          - name: topic
+            expression: .name
+```
 
 **Groups.** These are the chosen groups, by name, with every topic of
 theirs that is chosen.
@@ -206,6 +256,9 @@ theirs that is chosen.
 - A partition that the group has committed nothing to has `committed: -1`
   and `lag: null`, and counts in neither sum. A topic's `lag` is `null`
   when none of its partitions has a lag.
+- `lag_seconds` is how long ago the first message that the group has not
+  read was written. A topic's is its slowest partition's. See
+  [Lag in seconds](#lag-in-seconds).
 - `coordinator` is the ID of the broker that listed the group.
 - A group whose coordinator could not be asked, or that it refused to
   describe, such as one the account may not describe, has its `error`, and
@@ -214,12 +267,87 @@ theirs that is chosen.
 
 **Errors.** A scrape that reaches the target but not every other broker does
 not fail. What the missing broker would have said is missing from the
-document. `errors` lists each broker that could not be asked and each
-group that could not be described, as a sentence naming the broker or the
-group and the request. A partition whose offsets are missing says why in
+document. `errors` lists each broker that could not be asked, each group
+that could not be described, each broker that listed no log directory and
+each topic whose settings were refused, as a sentence naming the broker,
+the group or the topic and the request. A partition whose offsets are missing says why in
 its own `error`. The groups that a missing
 broker coordinates are missing too, since only it lists them. A rule such
 as `.errors | length` tells a partial answer apart.
+
+## Lag in seconds
+
+Kafka does not say when an offset was written: `ListOffsets` gives a
+partition's newest offset now. So the exporter keeps, in memory, the
+newest offset of each partition at each scrape and when it read it, and
+works out `lag_seconds` from them:
+
+- The committed offset lies between two scrapes' newest offsets. The time
+  it was written is taken as a straight line between those two scrapes,
+  and `lag_seconds` is the time since then.
+- The committed offset is older than every scrape kept. The time is taken
+  from the rate at which the partition was written over the scrapes kept.
+- A partition that the group has read to the end lags `0` seconds.
+- `lag_seconds` is `null` at the first scrape of a partition that lags,
+  and while the partition is not written to over the scrapes kept, since
+  no time or rate is known yet. A topic's is `null` while one of its
+  partitions that lags has none.
+
+The estimate is as fine as the scrapes are frequent: with one scrape a
+minute, a message's time is known to within about a minute. What is kept
+is by collector, target and cluster ID, at most 64 points a partition, the
+older ones thinned as more come, so that they reach further back: about
+1 KiB a partition. A partition or a cluster not read for an hour is
+dropped, and so is the least recently read cluster past 100 clusters or
+50,000 partitions over them all. A scrape that read its offsets before the
+last one kept, as one running beside it can, adds nothing. A restart, or another replica of the
+exporter, starts with nothing kept. A partition whose newest offset goes
+back, as when its topic is deleted and made again, starts again.
+
+The messages themselves are not read for their timestamps: a scrape reads
+no message.
+
+## Amazon MSK with IAM
+
+An MSK cluster with IAM access control takes logins on its listener of
+port 9098, over TLS:
+
+```yaml
+collectors:
+  - name: msk
+    request:
+      type: kafka
+      sasl_mechanism: AWS_MSK_IAM
+      log_dirs: true
+```
+
+```text
+/probe?collector=msk&target=tls://b-1.prod.abc123.c2.kafka.eu-west-1.amazonaws.com:9098
+```
+
+The login is OAUTHBEARER's, and its token is a URL presigned with AWS
+Signature Version 4 for the action `kafka-cluster:Connect`, as AWS's
+`aws-msk-iam-sasl-signer` libraries make it. The broker checks the
+signature and the IAM policy of the credentials that signed it. A token is
+made at each scrape and is good for 15 minutes.
+
+- **The credentials** are those that the AWS SDK's default chain finds, as
+  for an [s3file collector](S3FILE.md): a role for the service account,
+  EKS Pod Identity, the instance's role, or the environment. The policy
+  needs `kafka-cluster:Connect`, `kafka-cluster:DescribeCluster`,
+  `kafka-cluster:DescribeTopic` and `kafka-cluster:DescribeGroup` on the
+  cluster, its topics and its groups, and
+  `kafka-cluster:DescribeTopicDynamicConfiguration` for `topic_configs`.
+- **The region** is `aws_region`, else the one in the target's name, as
+  `eu-west-1` is in `b-1.prod.abc123.c2.kafka.eu-west-1.amazonaws.com`,
+  provisioned or serverless, else the AWS SDK's configuration's.
+- **The target** must be written `tls://`: the token is a credential, and
+  MSK takes it over TLS only.
+- `username`, `password_file` and `bearer_token_file` are refused beside
+  it.
+
+A build without the `s3file` request type has no AWS SDK, and refuses
+`AWS_MSK_IAM` when the configuration loads, saying so.
 
 ## Static targets
 
@@ -254,6 +382,9 @@ A scrape is bounded by these:
 - **Partitions and groups:** at most 10,000 partitions of the chosen topics
   and 1,000 chosen groups are reported. More fail the scrape, saying to
   narrow the patterns.
+- **`log_dirs`:** each broker lists every replica it holds, of every topic,
+  chosen or not, and those answers count in the response limit. Raise the
+  limit for a cluster of many partitions.
 - **SCRAM's iterations:** a login hashes the password at most 100,000 times,
   as a broker asks. Kafka itself asks at most 16,384.
 
@@ -304,6 +435,11 @@ kafka_exporter from the document, with the same names and labels:
 - each group's offsets, lag and members (`kafka_consumergroup_*`), `-1`
   for a partition without a committed offset as it writes it.
 
+It writes two series that kafka_exporter does not:
+`kafka_consumergroup_lag_seconds`, each group's lag in seconds by topic,
+from a partition's second scrape on, and `kafka_scrape_errors`, the length
+of `errors`.
+
 Its dashboards and alerts read them as they read its own. Its
 `--topic.filter`, `--topic.exclude`, `--group.filter` and `--group.exclude`
 are `include_topics`, `exclude_topics`, `include_groups` and
@@ -319,16 +455,12 @@ done here: see [Limitations](#limitations).
 
 - **No Kerberos (GSSAPI) login.** It would need a Kerberos library. A
   cluster that takes nothing else cannot be read.
-- **No AWS IAM login** (`AWS_MSK_IAM`, MSK's IAM listeners on port 9098).
-  An MSK cluster's SCRAM listener, port 9096, is read with
-  `SCRAM-SHA-512`.
 - **Kafka 2.1 or later.** An older broker is refused, saying so.
 - **Offsets kept in ZooKeeper are not read.** Only consumers older than
   Kafka 0.9 commit there, and Kafka 4 has no ZooKeeper.
-- **Lag is in messages, not in time.** A rate of the newest offsets, in
-  PromQL, turns it into time.
-- **No disk use and no topic configuration.** The brokers' log directories
-  and a topic's retention are not asked for.
+- **Lag in seconds is an estimate** from the scrapes, not a message's own
+  timestamp, and it starts again with the exporter (see
+  [Lag in seconds](#lag-in-seconds)).
 - **The groups of Kafka 4's new consumer protocol** (KIP-848, `group.protocol=consumer`)
   are described by a request the type does not send. Their committed
   offsets and lag are read, but their `state` and `members` may be `null`,
@@ -345,7 +477,9 @@ done here: see [Limitations](#limitations).
 - **`takes no SASL login on this listener`.** The listener is Kafka's
   `PLAINTEXT` or `SSL` one, which takes no login; leave the account and
   the token out, or reach the `SASL_PLAINTEXT` or `SASL_SSL` listener,
-  which is often on another port.
+  which is often on another port. With `AWS_MSK_IAM`, the listener is one
+  of MSK's without IAM access control: reach port 9098 of a cluster that has
+  it turned on.
 - **`refused the OAUTHBEARER login of the token: {"status":"invalid_token"}`.**
   The broker does not take the token: it has expired, or it was issued
   for another audience or by an issuer the broker does not trust. The
@@ -353,6 +487,19 @@ done here: see [Limitations](#limitations).
   next.
 - **`does not take the SASL mechanism PLAIN …; it takes SCRAM-SHA-512`.**
   Set `sasl_mechanism` to one it takes.
+- **`does not take the SASL mechanism OAUTHBEARER, which AWS_MSK_IAM logs in
+  with`.** The listener is not MSK's IAM one: reach port 9098, and turn on
+  IAM access control for the cluster.
+- **`refused the AWS_MSK_IAM login of the AWS credentials`.** The broker
+  does not take the signature or the policy: the credentials lack
+  `kafka-cluster:Connect` on the cluster, the region is not the cluster's
+  (set `aws_region`), or the exporter's clock is more than five minutes
+  off.
+- **`listed no log directories`.** Kafka answers so a login without the
+  `DESCRIBE` permission on the cluster; grant it, or leave `log_dirs` out.
+- **`lag_seconds` is `null` while `lag` is not.** The partition has been
+  scraped once, or has not been written to since it was first scraped:
+  see [Lag in seconds](#lag-in-seconds).
 - **`errors` says `connecting to kafka-0.kafka-headless:9092`.** The
   brokers advertise names that the exporter cannot resolve or reach: run it
   where the brokers' advertised listeners are reachable, or give the

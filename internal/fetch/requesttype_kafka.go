@@ -407,12 +407,16 @@ type (
 		Error     string `json:"error"`
 	}
 	kafkaGroupDoc struct {
-		Group        string  `json:"group"`
-		ProtocolType string  `json:"protocol_type"`
-		State        *string `json:"state"`
-		Members      *int    `json:"members"`
-		Coordinator  int32   `json:"coordinator"`
-		Error        string  `json:"error"`
+		Group        string `json:"group"`
+		ProtocolType string `json:"protocol_type"`
+		// GroupProtocol is the rebalance protocol the group runs: classic,
+		// described by DescribeGroups, or consumer, Kafka 4's (KIP-848),
+		// described by ConsumerGroupDescribe; "" when neither described it.
+		GroupProtocol string  `json:"group_protocol"`
+		State         *string `json:"state"`
+		Members       *int    `json:"members"`
+		Coordinator   int32   `json:"coordinator"`
+		Error         string  `json:"error"`
 		// Topics are the chosen topics the group has committed offsets of.
 		Topics []kafkaGroupTopicDoc `json:"topics"`
 	}
@@ -524,8 +528,16 @@ type kafkaConn struct {
 	limit       int64
 	correlation int32
 	// greeted says the broker has answered ApiVersions, before which an
-	// answer larger than kafkaMaxGreeting is no Kafka broker's.
+	// answer larger than kafkaMaxGreeting is no Kafka broker's, and spoken
+	// are the versions it said of each API, by key.
 	greeted bool
+	spoken  map[int16][2]int16
+}
+
+// speaks says whether c's broker speaks api at the version it is sent at.
+func (c *kafkaConn) speaks(api kafkaAPI) bool {
+	versions, ok := c.spoken[api.key]
+	return ok && versions[0] <= api.version && api.version <= versions[1]
 }
 
 // kafkaMaxGreeting bounds the answer to ApiVersions, a few hundred bytes
@@ -602,6 +614,7 @@ func (k *kafkaCluster) greet(conn *kafkaConn) error {
 	if code != 0 {
 		return fmt.Errorf("%s refused ApiVersions v%d (%s): it is older than Kafka 2.1, which the kafka type needs", conn.broker, kafkaAPIVersions.version, kafkaError(code))
 	}
+	conn.spoken = spoken
 	needed := slices.Clone(kafkaAPIs)
 	own := kafkaRequest(k.c)
 	if own.LogDirs {
@@ -950,6 +963,7 @@ func (k *kafkaCluster) describe(conn *kafkaConn, groups []kafkaGroupDoc, indexes
 	for _, i := range indexes {
 		at[groups[i].Group] = i
 	}
+	var other []int
 	for n := r.array(12); n > 0; n-- {
 		code := r.int16()
 		name, state := r.string(), r.string()
@@ -967,14 +981,34 @@ func (k *kafkaCluster) describe(conn *kafkaConn, groups []kafkaGroupDoc, indexes
 		if !ok || r.err != nil {
 			continue
 		}
+		// Kafka 4 answers DescribeGroups below v6 of a group of the consumer
+		// protocol (KIP-848) as of one that is dead, and later versions with
+		// GROUP_ID_NOT_FOUND: ConsumerGroupDescribe describes it.
+		if code == 69 || (code == 0 && state == "Dead") {
+			other = append(other, i)
+		}
 		if code != 0 {
 			groups[i].Error = fmt.Sprintf("describing group %q: %s", name, kafkaError(code))
 			continue
 		}
-		groups[i].State, groups[i].Members = &state, &members
+		groups[i].GroupProtocol, groups[i].State, groups[i].Members = "classic", &state, &members
 	}
 	if err := conn.decoded(kafkaDescribeGroups, r); err != nil {
 		return err
+	}
+	// A broker that does not speak ConsumerGroupDescribe has no group of
+	// the consumer protocol.
+	// Its failure is the failure of those groups alone, so that the others
+	// keep their offsets and lag.
+	if len(other) > 0 && conn.speaks(kafkaConsumerGroupDescribe) {
+		if err := consumerGroups(conn, groups, other); err != nil {
+			if k.ctx.Err() != nil || errors.Is(err, model.ErrLimitExceeded) {
+				return err
+			}
+			for _, i := range other {
+				groups[i].Error = fmt.Sprintf("describing group %q: %v", groups[i].Group, err)
+			}
+		}
 	}
 	for _, i := range indexes {
 		if err := k.committed(conn, &groups[i], chosen); err != nil {

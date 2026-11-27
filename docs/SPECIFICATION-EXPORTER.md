@@ -2002,17 +2002,21 @@ this order, without cycles:
    `kubernetes` request type and the target allocator share.
 4. `expr`: expression compilation and its caches.
 5. `fetch`: request types, probe parameters and transports.
-6. `decode`: response decoding and charset conversion.
-7. `transform`: transforms, metric rules and the Python worker pool.
-8. `config`: loading, validating and reloading the configuration and target
+6. `discovery`: what the target allocator and the exporter's static target
+   file share of discovering targets: the `dns_sd` source, and the names,
+   targets and labels a `discovered_targets` entry makes of what a source
+   found.
+7. `decode`: response decoding and charset conversion.
+8. `transform`: transforms, metric rules and the Python worker pool.
+9. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-9. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
-10. `pagekit`: what the HTML pages of the exporter and of the target
+10. `allocclient`: the exporter's client of the target allocator (§ 42.14e).
+11. `pagekit`: what the HTML pages of the exporter and of the target
    allocator share: the stylesheet, the theme, the icon, the refresh
    controls and how a duration is written.
-11. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
+12. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
-12. `allocator`: the target allocator (§ 42.14d).
+13. `allocator`: the target allocator (§ 42.14d).
 
 The target allocator's command line MUST live in `cmd/pue-allocator`, and
 nothing else of it there.
@@ -12504,10 +12508,29 @@ targets:
         deployment.environment: production
 ```
 
-`interval` and `targets` MUST be required, and `targets` MUST NOT be empty; a
-document without either MUST be refused. A document with the target
-allocator's `discovered_targets` (§ 42.14d) MUST be refused, naming the
-allocator, since the exporter discovers no targets. `--static-targets-file-schema` MUST
+`interval` MUST be required, and so MUST `targets` that is not empty, or
+`discovered_targets`, or both; a document without them MUST be refused. A
+`discovered_targets` entry (§ 42.14d) whose sources are all `dns_sd` ones
+MUST be read as the allocator reads it, its keys, its checks at load and the
+names, targets and labels of the targets it makes the allocator's; an entry
+with a `file_sd`, `http_sd` or `kubernetes` source MUST be refused, naming
+the allocator, and so MUST `weight` or `weight_label` on an entry. The
+exporter MUST look each source up when the file that has it is put in
+force and then every refresh interval, each lookup within its timeout. An
+answer that differs from the source's last MUST put the file's targets in
+force again with those the entries make of every source's last answer, as
+a reload of the file does, under the lock every reload takes, without
+counting a reload or changing the last reload's summary. A failure MUST keep
+the source's last answer, and be logged once while its text stays the same;
+a source that has not answered MUST give no targets; a reload that keeps an
+entry's name and a source's settings MUST keep what the source found, and
+put its targets in force with the file. A discovered target that the checks
+refuse, or whose name another target has, MUST be left out, and logged once
+while the reason stays the same. Each source MUST be reported by `entry`
+and `source` in `http_exporter_discovery_targets`,
+`http_exporter_discovery_refreshes_total{result}` and
+`http_exporter_discovery_last_success_timestamp_seconds`.
+`--static-targets-file-schema` MUST
 print the document's JSON Schema, and the committed
 `configs/static-targets.schema.json` MUST be that output (§ 24.3). Every
 target MUST name a configured collector; an unknown collector MUST be rejected
@@ -13427,7 +13450,9 @@ source MUST declare exactly the keys of the allocator's `DiscoveryConfig`,
 with each kind's own, and require one kind. `pue-allocator
 --static-targets-file-schema` and `--probe-targets-file-schema` MUST print
 them and exit 0, and `make schemas` MUST write them. The exporter's
-`configs/static-targets.schema.json` MUST keep refusing `discovered_targets`.
+`configs/static-targets.schema.json` MUST describe `discovered_targets` with
+entries of `dns_sd` sources alone, and the `dns_sd` keys of both schemas
+MUST be held to the same rules.
 A test MUST fail when a committed file differs from what the code generates,
 when a schema's keys differ from the keys the allocator decodes, the probe
 job's of the chart's values schema included (SPECIFICATION-CHART.md

@@ -138,6 +138,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
+	go manager.DiscoveryLoop(ctx)
 	exporter.ApplyMemoryLimitRatio(o.memoryLimitRatio, logger)
 	transform.PythonWorkers().SetMaxWorkers(o.pythonMaxWorkers)
 	transform.PythonWorkers().SetMaxIdleWorkers(o.pythonMaxIdleWorkers)
@@ -476,7 +477,7 @@ func loadStartupFiles(o *options, logger *slog.Logger, loadOptions, staticTarget
 	}
 	manager.SetTargets(o.targetFile, targets)
 	manager.UseTargetsStamp(targetsStamp)
-	logger.Info("static targets loaded", "file", o.targetFile, "targets", len(targets.Targets))
+	logger.Info("static targets loaded", "file", o.targetFile, "targets", len(targets.Targets), "discovered_targets", len(targets.Discovered))
 	return manager
 }
 

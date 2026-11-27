@@ -25,6 +25,7 @@ var yamlPlaces = map[string]string{
 	"Config":                     "the configuration",
 	"collectorFile":              "a collector file",
 	"StaticTargetFile":           "the static target file",
+	"staticTargetDocument":       "the static target file",
 	"WebConfig":                  "web",
 	"SelfMetricsConfig":          "web.self_metrics",
 	"ExporterBasicAuth":          "web.basic_auth",
@@ -92,7 +93,7 @@ var (
 // x- key anywhere else is a misspelt setting like any other unknown key.
 
 // extensionKeyTypes are the documents whose top level takes x- keys.
-var extensionKeyTypes = map[string]bool{"Config": true, "collectorFile": true, "StaticTargetFile": true}
+var extensionKeyTypes = map[string]bool{"Config": true, "collectorFile": true, "StaticTargetFile": true, "staticTargetDocument": true}
 
 // isExtensionKey says whether a top-level key is the file's own.
 func isExtensionKey(key string) bool { return strings.HasPrefix(key, "x-") && len(key) > len("x-") }

@@ -227,7 +227,7 @@ up * on (instance) group_left (version) http_exporter_build_info
 
 | Family | Type | Meaning |
 | --- | --- | --- |
-| `http_exporter_static_targets` | gauge | [Static targets](STATIC-TARGETS.md) loaded from the static target file; 0 without one. |
+| `http_exporter_static_targets` | gauge | [Static targets](STATIC-TARGETS.md) in force: those the static target file writes and those its `discovered_targets` found; 0 without one. |
 | `http_exporter_static_targets_exported_via_otlp` | gauge | Those of them with `export_via_otlp`, also delivered over OTLP. |
 
 A static target's scrapes are counted in its collector's families above, as
@@ -236,6 +236,25 @@ probes are, and the time they take in
 `http_exporter_target_scrape_duration_seconds`, is served with its results on
 the [static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint),
 not here.
+
+## Discovered static targets
+
+The `dns_sd` sources of the static target file's `discovered_targets`
+([Discovering targets by DNS](STATIC-TARGETS.md#discovering-targets-by-dns)),
+by `entry`, the entry's name, and `source`, the source's:
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_discovery_targets` | gauge | Targets the source's last answer gave. |
+| `http_exporter_discovery_refreshes_total` | counter | Lookups of the source, by `result`: `success` or `failure`. |
+| `http_exporter_discovery_last_success_timestamp_seconds` | gauge | When the source last answered, in seconds since the Unix epoch; `0` for one that never has. |
+
+A source that keeps failing keeps its last answer's targets in force. Alert
+on one that has not answered for a while:
+
+```promql
+time() - http_exporter_discovery_last_success_timestamp_seconds > 600
+```
 
 ## Rate limits per host
 
@@ -1246,7 +1265,7 @@ The time is when the series began to count:
 | The same, of an entry a reload added, or removed and brought back | When the reload put it in force. |
 | The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |
-| `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the counters of the [Python execution pool](#the-python-execution-pool), and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The pool's counters keep what a collector counted when a reload removes it, so they do not start again. |
+| `http_exporter_config_reloads_total`, `http_exporter_discovery_refreshes_total`, the [OTLP](#otlp-export-status) counters, the counters of the [Python execution pool](#the-python-execution-pool), and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The pool's counters keep what a collector counted when a reload removes it, so they do not start again. |
 
 The exporter's start is the start of its process, the same time that
 `process_start_time_seconds` reports (where the platform does not say, the

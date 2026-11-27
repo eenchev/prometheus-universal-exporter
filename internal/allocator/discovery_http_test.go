@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -222,7 +223,7 @@ func TestDiscoveryChangesAreAppliedAsAReload(t *testing.T) {
 	// A target no longer found leaves at once.
 	write(targets[1:])
 	a.refreshDiscovery(ctx)
-	gone := discoveredName("node", targets[0])
+	gone := discovery.Name("node", targets[0])
 	for _, m := range members {
 		if slices.Contains(share(t, a, m), gone) || slices.Contains(share(t, a, m), "node_new_example_3A9100") {
 			t.Errorf("%s keeps a target discovery no longer finds", m)
@@ -418,7 +419,7 @@ func TestADiscoveredTargetKeepsItsName(t *testing.T) {
 		return out
 	}
 	a.refreshDiscovery(ctx)
-	hashed := "node_" + hashedAddress("c.example:9100")
+	hashed := "node_" + discovery.HashedAddress("c.example:9100")
 	want := []string{"node_a_2Db_example_3A9100", "node_a_b_example_3A9100", "node_c_example_3A9100", hashed}
 	slices.Sort(want)
 	if got := names(); !slices.Equal(got, want) {

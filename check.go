@@ -440,6 +440,15 @@ func checkTargets(path string, options []config.LoadOption, expandEnv bool, conf
 		names = append(names, target.Name)
 	}
 	details := map[string]any{"targets": names, "static_targets_expand_env": expandEnv}
+	// The targets of discovered_targets are found by their sources once the
+	// exporter runs; the check names the entries.
+	if len(file.Discovered) > 0 {
+		entries := make([]string, 0, len(file.Discovered))
+		for _, e := range file.Discovered {
+			entries = append(entries, e.Name)
+		}
+		details["discovered_targets"] = entries
+	}
 	if conf == nil {
 		result := skippedCheck("static_targets", path, "the file is valid on its own, but could not be checked against the configuration, which did not load")
 		result.Details = details

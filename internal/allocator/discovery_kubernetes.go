@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -142,7 +143,7 @@ func refreshKubernetes(ctx context.Context, k *KubernetesConfig, mapping map[str
 						continue
 					}
 					seen[d.Address] = true
-					d.Labels = mapLabels(d.Labels, mapping)
+					d.Labels = discovery.MapLabels(d.Labels, mapping)
 					out = append(out, d)
 					if len(out) > limit {
 						return "", fmt.Errorf("the EndpointSlices hold more than the %d targets max_targets allows", limit)

@@ -150,9 +150,9 @@ func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
 	if p := doc.Topics[1]; p.Messages == nil || *p.Messages != 0 || p.Offline != 0 || p.UnderReplicated != 0 {
 		t.Errorf("payments %s", kafkaJSON(t, p))
 	}
-	want = `[{"group":"audit","protocol_type":"consumer","state":"Empty","members":0,"coordinator":3,"error":"","topics":[{"group":"audit","topic":"payments","committed_sum":3,"lag":4,"lag_seconds":null,"partitions":[{"partition":0,"committed":3,"lag":4,"lag_seconds":null,"error":""}]}]},` +
-		`{"group":"billing","protocol_type":"consumer","state":"Stable","members":2,"coordinator":2,"error":"","topics":[{"group":"billing","topic":"orders","committed_sum":145,"lag":10,"lag_seconds":null,"partitions":[{"partition":0,"committed":90,"lag":10,"lag_seconds":null,"error":""},{"partition":1,"committed":55,"lag":0,"lag_seconds":0,"error":""},{"partition":2,"committed":-1,"lag":null,"lag_seconds":null,"error":""}]}]},` +
-		`{"group":"locked","protocol_type":"consumer","state":null,"members":null,"coordinator":1,"error":"describing group \"locked\": GROUP_AUTHORIZATION_FAILED","topics":[{"group":"locked","topic":"orders","committed_sum":100,"lag":0,"lag_seconds":0,"partitions":[{"partition":0,"committed":100,"lag":0,"lag_seconds":0,"error":""}]}]}]`
+	want = `[{"group":"audit","protocol_type":"consumer","group_protocol":"classic","state":"Empty","members":0,"coordinator":3,"error":"","topics":[{"group":"audit","topic":"payments","committed_sum":3,"lag":4,"lag_seconds":null,"partitions":[{"partition":0,"committed":3,"lag":4,"lag_seconds":null,"error":""}]}]},` +
+		`{"group":"billing","protocol_type":"consumer","group_protocol":"classic","state":"Stable","members":2,"coordinator":2,"error":"","topics":[{"group":"billing","topic":"orders","committed_sum":145,"lag":10,"lag_seconds":null,"partitions":[{"partition":0,"committed":90,"lag":10,"lag_seconds":null,"error":""},{"partition":1,"committed":55,"lag":0,"lag_seconds":0,"error":""},{"partition":2,"committed":-1,"lag":null,"lag_seconds":null,"error":""}]}]},` +
+		`{"group":"locked","protocol_type":"consumer","group_protocol":"","state":null,"members":null,"coordinator":1,"error":"describing group \"locked\": GROUP_AUTHORIZATION_FAILED","topics":[{"group":"locked","topic":"orders","committed_sum":100,"lag":0,"lag_seconds":0,"partitions":[{"partition":0,"committed":100,"lag":0,"lag_seconds":0,"error":""}]}]}]`
 	if got := kafkaJSON(t, doc.Groups); got != want {
 		t.Errorf("groups\n%s\nwant\n%s", got, want)
 	}

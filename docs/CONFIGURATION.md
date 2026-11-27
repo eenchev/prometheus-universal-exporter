@@ -5184,11 +5184,12 @@ The other files have their own schemas, all in `configs/` beside the
 examples and all regenerated with `make schemas` (see
 [Development](DEVELOPMENT.md#the-configuration-schema)):
 
-- the [static target file](STATIC-TARGETS.md):
+- the [static target file](STATIC-TARGETS.md), which may have
+  `discovered_targets` of `dns_sd` sources:
   [`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
   `configs/static-targets.example.yaml` points editors at in the same way;
-- the [target allocator](ALLOCATOR.md)'s static target file, which may have
-  `discovered_targets`:
+- the [target allocator](ALLOCATOR.md)'s static target file, whose
+  `discovered_targets` may have every kind of source:
   [`configs/allocator-static-targets.schema.json`](../configs/allocator-static-targets.schema.json);
 - the allocator's probe targets file:
   [`configs/probe-targets.schema.json`](../configs/probe-targets.schema.json);
@@ -8680,7 +8681,7 @@ The report lists one entry per startup step, in the order startup runs them:
 | `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. With [`otlp.exporter_instance`](OTLP.md#the-exporter-instance) on, `details.otlp_exporter_instance` has its `attribute` and its `value` as startup resolves it: the host name, or in allocator mode the `--allocator.member` name, when the file writes none. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`, which names the [collector file](#collector-files) of a collector defined in one. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | Reports `--config.watch-interval` under `details.interval`. A non-positive interval is a command-line error (exit 2) before the check, so this entry does not fail. |
-| `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |
+| `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. `details.targets` names the targets the file writes, and `details.discovered_targets`, when it has some, its [entries](STATIC-TARGETS.md#discovering-targets-by-dns), each checked at a sample address; their targets are found once the exporter runs. |
 
 Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a
 `reason` when it depends on a step that failed. The Python scripts cannot be

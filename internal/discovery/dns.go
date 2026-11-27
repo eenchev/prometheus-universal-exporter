@@ -1,4 +1,4 @@
-package allocator
+package discovery
 
 import (
 	"context"
@@ -12,16 +12,96 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
+
+// The defaults of a dns_sd source.
+const (
+	// DefaultDNSSDRefresh is Prometheus's own for DNS service discovery.
+	DefaultDNSSDRefresh = 30 * time.Second
+	// DefaultDNSSDType is the record type a dns_sd source asks for by
+	// default.
+	DefaultDNSSDType = "SRV"
+)
+
+// DNSSDConfig is a dns_sd source (model.DNSSDConfig).
+type DNSSDConfig = model.DNSSDConfig
+
+// CheckDNSSD checks a dns_sd source asked every refresh, which refreshText
+// names, when the file that has it loads. It writes each name as asked, and
+// the default type and the server as host:port.
+func CheckDNSSD(n *DNSSDConfig, refresh time.Duration, refreshText string) error {
+	if len(n.Names) == 0 {
+		return errors.New("dns_sd.names must not be empty")
+	}
+	seen := map[string]bool{}
+	for i, raw := range n.Names {
+		name, err := DNSName(raw)
+		if err != nil {
+			return fmt.Errorf("dns_sd.names entry %w", err)
+		}
+		if seen[name] {
+			return fmt.Errorf("dns_sd.names lists %q twice", name)
+		}
+		seen[name] = true
+		n.Names[i] = name
+	}
+	if n.Type == "" {
+		n.Type = DefaultDNSSDType
+	}
+	switch n.Type {
+	case "SRV":
+		if n.Port != 0 {
+			return errors.New("dns_sd.port is set for type SRV, whose records carry their own ports; leave it out")
+		}
+	case "A", "AAAA":
+		if n.Port < 1 || n.Port > 65535 {
+			return fmt.Errorf("dns_sd.port must be a port from 1 to 65535 for type %s, whose records carry no port", n.Type)
+		}
+	default:
+		return fmt.Errorf("dns_sd.type %q must be SRV, A or AAAA", n.Type)
+	}
+	if n.Server != "" {
+		server, err := fetch.ParseDNSServer(n.Server)
+		if err != nil {
+			return fmt.Errorf("dns_sd.server %w", err)
+		}
+		n.Server = server
+	}
+	return CheckTimeout("dns_sd", n.Timeout, refresh, refreshText)
+}
+
+// DNSName reads a name of dns_sd.names: a DNS name, such as
+// _metrics._tcp.example.com, in lower case without a trailing dot. So a
+// name written twice in two spellings is told, and every replica asks for
+// the same name and labels its targets with it.
+func DNSName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("is empty")
+	}
+	if strings.ContainsAny(name, "/?#@:[]") {
+		return "", fmt.Errorf("%q is not a DNS name; the server is dns_sd.server and the port dns_sd.port", raw)
+	}
+	if _, err := netip.ParseAddr(name); err == nil {
+		return "", fmt.Errorf("%q is an IP address, not a name to look up", raw)
+	}
+	canonical, err := fetch.CanonicalDNSName(name)
+	var refused *fetch.TargetRefusedError
+	if errors.As(err, &refused) {
+		return "", fmt.Errorf("%q is not a DNS name: %s", raw, refused.Reason)
+	}
+	return canonical, err
+}
 
 // The meta labels of a dns_sd source's targets, Prometheus's own names.
 const (
-	dnsNameLabel      = "__meta_dns_name"
-	dnsSRVTargetLabel = "__meta_dns_srv_record_target"
-	dnsSRVPortLabel   = "__meta_dns_srv_record_port"
+	DNSNameLabel      = "__meta_dns_name"
+	DNSSRVTargetLabel = "__meta_dns_srv_record_target"
+	DNSSRVPortLabel   = "__meta_dns_srv_record_port"
 )
 
-// refreshDNSSD looks up each of n's names, in their order, all within
+// RefreshDNSSD looks up each of n's names, in their order, all within
 // timeout, and gives a target for each record: an SRV record's target host
 // and port, or an A or AAAA record's address at n's port.
 //   - A name that does not exist, or has no records of the type, gives no
@@ -36,7 +116,7 @@ const (
 // The targets are sorted by address, so the same records give the same
 // answer whatever order the server or the resolver gives them in (the
 // resolver shuffles SRV records of one priority).
-func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string, limit int, timeout time.Duration) ([]discovered, error) {
+func RefreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string, limit int, timeout time.Duration) ([]Target, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	resolver := fetch.DNSResolver(n.Server, false)
@@ -45,7 +125,7 @@ func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string
 		server = "the system's resolver"
 	}
 	seen := map[string]bool{}
-	var out []discovered
+	var out []Target
 	for _, name := range n.Names {
 		found, err := lookupDNSSD(ctx, resolver, n, name)
 		if err != nil {
@@ -68,7 +148,7 @@ func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string
 				continue
 			}
 			seen[d.Address] = true
-			d.Labels = mapLabels(d.Labels, mapping)
+			d.Labels = MapLabels(d.Labels, mapping)
 			out = append(out, d)
 			if len(out) > limit {
 				return nil, fmt.Errorf("the names' records give more than the %d targets max_targets allows", limit)
@@ -84,9 +164,9 @@ func refreshDNSSD(ctx context.Context, n *DNSSDConfig, mapping map[string]string
 // The resolver leaves out a record with a malformed name and gives the
 // others with an error. That is taken as an answer of those others, as the
 // dns request type takes it.
-func lookupDNSSD(ctx context.Context, resolver *net.Resolver, n *DNSSDConfig, name string) ([]discovered, error) {
+func lookupDNSSD(ctx context.Context, resolver *net.Resolver, n *DNSSDConfig, name string) ([]Target, error) {
 	absolute := name + "."
-	var out []discovered
+	var out []Target
 	if n.Type == "SRV" {
 		_, records, err := resolver.LookupSRV(ctx, "", "", absolute)
 		if err != nil && len(records) == 0 {
@@ -102,10 +182,10 @@ func lookupDNSSD(ctx context.Context, resolver *net.Resolver, n *DNSSDConfig, na
 				continue
 			}
 			port := strconv.Itoa(int(srv.Port))
-			out = append(out, discovered{Address: net.JoinHostPort(host, port), Labels: map[string]string{
-				dnsNameLabel:      name,
-				dnsSRVTargetLabel: host,
-				dnsSRVPortLabel:   port,
+			out = append(out, Target{Address: net.JoinHostPort(host, port), Labels: map[string]string{
+				DNSNameLabel:      name,
+				DNSSRVTargetLabel: host,
+				DNSSRVPortLabel:   port,
 			}})
 		}
 		return out, nil
@@ -120,7 +200,7 @@ func lookupDNSSD(ctx context.Context, resolver *net.Resolver, n *DNSSDConfig, na
 	}
 	port := strconv.Itoa(n.Port)
 	for _, addr := range addrs {
-		out = append(out, discovered{Address: net.JoinHostPort(unmapped(addr).String(), port), Labels: map[string]string{dnsNameLabel: name}})
+		out = append(out, Target{Address: net.JoinHostPort(unmapped(addr).String(), port), Labels: map[string]string{DNSNameLabel: name}})
 	}
 	return out, nil
 }

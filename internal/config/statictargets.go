@@ -32,16 +32,17 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	return ParseStaticTargets(path, b)
 }
 
-// DiscoveredTargetsKey is the static target file's key for the targets the
-// target allocator discovers (cmd/pue-allocator). Only the allocator reads
-// it. The allocator expands each entry into written targets before it hands
-// a replica its share, so a file the exporter reads never needs it.
+// DiscoveredTargetsKey is the static target file's key for the targets that
+// discovery finds. The target allocator (cmd/pue-allocator) reads every kind
+// of source, and expands each entry into written targets before it hands a
+// replica its share. The exporter reads an entry of dns_sd sources and asks
+// them itself (staticdiscovery.go).
 const DiscoveredTargetsKey = "discovered_targets"
 
 // ParseStaticTargets reads the text of a static target document. path names
-// the document in messages. A document with discovered_targets is refused:
-// the exporter discovers nothing, and would otherwise silently scrape none of
-// them.
+// the document in messages. Its discovered_targets, when it has them, are
+// read into the file's Discovered, and every entry is checked as a target at
+// a sample address.
 func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) {
 	var err error
 	if err = refuseAllocatorKeys(b); err != nil {
@@ -50,10 +51,13 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	if err = refuseNotScalarKeys(b); err != nil {
 		return nil, err
 	}
-	var f model.StaticTargetFile
+	// The file is decoded as written, discovered_targets apart, so that a
+	// mistake is told at its line, and an alias reads as its anchor
+	// wherever the two are.
+	var w staticTargetDocument
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&f)), b, &f); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&w)), b, &w.StaticTargetFile); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("static target file %s is empty; it must define targets", path)
 		}
@@ -62,15 +66,32 @@ func ParseStaticTargets(path string, b []byte) (*model.StaticTargetFile, error) 
 	if err = oneDocument(dec); err != nil {
 		return nil, err
 	}
+	f := w.StaticTargetFile
+	f.Written = len(f.Targets)
+	if w.Entries.Kind != 0 {
+		if err = discoveredValueProblems(b); err != nil {
+			return nil, err
+		}
+		if f.Discovered, err = readDiscoveredEntries(ResolvedNode(&w.Entries), fileHead(b)); err != nil {
+			return nil, err
+		}
+	}
 	return &f, nil
+}
+
+// staticTargetDocument is a static target file as it is decoded: the file,
+// and its discovered_targets apart, which readDiscoveredEntries reads.
+type staticTargetDocument struct {
+	model.StaticTargetFile `yaml:",inline"`
+	Entries                yaml.Node `yaml:"discovered_targets"`
 }
 
 // refuseAllocatorKeys refuses a document with a key that only the target
 // allocator reads, and names the allocator instead of reporting an unknown
-// key. These keys are discovered_targets and default_weight at the top level,
-// and weight and weight_label on a target under targets. A document that is
-// not a YAML mapping is left to the decoder, which says what is wrong with
-// it. The same goes for a key merged in from an anchor.
+// key. These keys are default_weight at the top level, and weight and
+// weight_label on a target under targets or an entry of discovered_targets.
+// A document that is not a YAML mapping is left to the decoder, which says
+// what is wrong with it. The same goes for a key merged in from an anchor.
 func refuseAllocatorKeys(b []byte) error {
 	var doc yaml.Node
 	_ = yaml.Unmarshal(b, &doc)
@@ -84,11 +105,9 @@ func refuseAllocatorKeys(b []byte) error {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
 		switch key.Value {
-		case DiscoveredTargetsKey:
-			return fmt.Errorf("line %d: %s is read by the target allocator (pue-allocator --static-targets-file), which discovers the targets and hands each replica its share of them as written targets; the exporter discovers no targets, so list them under targets, or run the exporter with the allocator", key.Line, DiscoveredTargetsKey)
 		case "default_weight":
 			return weighted(key)
-		case "targets":
+		case "targets", DiscoveredTargetsKey:
 			if value.Kind != yaml.SequenceNode {
 				continue
 			}
@@ -110,7 +129,7 @@ func refuseAllocatorKeys(b []byte) error {
 // ValidateStaticTargets checks the document in isolation. ValidateStaticTargetsAgainst
 // applies the checks that need the exporter configuration.
 func ValidateStaticTargets(f *model.StaticTargetFile) error {
-	if len(f.Targets) == 0 {
+	if len(f.Targets) == 0 && len(f.Discovered) == 0 {
 		return errors.New("targets must not be empty")
 	}
 	return validateStaticTargets(f)
@@ -368,16 +387,33 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 	if hook := targetsValidatedHook.Load(); hook != nil {
 		(*hook)()
 	}
+	if err := checkTargetsAgainst(f.Targets, c); err != nil {
+		return err
+	}
+	// An entry of discovered_targets is checked as the target it makes of a
+	// sample address, as when the file was read.
+	for i := range f.Discovered {
+		e := &f.Discovered[i]
+		if err := checkTargetsAgainst([]model.StaticTarget{e.Sample}, c); err != nil {
+			return fmt.Errorf("%s entry %q, checked with the address %s in place of a discovered one: %w", DiscoveredTargetsKey, e.Name, discoverySampleAddress, err)
+		}
+	}
+	return nil
+}
+
+// checkTargetsAgainst is what ValidateStaticTargetsAgainst checks of each
+// target.
+func checkTargetsAgainst(targets []model.StaticTarget, c *model.Config) error {
 	// A target's credential file may be a reference to a secret store of
 	// the configuration, as a collector's may.
 	references := fetch.NewSecretReferences(c.SecretStores)
-	for i := range f.Targets {
-		if err := references.Check("target", f.Targets[i].Name, &f.Targets[i]); err != nil {
+	for i := range targets {
+		if err := references.Check("target", targets[i].Name, &targets[i]); err != nil {
 			return err
 		}
 	}
-	for i := range f.Targets {
-		t := &f.Targets[i]
+	for i := range targets {
+		t := &targets[i]
 		if !t.ExportViaOTLP {
 			continue
 		}
@@ -395,8 +431,8 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 	// The placeholders of a collector are found once for the check, for its
 	// first target, and not again for each of its others.
 	var params fetch.RequestParamsCheck
-	for i := range f.Targets {
-		t := &f.Targets[i]
+	for i := range targets {
+		t := &targets[i]
 		collector := collectors[t.Collector]
 		if collector == nil {
 			return fmt.Errorf("target %q references unknown collector %q", t.Name, t.Collector)

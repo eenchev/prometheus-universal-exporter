@@ -139,7 +139,11 @@ from the exporter, as from any Kafka client.
 3. It asks every broker for the consumer groups that it coordinates
    (`ListGroups`). It then asks the broker that listed each chosen group,
    its coordinator, for the group's state and members (`DescribeGroups`)
-   and for its committed offsets (`OffsetFetch`).
+   and for its committed offsets (`OffsetFetch`). A group that
+   `DescribeGroups` describes as dead is asked again with
+   `ConsumerGroupDescribe`, when its coordinator speaks it: Kafka 4 answers
+   so of a group of its new consumer protocol (KIP-848,
+   `group.protocol=consumer`).
 4. It asks each partition's leader for the partition's newest and oldest
    offsets (`ListOffsets`). It does so after the committed offsets, so that
    a lag read at once is not negative.
@@ -155,7 +159,9 @@ scrape ends.
 Each request is sent at the version a Kafka 2.1 client sends: Metadata v7,
 ListOffsets v4, OffsetFetch v5, DescribeGroups v2, ListGroups v2,
 ApiVersions v2, DescribeConfigs v2 and DescribeLogDirs v1. A broker is
-asked to speak the last two only when the collector sends them. Kafka 4
+asked to speak the last two only when the collector sends them.
+ConsumerGroupDescribe v0 is sent only to a coordinator that says it speaks
+it, Kafka 3.7 and later. Kafka 4
 keeps those versions and removed
 the older ones, so one version of each reaches every broker from 2.1 on, and
 Redpanda and the cloud services that speak Kafka's protocol too.
@@ -183,7 +189,7 @@ Redpanda and the cloud services that speak Kafka's protocol too.
      ]}
   ],
   "groups": [
-    {"group": "billing", "protocol_type": "consumer", "state": "Stable", "members": 2, "coordinator": 2, "error": "",
+    {"group": "billing", "protocol_type": "consumer", "group_protocol": "classic", "state": "Stable", "members": 2, "coordinator": 2, "error": "",
      "topics": [
        {"group": "billing", "topic": "orders", "committed_sum": 145, "lag": 10, "lag_seconds": 42.5,
         "partitions": [{"partition": 0, "committed": 90, "lag": 10, "lag_seconds": 42.5, "error": ""}]}
@@ -249,6 +255,11 @@ for a topic kept for ever:
 
 **Groups.** These are the chosen groups, by name, with every topic of
 theirs that is chosen.
+
+- `group_protocol` is the rebalance protocol the group runs: `classic`, or
+  `consumer` for Kafka 4's (KIP-848), and `""` when its coordinator
+  described it neither way. A `consumer` group's `state` is one of Kafka's
+  for it, such as `Stable`, `Reconciling`, `Assigning` or `Empty`.
 
 - `lag` is the newest offset minus the committed one, and a topic's `lag`
   is the sum over its partitions. A committed offset past the newest, which
@@ -461,10 +472,6 @@ done here: see [Limitations](#limitations).
 - **Lag in seconds is an estimate** from the scrapes, not a message's own
   timestamp, and it starts again with the exporter (see
   [Lag in seconds](#lag-in-seconds)).
-- **The groups of Kafka 4's new consumer protocol** (KIP-848, `group.protocol=consumer`)
-  are described by a request the type does not send. Their committed
-  offsets and lag are read, but their `state` and `members` may be `null`,
-  with an `error`.
 
 ## Troubleshooting
 

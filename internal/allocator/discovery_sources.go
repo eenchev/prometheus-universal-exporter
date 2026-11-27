@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/kubeapi"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -30,12 +31,8 @@ type TargetGroup struct {
 	Labels  map[string]string `json:"labels" yaml:"labels"`
 }
 
-// discovered is one target a source found: its address and its labels,
-// the source's own and those its labels mapping set.
-type discovered struct {
-	Address string            `json:"address"`
-	Labels  map[string]string `json:"labels,omitempty"`
-}
+// discovered is one target a source found (internal/discovery).
+type discovered = discovery.Target
 
 // parseGroupsJSON reads a JSON list of target groups, strictly: a key
 // Prometheus would refuse is refused.
@@ -96,7 +93,7 @@ func flatten(groups []TargetGroup, mapping map[string]string, limit int) ([]disc
 	}
 	out := make([]discovered, 0, n)
 	for _, g := range groups {
-		labels := mapLabels(g.Labels, mapping)
+		labels := discovery.MapLabels(g.Labels, mapping)
 		for _, target := range g.Targets {
 			out = append(out, discovered{Address: target, Labels: labels})
 		}
@@ -118,24 +115,6 @@ func groupsOf(found []discovered) []TargetGroup {
 			continue
 		}
 		out = append(out, TargetGroup{Targets: []string{d.Address}, Labels: d.Labels})
-	}
-	return out
-}
-
-// mapLabels is labels with mapping applied: each label mapping names set
-// to the value of the source label it names, when that is not empty.
-func mapLabels(labels, mapping map[string]string) map[string]string {
-	if len(labels) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(labels)+len(mapping))
-	for name, value := range labels {
-		out[name] = value
-	}
-	for name, from := range mapping {
-		if value := labels[from]; value != "" {
-			out[name] = value
-		}
 	}
 	return out
 }

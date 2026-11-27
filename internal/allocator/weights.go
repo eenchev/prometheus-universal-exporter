@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -110,7 +111,7 @@ func stripStaticWeights(raw []byte) ([]byte, staticWeights, error) {
 	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return raw, w, nil //nolint:nilerr // the loader refuses the text, in its own words
 	}
-	root := resolved(doc.Content[0])
+	root := config.ResolvedNode(doc.Content[0])
 	found := false
 	var targets *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {

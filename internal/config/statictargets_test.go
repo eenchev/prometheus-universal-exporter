@@ -191,11 +191,12 @@ func TestAParamPlaceholderFromTheEnvironmentIsRefused(t *testing.T) {
 	}
 }
 
-// The exporter discovers no targets: a static target file with the target
-// allocator's discovered_targets is refused, naming the allocator, rather
-// than read with its discovered targets quietly left out.
-func TestTheExporterRefusesDiscoveredTargets(t *testing.T) {
-	path := testutil.WriteFile(t, "targets.yaml", `interval: 1m
+// The exporter asks dns_sd sources alone: a discovered_targets entry with
+// another kind of source is refused, naming the allocator, rather than read
+// with its targets quietly left out.
+func TestTheExporterRefusesTheAllocatorsSources(t *testing.T) {
+	for kind, source := range map[string]string{"file_sd": "file_sd: {files: [nodes.json]}", "http_sd": "http_sd: {url: http://cmdb.example/sd}", "kubernetes": "kubernetes: {port: metrics}"} {
+		path := testutil.WriteFile(t, "targets.yaml", `interval: 1m
 targets:
   - name: legacy
     collector: c
@@ -204,11 +205,12 @@ discovered_targets:
   - name: node
     collector: c
     discovery:
-      - file_sd: {files: [nodes.json]}
+      - `+source+`
 `)
-	_, err := LoadStaticTargets(path)
-	if err == nil || !strings.Contains(err.Error(), "line 6: discovered_targets is read by the target allocator (pue-allocator --static-targets-file)") {
-		t.Fatalf("got %v, want discovered_targets refused for the allocator's", err)
+		_, err := LoadStaticTargets(path)
+		if err == nil || !strings.Contains(err.Error(), "discovered_targets entry 0: entry \"node\": discovery source 0 is a "+kind+" source, which the target allocator (pue-allocator --static-targets-file) asks") {
+			t.Errorf("%s: got %v", kind, err)
+		}
 	}
 }
 

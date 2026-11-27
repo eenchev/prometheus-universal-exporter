@@ -1757,6 +1757,9 @@ type Manager struct {
 	// bundle. What a reload puts in force carries it (install). It changes
 	// with the files, under reloadMu (ReloadReplacing, SetGeneration).
 	generation string
+	// discovery is the dns_sd sources of the static target file's
+	// discovered_targets (staticdiscoveryrun.go).
+	discovery staticDiscovery
 	// lastReload is what the last reload that put something in force
 	// changed (reloadchanges.go), nil until one has.
 	lastReload atomic.Pointer[ReloadSummary]
@@ -1989,6 +1992,7 @@ func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 	m.targetPath = path
 	if f != nil {
 		m.current.Store(&inForce{config: m.Get(), targets: f})
+		m.syncDiscovery(f)
 	}
 	if path != "" && f != nil {
 		m.Reloads.loaded(ReloadFileStaticTargets)
@@ -2206,6 +2210,9 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 		pairConfig = cfg
 	}
 	if targets != nil {
+		// The targets its discovered_targets make of what their sources last
+		// found are put in force with it.
+		targets = m.discovered(targets, pairConfig)
 		pairTargets = targets
 		// The files the checks below open for the file just read are stamped
 		// before they are read, as the configuration's are, and kept if it is
@@ -2424,8 +2431,11 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	}
 	if f != nil {
 		m.installedTargets(trigger, f, targetsChanged)
+		m.syncDiscovery(f)
 	}
-	m.lastReload.Store(&ReloadSummary{At: time.Now(), Changes: joinReloadChanges(collectorsChanged, targetsChanged), Lists: changed})
+	if trigger != discoveryTrigger {
+		m.lastReload.Store(&ReloadSummary{At: time.Now(), Changes: joinReloadChanges(collectorsChanged, targetsChanged), Lists: changed})
+	}
 	for _, told := range m.installed {
 		told()
 	}
@@ -2460,6 +2470,10 @@ func (m *Manager) installedConfig(trigger string, c *model.Config, changes strin
 // installedTargets records and logs that f was put in force, with changes,
 // the static targets it added, removed and changed. reloadMu is held.
 func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile, changes string) {
+	if trigger == discoveryTrigger {
+		m.logger.Info("discovered static targets changed", "targets", len(f.Targets), "discovered", len(f.Targets)-f.Written, "changes", changes)
+		return
+	}
 	m.targetsWaits, m.targetsUnread, m.targetsRefusal = false, false, ""
 	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
 	m.Reloads.record(ReloadFileStaticTargets, true)

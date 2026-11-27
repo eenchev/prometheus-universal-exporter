@@ -185,7 +185,7 @@ New here? [Getting started](docs/GETTING-STARTED.md) takes you from nothing to P
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.
 - [Python](docs/PYTHON.md) — the transform and pre-script API.
 - [Self-metrics](docs/SELF-METRICS.md) — what the exporter reports about itself.
-- [Static targets](docs/STATIC-TARGETS.md) — targets the exporter scrapes on their own intervals and serves on one endpoint.
+- [Static targets](docs/STATIC-TARGETS.md) — targets the exporter scrapes on their own intervals and serves on one endpoint, written out or found by DNS.
 - [Target allocator](docs/ALLOCATOR.md) — `pue-allocator`, which serves exporter replicas their configuration and their share of the static targets, and serves Prometheus the probe targets already assigned to a replica.
 - [OTLP](docs/OTLP.md) — OTLP export, its retries and compression.
 - [Logging](docs/LOGGING.md) — the log format.

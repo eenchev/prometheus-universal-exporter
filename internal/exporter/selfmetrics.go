@@ -306,7 +306,7 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_secret_store_stale_reads_total":             "Credentials read from a secret this entry of secret_stores answered more than cache_ttl ago, because the store could not be asked again; max_stale bounds how long one is.",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
-	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
+	"http_exporter_static_targets":                             "Static targets in force, those the static target file writes and those its discovered_targets found, served on the static targets endpoint.",
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_static_targets_scrape_seconds_total":        "Seconds spent on static target scrapes, from the start of each to its end, waiting for a slot included; its rate is the average number of static target scrapes in progress.",
 	"http_exporter_probes_seconds_total":                       "Seconds spent serving probes, from the start of each to its answer being ready, cache hits and shared probes included; its rate is the average number of probes in progress.",
@@ -625,6 +625,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	// started.
 	started := exporterStart()
 	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
+	out = append(out, countingSince(s.manager.DiscoveryMetrics(), started)...)
 	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, countingSince(s.otlpLogStatusMetrics(), started)...)
 	out = append(out, countingSince(s.otlpTraceStatusMetrics(), started)...)

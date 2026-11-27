@@ -242,6 +242,16 @@ func TestTheKeysHeldToTextAloneAreTheSchemas(t *testing.T) {
 			"targets[].request.login.keep_file", "targets[].request.login.steps[].method", "targets[].request.login.steps[].url", "targets[].request.login.refresh_steps[].method", "targets[].request.login.refresh_steps[].url",
 			"targets[].request.method", "targets[].request.retry.codes[]"}},
 	} {
+		// An entry of discovered_targets holds every key of a target but
+		// target to what the target holds it to, and has keys of its own.
+		if tc.file == reflect.TypeOf(model.StaticTargetFile{}) {
+			for _, key := range slices.Clone(tc.want) {
+				if rest, ok := strings.CutPrefix(key, "targets[]."); ok && rest != "target" {
+					tc.want = append(tc.want, "discovered_targets[]."+rest)
+				}
+			}
+			tc.want = append(tc.want, "discovered_targets[].discovery[].dns_sd.names[]", "discovered_targets[].discovery[].dns_sd.type", "discovered_targets[].discovery[].labels.*", "discovered_targets[].discovery[].name", "discovered_targets[].shard_key", "discovered_targets[].target_template")
+		}
 		got := model.SortedKeys(textOnlyKeys(tc.file))
 		slices.Sort(tc.want)
 		if !slices.Equal(got, tc.want) {

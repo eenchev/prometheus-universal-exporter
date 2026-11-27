@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/discovery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
@@ -182,7 +183,7 @@ func checkProbeJob(job *ProbeJob, c *model.Config, base string, defaultRefresh t
 	if err := checkDiscovery(job.Discovery, base, defaultRefresh); err != nil {
 		return err
 	}
-	if err := checkTargetTemplate(job.TargetTemplate); err != nil {
+	if err := discovery.CheckTemplate(job.TargetTemplate); err != nil {
 		return err
 	}
 	if job.TargetTemplate != "" && len(job.Discovery) == 0 {

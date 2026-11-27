@@ -34,6 +34,18 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `kafka`: `log_dirs: true` reports the disk each broker's log directories,
   each topic and each partition take, and `topic_configs` the topics'
   settings it names, such as `retention.ms` and `cleanup.policy`.
+- `kafka`: groups of Kafka 4's consumer protocol (KIP-848,
+  `group.protocol=consumer`) have their state and members, asked with
+  `ConsumerGroupDescribe`, and each group says its `group_protocol`.
+- The static target file's `discovered_targets` entries of `dns_sd` sources
+  are read by the exporter itself, without the target allocator: it looks
+  the names up, SRV, A or AAAA, on each source's refresh interval, and puts
+  the targets they make in force beside the file's own as they change, with
+  the allocator's names, labels and checks. Each source is in the
+  self-metrics as `http_exporter_discovery_targets`,
+  `http_exporter_discovery_refreshes_total` and
+  `http_exporter_discovery_last_success_timestamp_seconds`
+  ([Discovering targets by DNS](docs/STATIC-TARGETS.md#discovering-targets-by-dns)).
 - `kafka`: `sasl_mechanism: AWS_MSK_IAM` logs in to Amazon MSK with IAM,
   signing with the credentials the AWS SDK finds, in the builds that have
   the `s3file` type ([Amazon MSK with IAM](docs/KAFKA.md#amazon-msk-with-iam)).

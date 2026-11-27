@@ -35,6 +35,8 @@ var (
 	kafkaOffsetFetch      = kafkaAPI{9, "OffsetFetch", 5}
 	kafkaDescribeGroups   = kafkaAPI{15, "DescribeGroups", 2}
 	kafkaListGroups       = kafkaAPI{16, "ListGroups", 2}
+	kafkaDescribeConfigs  = kafkaAPI{32, "DescribeConfigs", 2}
+	kafkaDescribeLogDirs  = kafkaAPI{35, "DescribeLogDirs", 1}
 	kafkaSaslHandshake    = kafkaAPI{17, "SaslHandshake", 1}
 	kafkaAPIVersions      = kafkaAPI{18, "ApiVersions", 2}
 	kafkaSaslAuthenticate = kafkaAPI{36, "SaslAuthenticate", 0}
@@ -42,7 +44,9 @@ var (
 
 // kafkaAPIs are the APIs a scrape needs a broker to speak at their
 // versions; SaslAuthenticate, sent at version 1 where the broker speaks
-// it, and the SASL ones, needed only with a login, are checked apart.
+// it, the SASL ones, needed only with a login, and DescribeLogDirs and
+// DescribeConfigs, needed only with request.log_dirs and
+// request.topic_configs, are checked apart.
 var kafkaAPIs = []kafkaAPI{kafkaMetadata, kafkaListOffsets, kafkaListGroups, kafkaDescribeGroups, kafkaOffsetFetch}
 
 // kafkaClientID is the client ID every request carries, which a broker
@@ -257,6 +261,7 @@ var kafkaErrorNames = map[int16]string{
 	33: "UNSUPPORTED_SASL_MECHANISM",
 	34: "ILLEGAL_SASL_STATE",
 	35: "UNSUPPORTED_VERSION",
+	56: "KAFKA_STORAGE_ERROR",
 	58: "SASL_AUTHENTICATION_FAILED",
 	69: "GROUP_ID_NOT_FOUND",
 	74: "FENCED_LEADER_EPOCH",

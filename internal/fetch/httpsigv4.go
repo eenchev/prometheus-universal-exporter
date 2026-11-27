@@ -9,50 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 // sigV4Built says this build signs with AWS Signature Version 4.
 func sigV4Built() error { return nil }
-
-// sigV4Configs are the SDK's configurations, by region asked for: each
-// loaded once, with the provider of the credentials, which keeps them until
-// they expire.
-var sigV4Configs = struct {
-	sync.Mutex
-	loaded map[string]*aws.Config
-}{loaded: map[string]*aws.Config{}}
-
-// sigV4Now is the clock requests are signed by; a test sets it.
-var sigV4Now = time.Now
-
-// sigV4Configuration is the SDK's configuration for region, "" for the one
-// the SDK's own configuration says.
-func sigV4Configuration(ctx context.Context, region string) (*aws.Config, error) {
-	sigV4Configs.Lock()
-	defer sigV4Configs.Unlock()
-	if cfg := sigV4Configs.loaded[region]; cfg != nil {
-		return cfg, nil
-	}
-	var options []func(*config.LoadOptions) error
-	if region != "" {
-		options = append(options, config.WithRegion(region))
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, options...)
-	if err != nil {
-		return nil, fmt.Errorf("loading the AWS SDK's configuration: %w", err)
-	}
-	if cfg.Region == "" {
-		return nil, errors.New("no AWS region is known; set request.aws_sigv4.region, or AWS_REGION")
-	}
-	sigV4Configs.loaded[region] = &cfg
-	return &cfg, nil
-}
 
 // sigV4Credentials are the credentials a request of s is signed with: the
 // static access key of its files, read at each request, or those the SDK's
@@ -77,7 +40,7 @@ func sigV4Credentials(ctx context.Context, s *SigV4Config) (aws.Credentials, str
 		if region == "" {
 			cfg, err := sigV4Configuration(ctx, "")
 			if err != nil {
-				return aws.Credentials{}, "", err
+				return aws.Credentials{}, "", sigV4RegionError(err)
 			}
 			region = cfg.Region
 		}
@@ -85,13 +48,22 @@ func sigV4Credentials(ctx context.Context, s *SigV4Config) (aws.Credentials, str
 	}
 	cfg, err := sigV4Configuration(ctx, s.Region)
 	if err != nil {
-		return aws.Credentials{}, "", err
+		return aws.Credentials{}, "", sigV4RegionError(err)
 	}
 	credentials, err := cfg.Credentials.Retrieve(ctx)
 	if err != nil {
 		return aws.Credentials{}, "", fmt.Errorf("finding AWS credentials: %w", err)
 	}
 	return credentials, cfg.Region, nil
+}
+
+// sigV4RegionError words a configuration without a region for
+// request.aws_sigv4.
+func sigV4RegionError(err error) error {
+	if errors.Is(err, errNoAWSRegion) {
+		return errors.New("no AWS region is known; set request.aws_sigv4.region, or AWS_REGION")
+	}
+	return err
 }
 
 // signWithSigV4 signs req, whose body is body, for the service and region

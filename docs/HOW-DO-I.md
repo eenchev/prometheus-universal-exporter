@@ -37,6 +37,8 @@ that covers it, usually with an example to copy. New here? Start with
 | Read how deep a RabbitMQ queue is when its management API is closed | [AMQP](AMQP.md), in a build with the opt-in type |
 | Watch a NATS server, and a JetStream consumer's lag | [NATS](NATS.md), in a build with the opt-in type |
 | Watch a Kafka cluster and its consumer groups' lag, as kafka_exporter does | [Kafka](KAFKA.md), in a build with the opt-in type |
+| Alert on how many seconds a Kafka consumer group is behind | [Kafka: lag in seconds](KAFKA.md#lag-in-seconds) |
+| Read an Amazon MSK cluster that takes IAM logins | [Kafka: Amazon MSK with IAM](KAFKA.md#amazon-msk-with-iam) |
 | Remember something from one scrape to the next in a script | [State between runs](PYTHON.md#state-between-runs) |
 | Read series from Graphite | [Graphite](GRAPHITE.md) |
 | Read Kubernetes objects | [Kubernetes objects](KUBERNETES.md) |

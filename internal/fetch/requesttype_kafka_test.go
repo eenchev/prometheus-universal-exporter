@@ -140,19 +140,19 @@ func TestAKafkaScrapeReadsTheCluster(t *testing.T) {
 		t.Fatalf("topics %s", kafkaJSON(t, doc.Topics))
 	}
 	orders := doc.Topics[0]
-	want := `{"name":"orders","internal":false,"error":"","partition_count":3,"replication_factor":3,"offline":1,"under_replicated":2,"not_preferred_leader":1,"messages":null,"partitions":[` +
-		`{"partition":0,"leader":1,"replicas":[1,2,3],"isr":[1,2,3],"offline_replicas":[],"preferred_leader":true,"under_replicated":false,"offline":false,"newest":100,"oldest":10,"error":""},` +
-		`{"partition":1,"leader":3,"replicas":[2,3,1],"isr":[3,1],"offline_replicas":[],"preferred_leader":false,"under_replicated":true,"offline":false,"newest":50,"oldest":0,"error":""},` +
-		`{"partition":2,"leader":-1,"replicas":[3,1,2],"isr":[],"offline_replicas":[3,1,2],"preferred_leader":false,"under_replicated":true,"offline":true,"newest":null,"oldest":null,"error":""}]}`
+	want := `{"name":"orders","internal":false,"error":"","partition_count":3,"replication_factor":3,"offline":1,"under_replicated":2,"not_preferred_leader":1,"messages":null,"disk_bytes":null,"configs":null,"partitions":[` +
+		`{"partition":0,"leader":1,"replicas":[1,2,3],"isr":[1,2,3],"offline_replicas":[],"preferred_leader":true,"under_replicated":false,"offline":false,"newest":100,"oldest":10,"size_bytes":null,"error":""},` +
+		`{"partition":1,"leader":3,"replicas":[2,3,1],"isr":[3,1],"offline_replicas":[],"preferred_leader":false,"under_replicated":true,"offline":false,"newest":50,"oldest":0,"size_bytes":null,"error":""},` +
+		`{"partition":2,"leader":-1,"replicas":[3,1,2],"isr":[],"offline_replicas":[3,1,2],"preferred_leader":false,"under_replicated":true,"offline":true,"newest":null,"oldest":null,"size_bytes":null,"error":""}]}`
 	if got := kafkaJSON(t, orders); got != want {
 		t.Errorf("orders\n%s\nwant\n%s", got, want)
 	}
 	if p := doc.Topics[1]; p.Messages == nil || *p.Messages != 0 || p.Offline != 0 || p.UnderReplicated != 0 {
 		t.Errorf("payments %s", kafkaJSON(t, p))
 	}
-	want = `[{"group":"audit","protocol_type":"consumer","state":"Empty","members":0,"coordinator":3,"error":"","topics":[{"group":"audit","topic":"payments","committed_sum":3,"lag":4,"partitions":[{"partition":0,"committed":3,"lag":4,"error":""}]}]},` +
-		`{"group":"billing","protocol_type":"consumer","state":"Stable","members":2,"coordinator":2,"error":"","topics":[{"group":"billing","topic":"orders","committed_sum":145,"lag":10,"partitions":[{"partition":0,"committed":90,"lag":10,"error":""},{"partition":1,"committed":55,"lag":0,"error":""},{"partition":2,"committed":-1,"lag":null,"error":""}]}]},` +
-		`{"group":"locked","protocol_type":"consumer","state":null,"members":null,"coordinator":1,"error":"describing group \"locked\": GROUP_AUTHORIZATION_FAILED","topics":[{"group":"locked","topic":"orders","committed_sum":100,"lag":0,"partitions":[{"partition":0,"committed":100,"lag":0,"error":""}]}]}]`
+	want = `[{"group":"audit","protocol_type":"consumer","state":"Empty","members":0,"coordinator":3,"error":"","topics":[{"group":"audit","topic":"payments","committed_sum":3,"lag":4,"lag_seconds":null,"partitions":[{"partition":0,"committed":3,"lag":4,"lag_seconds":null,"error":""}]}]},` +
+		`{"group":"billing","protocol_type":"consumer","state":"Stable","members":2,"coordinator":2,"error":"","topics":[{"group":"billing","topic":"orders","committed_sum":145,"lag":10,"lag_seconds":null,"partitions":[{"partition":0,"committed":90,"lag":10,"lag_seconds":null,"error":""},{"partition":1,"committed":55,"lag":0,"lag_seconds":0,"error":""},{"partition":2,"committed":-1,"lag":null,"lag_seconds":null,"error":""}]}]},` +
+		`{"group":"locked","protocol_type":"consumer","state":null,"members":null,"coordinator":1,"error":"describing group \"locked\": GROUP_AUTHORIZATION_FAILED","topics":[{"group":"locked","topic":"orders","committed_sum":100,"lag":0,"lag_seconds":0,"partitions":[{"partition":0,"committed":100,"lag":0,"lag_seconds":0,"error":""}]}]}]`
 	if got := kafkaJSON(t, doc.Groups); got != want {
 		t.Errorf("groups\n%s\nwant\n%s", got, want)
 	}
@@ -491,14 +491,27 @@ func TestAKafkaTargetAndKeysAreChecked(t *testing.T) {
 		"sets request.bearer_token_file beside request.user": func(c *model.Collector, _ *KafkaConfig) {
 			c.Request.BearerTokenFile, c.Request.Username, c.Request.PasswordFile = "/t", "u", "/p"
 		},
-		"is OAUTHBEARER, which sends a token":                       func(_ *model.Collector, r *KafkaConfig) { r.SASLMechanism = kafkaOAuthBearer },
-		"is SCRAM-SHA-256, which sends a user and a password":       func(_ *model.Collector, r *KafkaConfig) { r.SASLMechanism = kafkaScram256 },
-		`request.include_topics[1] "(" is not a regular expression`: func(_ *model.Collector, r *KafkaConfig) { r.IncludeTopics = []string{"a", "("} },
-		"request.exclude_groups[0] is longer than 1000":             func(_ *model.Collector, r *KafkaConfig) { r.ExcludeGroups = []string{strings.Repeat("a", 1001)} },
-		"request.exclude_topics[0] is empty":                        func(_ *model.Collector, r *KafkaConfig) { r.ExcludeTopics = []string{""} },
-		"request.include_groups has more than 100 patterns":         func(_ *model.Collector, r *KafkaConfig) { r.IncludeGroups = slices.Repeat([]string{"a"}, 101) },
-		"sets only one of request.username and password_file":       func(c *model.Collector, _ *KafkaConfig) { c.Request.Username = "monitor" },
-		"request.bearer_token_file has a placeholder":               func(c *model.Collector, _ *KafkaConfig) { c.Request.BearerTokenFile = "/{{param_x}}" },
+		"is OAUTHBEARER, which sends a token":                                func(_ *model.Collector, r *KafkaConfig) { r.SASLMechanism = kafkaOAuthBearer },
+		"is SCRAM-SHA-256, which sends a user and a password":                func(_ *model.Collector, r *KafkaConfig) { r.SASLMechanism = kafkaScram256 },
+		`request.include_topics[1] "(" is not a regular expression`:          func(_ *model.Collector, r *KafkaConfig) { r.IncludeTopics = []string{"a", "("} },
+		"request.exclude_groups[0] is longer than 1000":                      func(_ *model.Collector, r *KafkaConfig) { r.ExcludeGroups = []string{strings.Repeat("a", 1001)} },
+		"request.exclude_topics[0] is empty":                                 func(_ *model.Collector, r *KafkaConfig) { r.ExcludeTopics = []string{""} },
+		"request.include_groups has more than 100 patterns":                  func(_ *model.Collector, r *KafkaConfig) { r.IncludeGroups = slices.Repeat([]string{"a"}, 101) },
+		"sets only one of request.username and password_file":                func(c *model.Collector, _ *KafkaConfig) { c.Request.Username = "monitor" },
+		"request.bearer_token_file has a placeholder":                        func(c *model.Collector, _ *KafkaConfig) { c.Request.BearerTokenFile = "/{{param_x}}" },
+		"sets request.aws_region without request.sasl_mechanism AWS_MSK_IAM": func(_ *model.Collector, r *KafkaConfig) { r.AWSRegion = "eu-west-1" },
+		`request.aws_region is "EU West"`:                                    func(_ *model.Collector, r *KafkaConfig) { r.SASLMechanism, r.AWSRegion = kafkaAWSMSKIAM, "EU West" },
+		`request.topic_configs[1] is "Retention MS"`: func(_ *model.Collector, r *KafkaConfig) {
+			r.TopicConfigs = []string{"retention.ms", "Retention MS"}
+		},
+		`request.topic_configs names "retention.ms" twice`: func(_ *model.Collector, r *KafkaConfig) {
+			r.TopicConfigs = []string{"retention.ms", "retention.ms"}
+		},
+		"request.topic_configs names more than 100 settings": func(_ *model.Collector, r *KafkaConfig) {
+			for i := range 101 {
+				r.TopicConfigs = append(r.TopicConfigs, fmt.Sprint("s", i))
+			}
+		},
 	} {
 		own := KafkaConfig{}
 		c := &model.Collector{Name: "kafka", Request: model.RequestConfig{Type: RequestTypeKafka}}

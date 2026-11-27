@@ -123,7 +123,7 @@ empty by default, which builds every request type, or a comma-separated list
 such as `http` to build only those. See
 [Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
 `OPT_IN_REQUEST_TYPES` adds opt-in types, which the published image leaves
-out: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp`, `nats` and `kafka`, none of which adds a dependency.
+out: `smtp`, `modbus`, `mqtt`, `websocket`, `ftp`, `imap`, `pop3`, `radius`, `whois`, `sip`, `amqp`, `nats` and `kafka`, none of which adds a dependency. `kafka`'s `AWS_MSK_IAM` login signs with the AWS SDK that `s3file` links, in the builds that have both.
 `SQL_DRIVERS` adds the `sql` type's opt-in drivers.
 
 ## What the image contains

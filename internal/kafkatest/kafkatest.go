@@ -12,7 +12,9 @@
 //   - ListGroups, of the groups each broker coordinates, DescribeGroups
 //     and OffsetFetch;
 //   - ListOffsets, of the partitions each broker leads, NOT_LEADER for the
-//     rest.
+//     rest;
+//   - DescribeLogDirs, of each broker's one log directory and the replicas
+//     it holds, and DescribeConfigs, of the topics' settings.
 //
 // A test may answer a request itself, with any bytes, to play a broken or
 // hostile broker, and stop a broker to play one that is down. It records
@@ -53,6 +55,8 @@ const (
 	ListGroups       int16 = 16
 	SaslHandshake    int16 = 17
 	APIVersions      int16 = 18
+	DescribeConfigs  int16 = 32
+	DescribeLogDirs  int16 = 35
 	SaslAuthenticate int16 = 36
 )
 
@@ -61,6 +65,7 @@ const (
 	NotLeader          int16 = 6
 	TopicAuthorization int16 = 29
 	GroupAuthorization int16 = 30
+	StorageError       int16 = 56
 	GroupIDNotFound    int16 = 69
 )
 
@@ -81,9 +86,12 @@ type Cluster struct {
 	// Token the token of OAUTHBEARER, and Iterations the iterations a SCRAM
 	// login is asked to hash the password with, 4096 when 0. BadSignature
 	// makes a SCRAM login's last answer a signature of another password.
-	Mechanisms   []string
-	Users        map[string]string
-	Token        string
+	Mechanisms []string
+	Users      map[string]string
+	Token      string
+	// CheckToken, when set, judges an OAUTHBEARER token in place of Token,
+	// and says why it is refused, "" for one taken.
+	CheckToken   func(token string) string
 	Iterations   int
 	BadSignature bool
 	// Versions narrow the versions ApiVersions says of an API, by its key.
@@ -106,6 +114,12 @@ type Broker struct {
 	Host string
 	Addr string
 	Rack *string
+	// LogDir is the one log directory DescribeLogDirs lists, /var/lib/kafka
+	// when empty, and LogDirError its error. HideLogDirs lists none, as
+	// Kafka answers a login without the permission to see them.
+	LogDir      string
+	LogDirError int16
+	HideLogDirs bool
 	// CAFile verifies a TLS broker's certificate.
 	CAFile   string
 	listener net.Listener
@@ -117,16 +131,25 @@ type Topic struct {
 	Internal   bool
 	Error      int16
 	Partitions []Partition
+	// Configs are its settings, nil for one shown as null; Sensitive names
+	// those DescribeConfigs marks sensitive, and ConfigError fails it for the
+	// topic.
+	Configs     map[string]*string
+	Sensitive   []string
+	ConfigError int16
 }
 
 // Partition is a partition: its leader, -1 for none, its replicas, in sync
-// and offline, its newest and oldest offsets, and the error the metadata
-// gives it.
+// and offline, its newest and oldest offsets, the error the metadata gives
+// it, and the bytes each replica takes, by broker, which DescribeLogDirs
+// lists; Future, by broker, is a copy a broker is moving to another
+// directory.
 type Partition struct {
 	Leader                 int32
 	Replicas, ISR, Offline []int32
 	Newest, Oldest         int64
 	Error                  int16
+	Sizes, Future          map[int32]int64
 }
 
 // Group is a consumer group, coordinated by Coordinator, which lists it,
@@ -323,7 +346,7 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 	w := &writer{}
 	switch api {
 	case APIVersions:
-		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, SaslAuthenticate: {0, 2}}
+		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, DescribeConfigs: {1, 4}, DescribeLogDirs: {1, 4}, SaslAuthenticate: {0, 2}}
 		for key, versions := range c.Versions {
 			spoken[key] = versions
 		}
@@ -510,10 +533,107 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 				w.i32(0)
 			}
 		}
+	case DescribeLogDirs:
+		w.i32(0)
+		b := c.broker(id)
+		if b.HideLogDirs {
+			w.count(0)
+			break
+		}
+		w.count(1)
+		w.i16(b.LogDirError)
+		w.str(cmpOr(b.LogDir, "/var/lib/kafka"))
+		type held struct {
+			index  int
+			size   int64
+			future bool
+		}
+		var topics []string
+		mine := map[string][]held{}
+		for _, t := range c.Topics {
+			for i, p := range t.Partitions {
+				if size, ok := p.Sizes[id]; ok {
+					mine[t.Name] = append(mine[t.Name], held{i, size, false})
+				}
+				if size, ok := p.Future[id]; ok {
+					mine[t.Name] = append(mine[t.Name], held{i, size, true})
+				}
+			}
+			if len(mine[t.Name]) > 0 {
+				topics = append(topics, t.Name)
+			}
+		}
+		w.count(len(topics))
+		for _, topic := range topics {
+			w.str(topic)
+			w.count(len(mine[topic]))
+			for _, h := range mine[topic] {
+				w.count(h.index)
+				w.i64(h.size)
+				w.i64(0)
+				w.bool(h.future)
+			}
+		}
+	case DescribeConfigs:
+		n := r.i32()
+		w.i32(0)
+		w.i32(n)
+		for range n {
+			r.i8() // resource_type
+			name := r.str()
+			var keys []string
+			for m := r.i32(); m > 0; m-- {
+				keys = append(keys, r.str())
+			}
+			var t *Topic
+			for i := range c.Topics {
+				if c.Topics[i].Name == name {
+					t = &c.Topics[i]
+				}
+			}
+			code := int16(3) // UNKNOWN_TOPIC_OR_PARTITION
+			if t != nil {
+				code = t.ConfigError
+			}
+			w.i16(code)
+			if code != 0 {
+				w.str("refused by the stand-in")
+			} else {
+				w.i16(-1)
+			}
+			w.i8(2)
+			w.str(name)
+			if code != 0 {
+				w.count(0)
+				continue
+			}
+			var shown []string
+			for _, key := range keys {
+				if _, ok := t.Configs[key]; ok {
+					shown = append(shown, key)
+				}
+			}
+			w.count(len(shown))
+			for _, key := range shown {
+				w.str(key)
+				w.nstr(t.Configs[key])
+				w.bool(false)
+				w.i8(1) // DYNAMIC_TOPIC_CONFIG
+				w.bool(slices.Contains(t.Sensitive, key))
+				w.count(0)
+			}
+		}
 	default:
 		return nil
 	}
 	return w.b
+}
+
+func cmpOr(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 func (c *Cluster) group(name string) *Group {
@@ -550,10 +670,16 @@ func (c *Cluster) authenticate(s *session, message []byte) ([]byte, string) {
 		// A token not taken is answered as Kafka answers it: an error
 		// challenge, as JSON, with no error code, and the login failed at
 		// the client's %x01 after it.
+		token, framed := strings.CutPrefix(string(message), "n,,\x01auth=Bearer ")
+		token, ends := strings.CutSuffix(token, "\x01\x01")
+		taken := framed && ends && token == c.Token
+		if c.CheckToken != nil {
+			taken = framed && ends && c.CheckToken(token) == ""
+		}
 		switch {
 		case string(message) == "\x01" && s.challenged:
 			return nil, "Authentication failed: invalid token"
-		case string(message) != "n,,\x01auth=Bearer "+c.Token+"\x01\x01":
+		case !taken:
 			s.challenged = true
 			return []byte(`{"status":"invalid_token"}`), ""
 		}

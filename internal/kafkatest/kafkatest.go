@@ -10,7 +10,9 @@
 //     has mechanisms;
 //   - Metadata, of the brokers, topics and partitions the test gave it;
 //   - ListGroups, of the groups each broker coordinates, DescribeGroups
-//     and OffsetFetch;
+//     and OffsetFetch, and ConsumerGroupDescribe, a flexible version, of the
+//     groups of Kafka 4's consumer protocol, which DescribeGroups describes
+//     as dead, as Kafka 4 does;
 //   - ListOffsets, of the partitions each broker leads, NOT_LEADER for the
 //     rest;
 //   - DescribeLogDirs, of each broker's one log directory and the replicas
@@ -59,6 +61,9 @@ const (
 	DescribeConfigs  int16 = 32
 	DescribeLogDirs  int16 = 35
 	SaslAuthenticate int16 = 36
+	// ConsumerGroupDescribe is the one flexible version the stand-in
+	// speaks.
+	ConsumerGroupDescribe int16 = 69
 )
 
 // Error codes a test may set.
@@ -95,7 +100,8 @@ type Cluster struct {
 	CheckToken   func(token string) string
 	Iterations   int
 	BadSignature bool
-	// Versions narrow the versions ApiVersions says of an API, by its key.
+	// Versions narrow the versions ApiVersions says of an API, by its key;
+	// {-1, -1} leaves the API out.
 	Versions map[int16][2]int16
 	// Answer, when it returns bytes, is sent in place of a broker's answer
 	// to an API, framed as an answer with the request's correlation ID.
@@ -162,6 +168,10 @@ type Group struct {
 	Coordinator           int32
 	Offsets               map[string]map[int32]int64
 	DescribeError         int16
+	// Consumer makes it a group of Kafka 4's consumer protocol (KIP-848),
+	// which ConsumerGroupDescribe describes, failing with ConsumerError.
+	Consumer      bool
+	ConsumerError int16
 }
 
 // Asked is a request a broker was sent.
@@ -316,6 +326,9 @@ func (c *Cluster) serve(id int32, conn net.Conn) {
 		r := &reader{b: frame}
 		api, version, correlation := r.i16(), r.i16(), r.i32()
 		r.str() // client_id
+		if api == ConsumerGroupDescribe {
+			r.tags() // the flexible header's
+		}
 		c.mu.Lock()
 		c.asked = append(c.asked, Asked{Broker: id, API: api})
 		var body []byte
@@ -347,9 +360,12 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 	w := &writer{}
 	switch api {
 	case APIVersions:
-		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, DescribeConfigs: {1, 4}, DescribeLogDirs: {1, 4}, SaslAuthenticate: {0, 2}}
+		spoken := map[int16][2]int16{Metadata: {0, 12}, ListOffsets: {1, 8}, OffsetFetch: {1, 9}, DescribeGroups: {0, 5}, ListGroups: {0, 5}, SaslHandshake: {0, 1}, APIVersions: {0, 3}, DescribeConfigs: {1, 4}, DescribeLogDirs: {1, 4}, SaslAuthenticate: {0, 2}, ConsumerGroupDescribe: {0, 1}}
 		for key, versions := range c.Versions {
 			spoken[key] = versions
+			if versions == [2]int16{-1, -1} {
+				delete(spoken, key)
+			}
 		}
 		w.i16(0)
 		keys := make([]int16, 0, len(spoken))
@@ -451,6 +467,15 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 			}
 			w.i16(code)
 			w.str(name)
+			if code == 0 && g.Consumer {
+				// As Kafka 4 answers DescribeGroups below v6 of a group of the
+				// consumer protocol.
+				w.str("Dead")
+				w.str("")
+				w.str("")
+				w.i32(0)
+				continue
+			}
 			if code != 0 {
 				w.str("")
 				w.str("")
@@ -624,6 +649,71 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 				w.count(0)
 			}
 		}
+	case ConsumerGroupDescribe:
+		w.uvarint(0) // the flexible header's tagged fields
+		w.i32(0)
+		n := r.uvarint()
+		w.uvarint(n)
+		for n--; n > 0; n-- {
+			name := r.cstr()
+			g := c.group(name)
+			code, said := int16(0), ""
+			switch {
+			case g == nil || !g.Consumer:
+				code, said = GroupIDNotFound, "Group "+name+" is not a consumer group."
+			case g.Coordinator != id:
+				code = 16
+			case g.ConsumerError != 0:
+				code = g.ConsumerError
+			}
+			w.i16(code)
+			if said == "" {
+				w.uvarint(0)
+			} else {
+				w.cstr(said)
+			}
+			w.cstr(name)
+			if code != 0 {
+				w.cstr("Dead")
+				w.i32(0)
+				w.i32(0)
+				w.cstr("")
+				w.uvarint(1)
+				w.i32(0)
+				w.uvarint(0)
+				continue
+			}
+			w.cstr(g.State)
+			w.i32(5)
+			w.i32(5)
+			w.cstr("uniform")
+			w.uvarint(uint64(g.Members) + 1) //nolint:gosec // a few members
+			for m := range g.Members {
+				w.cstr("member-" + string(rune('a'+m)))
+				w.uvarint(0) // instance_id
+				w.cstr("eu-1a")
+				w.i32(5)
+				w.cstr("client")
+				w.cstr("/10.0.0.1")
+				w.uvarint(2)
+				w.cstr("orders")
+				w.uvarint(0) // subscribed_topic_regex
+				for range 2 {
+					w.uvarint(2)
+					w.b = append(w.b, make([]byte, 16)...)
+					w.cstr("orders")
+					w.uvarint(2)
+					w.i32(int32(m)) //nolint:gosec // a few members
+					w.uvarint(0)
+					w.uvarint(0)
+				}
+				w.uvarint(0)
+			}
+			w.i32(0)
+			w.uvarint(0)
+		}
+		r.i8() // include_authorized_operations
+		w.uvarint(0)
 	default:
 		return nil
 	}
@@ -761,6 +851,11 @@ func (w *writer) bool(v bool) {
 	}
 }
 
+// uvarint and cstr write a flexible version's varint and string.
+func (w *writer) uvarint(v uint64) { w.b = binary.AppendUvarint(w.b, v) }
+
+func (w *writer) cstr(s string) { w.uvarint(uint64(len(s)) + 1); w.b = append(w.b, s...) }
+
 // count writes the count of an array, or an index, as an int32.
 func (w *writer) count(n int) { w.i32(int32(n)) } //nolint:gosec // a stand-in's few items
 
@@ -806,6 +901,33 @@ func (r *reader) str() string {
 }
 
 func (r *reader) bytes() []byte { return r.take(int(r.i32())) }
+
+// uvarint, cstr and tags read a flexible version's varint, string and
+// tagged fields.
+func (r *reader) uvarint() uint64 {
+	v, n := binary.Uvarint(r.b)
+	if n <= 0 {
+		r.b = nil
+		return 0
+	}
+	r.b = r.b[n:]
+	return v
+}
+
+func (r *reader) cstr() string {
+	n := r.uvarint()
+	if n == 0 {
+		return ""
+	}
+	return string(r.take(int(n - 1))) //nolint:gosec // short
+}
+
+func (r *reader) tags() {
+	for n := r.uvarint(); n > 0; n-- {
+		r.uvarint()
+		r.take(int(r.uvarint())) //nolint:gosec // short
+	}
+}
 
 func atoi(s string) int32 {
 	n, _ := strconv.Atoi(s)

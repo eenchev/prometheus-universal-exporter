@@ -34,6 +34,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `kafka`: `log_dirs: true` reports the disk each broker's log directories,
   each topic and each partition take, and `topic_configs` the topics'
   settings it names, such as `retention.ms` and `cleanup.policy`.
+- `kafka`: groups of Kafka 4's consumer protocol (KIP-848,
+  `group.protocol=consumer`) have their state and members, asked with
+  `ConsumerGroupDescribe`, and each group says its `group_protocol`.
 - `kafka`: `sasl_mechanism: AWS_MSK_IAM` logs in to Amazon MSK with IAM,
   signing with the credentials the AWS SDK finds, in the builds that have
   the `s3file` type ([Amazon MSK with IAM](docs/KAFKA.md#amazon-msk-with-iam)).

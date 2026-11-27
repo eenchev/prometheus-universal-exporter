@@ -42,7 +42,7 @@ message and send no request that changes the cluster.
   user MUST be refused, a probe's with `400` before anything is sent and a
   static target's at load.
 - Every request MUST be sent at one version: Metadata 7, ListOffsets 4,
-  OffsetFetch 5, DescribeGroups 2, ListGroups 2, DescribeConfigs 2,
+  OffsetFetch 5, DescribeGroups 2, ListGroups 2, ConsumerGroupDescribe 0, DescribeConfigs 2,
   DescribeLogDirs 1, ApiVersions 2, SaslHandshake 1, and SaslAuthenticate 1 where the broker
   speaks it, 0 otherwise. Each request MUST carry the client ID
   `prometheus-universal-exporter`, and each answer's correlation ID MUST be
@@ -81,7 +81,13 @@ message and send no request that changes the cluster.
   without creating one. It MUST then ask every broker the metadata lists
   for the groups it coordinates, then the broker that listed each chosen
   group for its description and its committed offsets of every topic, and
-  MUST NOT send FindCoordinator. Only after those MUST it ask each leader
+  MUST NOT send FindCoordinator. A group that DescribeGroups describes with
+  the state `Dead`, or as GROUP_ID_NOT_FOUND, MUST be asked again with
+  ConsumerGroupDescribe 0, a flexible version, of a coordinator whose
+  ApiVersions lists it, and only of such a coordinator: a group it
+  describes is of the `consumer` protocol, and one it does not find keeps
+  DescribeGroups' answer. A failure of that request MUST be the error of
+  the groups it asked about alone, the others keeping their offsets. Only after those MUST it ask each leader
   of a chosen topic's partition that has a leader for the partition's
   newest (-1) and oldest (-2) offsets, uncommitted records read. With
   `log_dirs` it MUST then ask every broker DescribeLogDirs for every topic,
@@ -136,8 +142,9 @@ message and send no request that changes the cluster.
     `under_replicated` (fewer in sync than replicas), `offline`, `newest`,
     `oldest`, `size_bytes` (the leader's replica's, not a copy being moved,
     `null` when not listed) and `error`;
-  - `groups`, the chosen ones: each `group`, `protocol_type`, `state`,
-    `members`, `coordinator` (the broker that listed it), `error`, and
+  - `groups`, the chosen ones: each `group`, `protocol_type`,
+    `group_protocol` (`classic`, `consumer`, or `""` when neither request
+    described it), `state`, `members`, `coordinator` (the broker that listed it), `error`, and
     `topics`, the chosen topics it committed offsets of: each `group`,
     `topic`, `committed_sum` (of the offsets of 0 or more), `lag` (`null`
     when no partition has one), `lag_seconds` (the most of its partitions',

@@ -29,7 +29,8 @@ nothing. `### New` and `### Fixed` follow when they have lines.
 - `kafka`: each group's lag in seconds, `lag_seconds`, by partition and by
   topic: how long ago the first message the group has not read was written,
   estimated from the scrapes' newest offsets
-  ([Lag in seconds](docs/KAFKA.md#lag-in-seconds)).
+  ([Lag in seconds](docs/KAFKA.md#lag-in-seconds)). `examples/kafka`
+  writes it as `kafka_consumergroup_lag_seconds`.
 - `kafka`: `log_dirs: true` reports the disk each broker's log directories,
   each topic and each partition take, and `topic_configs` the topics'
   settings it names, such as `retention.ms` and `cleanup.policy`.

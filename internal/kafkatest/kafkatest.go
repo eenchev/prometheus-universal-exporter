@@ -24,6 +24,7 @@ package kafkatest
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/pbkdf2"
@@ -542,7 +543,7 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 		}
 		w.count(1)
 		w.i16(b.LogDirError)
-		w.str(cmpOr(b.LogDir, "/var/lib/kafka"))
+		w.str(cmp.Or(b.LogDir, "/var/lib/kafka"))
 		type held struct {
 			index  int
 			size   int64
@@ -627,13 +628,6 @@ func (c *Cluster) answer(id int32, api, version int16, r *reader, s *session) []
 		return nil
 	}
 	return w.b
-}
-
-func cmpOr(s, fallback string) string {
-	if s == "" {
-		return fallback
-	}
-	return s
 }
 
 func (c *Cluster) group(name string) *Group {

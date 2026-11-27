@@ -267,9 +267,10 @@ theirs that is chosen.
 
 **Errors.** A scrape that reaches the target but not every other broker does
 not fail. What the missing broker would have said is missing from the
-document. `errors` lists each broker that could not be asked and each
-group that could not be described, as a sentence naming the broker or the
-group and the request. A partition whose offsets are missing says why in
+document. `errors` lists each broker that could not be asked, each group
+that could not be described, each broker that listed no log directory and
+each topic whose settings were refused, as a sentence naming the broker,
+the group or the topic and the request. A partition whose offsets are missing says why in
 its own `error`. The groups that a missing
 broker coordinates are missing too, since only it lists them. A rule such
 as `.errors | length` tells a partial answer apart.
@@ -433,6 +434,11 @@ kafka_exporter from the document, with the same names and labels:
   (`kafka_topic_partition_*`);
 - each group's offsets, lag and members (`kafka_consumergroup_*`), `-1`
   for a partition without a committed offset as it writes it.
+
+It writes two series that kafka_exporter does not:
+`kafka_consumergroup_lag_seconds`, each group's lag in seconds by topic,
+from a partition's second scrape on, and `kafka_scrape_errors`, the length
+of `errors`.
 
 Its dashboards and alerts read them as they read its own. Its
 `--topic.filter`, `--topic.exclude`, `--group.filter` and `--group.exclude`

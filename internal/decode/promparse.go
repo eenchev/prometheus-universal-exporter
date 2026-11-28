@@ -219,11 +219,33 @@ type promFamily struct {
 	// helpOf, when set, is the family whose HELP this one's series carry:
 	// an OpenMetrics gauge histogram's, for the gauges it is read as.
 	helpOf *promFamily
+	// kind is the OpenMetrics type of a family read as gauges, info or
+	// stateset (openmetrics.go); openMetrics is it and the family's unit
+	// as its series carry them, made once.
+	kind        model.GaugeKind
+	openMetrics *model.OpenMetricsFamily
 	// kept says whether the family's series are stored, once decided by
 	// promOptions.keep at its first series, and uncounted that they are
 	// stored without counting against promOptions.limit (promOptions.counts).
 	kept, keptKnown bool
 	uncounted       bool
+}
+
+// openMetricsFamily is what the family's series carry of its unit, the one
+// units has for its name, and of its kind, nil for neither. An info and a
+// stateset have no unit in OpenMetrics.
+func (f *promFamily) openMetricsFamily(units map[string]string) *model.OpenMetricsFamily {
+	unit := units[f.name]
+	if f.kind != "" {
+		unit = ""
+	}
+	if unit == "" && f.kind == "" {
+		return nil
+	}
+	if f.openMetrics == nil {
+		f.openMetrics = &model.OpenMetricsFamily{Unit: unit, Kind: f.kind}
+	}
+	return f.openMetrics
 }
 
 // exportedName is the name of the family's series.
@@ -256,6 +278,9 @@ type promParser struct {
 	// aliases are the OpenMetrics sample names that belong to a family
 	// other than their own, with the role they have in it.
 	aliases map[string]promAlias
+	// units are the units of OpenMetrics UNIT lines, by the name they give,
+	// the first for a name (openMetricsUnit).
+	units map[string]string
 	// series are the series kept, in the order their first samples were
 	// read, and unordered says that this is not the families' order.
 	// uncounted is how many of them do not count against the limit.
@@ -349,6 +374,9 @@ func (p *promParser) comment(s []byte) error {
 	if p.options.openMetrics && string(keyword) == "EOF" && len(bytes.TrimSpace(rest)) == 0 {
 		p.eof = true
 		return nil
+	}
+	if p.options.openMetrics && string(keyword) == "UNIT" {
+		return p.openMetricsUnit(rest)
 	}
 	if string(keyword) != "HELP" && string(keyword) != "TYPE" {
 		return nil
@@ -873,7 +901,7 @@ func (p *promParser) metrics() []model.Metric {
 		if f.helpOf != nil && !f.helpSet {
 			help = f.helpOf.help
 		}
-		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar}
+		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary, Exemplar: s.exemplar, OpenMetrics: f.openMetricsFamily(p.units)}
 	}
 	return out
 }

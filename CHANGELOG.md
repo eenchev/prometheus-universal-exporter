@@ -56,6 +56,11 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   buckets, are kept: `/probe` and static targets write them in OpenMetrics,
   and the OTLP export carries them, a `trace_id` and a `span_id` as the
   exemplar's trace and span. Before, they were skipped.
+- A target's OpenMetrics `info` and `stateset` families are written as
+  `info` and `stateset` again in OpenMetrics answers, and its `# UNIT` lines
+  are kept: OpenMetrics answers write them, and the OTLP export gives the
+  series the unit, `s` for `seconds`. Before, both were gauges and units
+  were dropped.
 
 ### Fixed
 

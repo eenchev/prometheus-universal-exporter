@@ -626,6 +626,11 @@ func parseMediaRange(entry string) (string, map[string]string) {
 //     counter named requests is written as the family requests with samples
 //     requests_total, as one named requests_total is (openMetricsCounter).
 //   - untyped is written as unknown.
+//   - A gauge read from an OpenMetrics info or stateset family is written as
+//     one, while its family's series fit the type (gaugeOfKind); an info
+//     foo_info as the family foo.
+//   - A family's unit, which an OpenMetrics target gave it, is written in a
+//     UNIT line, while the family's name ends in it.
 //   - HELP escapes double quotes, as label values do.
 //   - A timestamp is in seconds rather than milliseconds.
 //   - le and quantile values are written as floats, 1.0 rather than 1.
@@ -657,6 +662,13 @@ func (e *expositionWriter) appendOpenMetrics(b []byte, s *model.MetricSet) []byt
 		b = append(b, ' ')
 		b = append(b, f.typ...)
 		b = append(b, '\n')
+		if f.unit != "" {
+			b = append(b, "# UNIT "...)
+			b = e.appendName(b, f.name)
+			b = append(b, ' ')
+			b = append(b, f.unit...)
+			b = append(b, '\n')
+		}
 		if f.help != "" {
 			b = append(b, "# HELP "...)
 			b = e.appendName(b, f.name)
@@ -724,11 +736,12 @@ type omPart struct {
 }
 
 // omFamily is one family of an OpenMetrics answer: its name and type, its
-// help, the name of a plain value's sample (name_total for a counter, the
-// family name otherwise) and the series it carries.
+// help and its unit, the name of a plain value's sample (name_total for a
+// counter, name_info for an info, the family name otherwise) and the series
+// it carries.
 type omFamily struct {
-	name, typ, help, sample string
-	parts                   []omPart
+	name, typ, help, unit, sample string
+	parts                         []omPart
 }
 
 // planOpenMetrics groups the series of s into OpenMetrics families.
@@ -791,6 +804,11 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 		help    string
 		indexes []int
 		unknown bool
+		// unit is the series' unit and kind the OpenMetrics type of its
+		// gauges, while every series has the same; empty once one has
+		// another, or cannot be of the kind.
+		unit string
+		kind model.GaugeKind
 	}
 	var (
 		order  []*textFamily
@@ -803,8 +821,15 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 			if _, _, _, natural := openMetricsCounter(m.Name); m.Type == model.CounterMetricType && !natural {
 				f.unknown = true
 			}
+			f.unit, f.kind = m.Unit(), m.Kind()
 			byName[m.Name] = f
 			order = append(order, f)
+		}
+		if m.Unit() != f.unit {
+			f.unit = ""
+		}
+		if m.Kind() != f.kind || !gaugeOfKind(m) {
+			f.kind = ""
 		}
 		if h := m.Histogram; h != nil && (h.NoSum != h.NoCount || !h.NoSum && hasLabel(m, "le")) {
 			f.unknown = true
@@ -823,6 +848,8 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 			return []string{n, n + "_sum", n + "_count"}
 		case f.unknown:
 			return []string{n}
+		case f.kind == model.GaugeKindInfo:
+			return []string{strings.TrimSuffix(n, "_info"), n}
 		case f.typ == model.CounterMetricType:
 			family, sample, created, _ := openMetricsCounter(n)
 			return []string{family, sample, created}
@@ -856,6 +883,21 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 			}
 		}
 	}
+	// An info family claims its name without _info, which a gauge or
+	// another family may have: it gives way first, to the gauge it is in the
+	// text format, which claims only its sample's name.
+	claimed := contested()
+	for _, f := range order {
+		if f.kind != model.GaugeKindInfo {
+			continue
+		}
+		for _, c := range claims(f) {
+			if claimed[c] > 1 {
+				f.kind = ""
+				break
+			}
+		}
+	}
 	giveWay(model.CounterMetricType)
 	giveWay(model.HistogramMetricType, model.SummaryMetricType)
 
@@ -867,14 +909,24 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 		out := byFamily[name]
 		if out == nil {
 			out = &omFamily{name: name, typ: typ, sample: sample, help: f.help}
+			// A family's name ends in _ and its unit, which OpenMetrics
+			// requires of the UNIT it writes; an info's and a stateset's
+			// have none.
+			if f.unit != "" && strings.HasSuffix(name, "_"+f.unit) && typ != "info" && typ != "stateset" {
+				out.unit = f.unit
+			}
 			byFamily[name] = out
 			families = append(families, out)
 		} else {
 			// Only unknown families written under one sample name meet
-			// here; together they are unknown.
+			// here; together they are unknown, of a unit only if both
+			// have it.
 			out.typ = "unknown"
 			if out.help == "" {
 				out.help = f.help
+			}
+			if out.unit != f.unit {
+				out.unit = ""
 			}
 		}
 		for _, i := range f.indexes {
@@ -911,11 +963,34 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 		case f.typ == model.CounterMetricType:
 			family, sample, _, _ := openMetricsCounter(f.name)
 			add(family, "counter", sample, f, omWhole)
+		case f.kind == model.GaugeKindInfo:
+			add(strings.TrimSuffix(f.name, "_info"), "info", f.name, f, omWhole)
+		case f.kind == model.GaugeKindStateSet:
+			add(f.name, "stateset", f.name, f, omWhole)
 		default:
 			add(f.name, openMetricsType(f.typ), f.name, f, omWhole)
 		}
 	}
 	return families
+}
+
+// gaugeOfKind reports whether a series can be written as the OpenMetrics
+// type it was read as (model.GaugeKind): any series without one; an info
+// gauge named foo_info, foo not empty, of the value 1; a stateset gauge with
+// a label of its own name, its state, of the value 0 or 1. A series that a
+// rule changed, renamed, scaled or relabelled, may no longer be; its family
+// is then written as a gauge, as the text format writes it.
+func gaugeOfKind(m model.Metric) bool {
+	switch m.Kind() {
+	case "":
+		return true
+	case model.GaugeKindInfo:
+		base, info := strings.CutSuffix(m.Name, "_info")
+		return m.Type == model.GaugeMetricType && info && base != "" && m.Value == 1
+	case model.GaugeKindStateSet:
+		return m.Type == model.GaugeMetricType && hasLabel(m, m.Name) && (m.Value == 0 || m.Value == 1)
+	}
+	return false
 }
 
 // hasLabel reports whether a series has a label of its own by a name.

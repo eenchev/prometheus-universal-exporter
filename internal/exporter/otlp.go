@@ -1107,6 +1107,9 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 			continue
 		}
 		name, unit := otlpNameOf(m.Name, kind, otel)
+		if unit == "" {
+			unit = otlpUnitCode(m.Unit())
+		}
 		shape := otlpShape{kind: kind, unit: unit}
 		if keep != nil && kind != otlpKindGauge && !keep(i, m.Name, name, shape, attributes) {
 			continue

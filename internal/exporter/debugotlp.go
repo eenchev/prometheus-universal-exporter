@@ -215,7 +215,7 @@ func (s *Server) debugOTLPOf(report *debugReport, at time.Time) *debugOTLP {
 	cumulative := false
 	for m, metric := range made.ScopeMetrics[0].Metrics {
 		kind := otlpKind(metric)
-		cumulative = cumulative || kind != otlpKindGauge
+		cumulative = cumulative || otlpStarts(kind)
 		for j := range otlpMetricPoints(metric) {
 			i := places[sources.of[m][j]]
 			exported := set.Metrics[i]
@@ -264,6 +264,8 @@ func debugOTLPKind(kind int) string {
 	switch kind {
 	case otlpKindSum:
 		return "sum (cumulative, monotonic)"
+	case otlpKindUpDownSum:
+		return "sum (cumulative, non-monotonic)"
 	case otlpKindHistogram:
 		return "histogram (cumulative)"
 	case otlpKindExponentialHistogram:
@@ -338,6 +340,8 @@ func debugPointNotes(original, exported model.Metric, metric otlpMetric, explode
 		notes = append(notes, "a "+string(exported.Type)+" without its data: exported as a gauge of its value")
 	case exported.Type == model.UntypedMetricType:
 		notes = append(notes, "untyped: exported as a gauge")
+	case kind == otlpKindUpDownSum:
+		notes = append(notes, "an OpenMetrics "+string(exported.Kind())+": exported as a non-monotonic sum, without a start time")
 	}
 	if !exploded && metric.Name != exported.Name {
 		// The name is otlpNameOf's: what is left of it is the OTLP name.

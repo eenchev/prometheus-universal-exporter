@@ -7769,12 +7769,13 @@ it, so it shows what the export does and is not a description of it:
   - The scope is the name and version of `otlp.scope`.
 - **Data points.** There is a row for each point, with its Prometheus name
   and its OTLP name (they differ under `otlp.metric_names: otel`), its kind
-  (`gauge`, `sum (cumulative, monotonic)`, `histogram (cumulative)` or
-  `summary`), its unit, its attributes and its value: a histogram's count,
+  (`gauge`, `sum (cumulative, monotonic)`, `sum (cumulative,
+  non-monotonic)`, `histogram (cumulative)` or `summary`), its unit, its attributes and its value: a histogram's count,
   sum and each bucket's own count, or a summary's count, sum and quantiles.
   - A row that the export changed has a badge that opens to show why: a
     family exported as gauges because its bucket counts fall or a counter is
-    NaN, `_total` removed, the unit `s` from `_seconds`, a label moved to
+    NaN, an OpenMetrics `info` or `stateset` exported as a non-monotonic
+    sum, `_total` removed, the unit `s` from `_seconds`, a label moved to
     the resource, or an attribute added.
   - A click on a column's header sorts the table, and the filter keeps the
     rows that contain its text. It sorts like the series table and every

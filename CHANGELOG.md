@@ -61,6 +61,9 @@ nothing. `### New` and `### Fixed` follow when they have lines.
   are kept: OpenMetrics answers write them, and the OTLP export gives the
   series the unit, `s` for `seconds`. Before, both were gauges and units
   were dropped.
+- The OTLP export sends a target's OpenMetrics `info` and `stateset`
+  families as non-monotonic sums, as OpenTelemetry's Prometheus
+  compatibility does, where they were gauges.
 
 ### Fixed
 

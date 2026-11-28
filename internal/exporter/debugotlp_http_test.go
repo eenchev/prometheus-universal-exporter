@@ -131,7 +131,7 @@ func TestTheOTLPTabShowsEachKindUnderEitherNaming(t *testing.T) {
 				}
 			}
 			notes := strings.Join(answer.OTLP.Notes, "\n")
-			if !strings.Contains(notes, "Start times: each cumulative point starts at its own time") {
+			if !strings.Contains(notes, "Start times: each cumulative point, a counter's sum, a histogram or a summary, starts at its own time") {
 				t.Errorf("no start time note: %q", notes)
 			}
 			if !strings.Contains(answer.OTLP.Body, `"resourceMetrics": [`) || !strings.Contains(answer.OTLP.Body, "\n  ") {

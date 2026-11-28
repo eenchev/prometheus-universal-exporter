@@ -10235,7 +10235,9 @@ counter, histogram and summary data, labels, timestamps, descriptions, and
 resource attributes MUST be preserved:
 
 - A gauge MUST be an OTLP gauge, and a counter a monotonic sum with cumulative
-  temporality.
+  temporality. A gauge read from an OpenMetrics `info` or `stateset` family
+  (§ 14.1) MUST be a non-monotonic sum with cumulative temporality, whatever
+  its values, and its points MUST NOT carry a start time.
 - In the JSON representation every enum MUST be written as its number, as
   the OTLP/JSON encoding requires, never as its name: `aggregationTemporality`
   MUST be `2`, cumulative, and a log record's `severityNumber` a number.
@@ -10314,7 +10316,7 @@ resource attributes MUST be preserved:
   name, type and labels: a series that takes more MUST be remembered by a
   digest of them, SHA-256 or one as hard to make two series share, and a
   series MUST NOT have the start time of another. A gauge MUST NOT carry
-  one. A cumulative point of one of the exporter's own series MUST instead
+  one, nor a non-monotonic sum. A cumulative point of one of the exporter's own series MUST instead
   start at the series' creation time (§ 22.1b), which the exporter knows, and
   need not be remembered.
 - A resource MUST be told from every other by its service name and the name
@@ -15344,15 +15346,17 @@ each series once and in the order a drained queue has them, the later of
 two alike kept; named under `otlp.metric_names`; and checked against one
 another as an export checks a resource's points, and against no other
 point: not the other probes' or static targets', and not the exporter's
-own series. A cumulative point's start time MUST be its own time, as at a
-series' first export, which the tab MUST say. Making it MUST NOT queue
+own series. A cumulative point's start time (a counter's sum's, a
+histogram's, a summary's) MUST be its own time, as at a series' first
+export, which the tab MUST say. Making it MUST NOT queue
 anything, ask for or remember a series' start time, count in the
 export's self-metrics or status, or send anything. `otlp` MUST be an object
 of `metric_names`; `resource`, the resource's attributes, each a `key` and
 a `value`, `service.name` first, and `resource_notes`, where they come
 from; `scope`, its `name` and `version`; `points`, each with `prometheus`,
 the name the exposition writes it under, `name`, `kind` (`gauge`, `sum
-(cumulative, monotonic)`, `histogram (cumulative)` or `summary`), `unit`,
+(cumulative, monotonic)`, `sum (cumulative, non-monotonic)`, `histogram
+(cumulative)` or `summary`), `unit`,
 `attributes`, `value` (a histogram's count, sum and each bucket's own
 count, a summary's count, sum and quantiles) and `notes`, one for each
 change the export made of its series — a family exported as gauges and

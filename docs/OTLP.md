@@ -139,7 +139,8 @@ next export, or through an outage, is therefore not taken for a newer one.
   again after a reset, when its count went down, as the OpenTelemetry
   Collector's Prometheus receiver does. The exporter cannot know when a
   target began counting, so this is the earliest time that it can vouch for.
-  A series not exported for an hour starts again.
+  A series not exported for an hour starts again. An `info`'s and a
+  `stateset`'s non-monotonic sum has none, as a gauge has none.
 - The exporter's own counters, histograms and summaries are the exception:
   it knows when each began to count, and their points start at that time
   (see [Created timestamps](SELF-METRICS.md#created-timestamps)).
@@ -410,6 +411,7 @@ Metrics keep their type:
 | Prometheus | OTLP |
 | --- | --- |
 | gauge, untyped | gauge |
+| OpenMetrics info and stateset | sum, non-monotonic, cumulative |
 | counter | sum, monotonic, cumulative |
 | histogram | histogram, cumulative: count, sum, bounds and per-bucket counts |
 | summary | summary: count, sum and quantiles |
@@ -422,6 +424,11 @@ Metrics keep their type:
   field not set is `0` there). A summary that the target wrote without a
   `_count` or a `_sum` is therefore sent with `0` for it, where the
   exposition formats leave the line out.
+- An OpenMetrics target's `info` and `stateset` families, which are gauges
+  in Prometheus, are non-monotonic sums, as OpenTelemetry's Prometheus
+  compatibility exports them, whatever their values. Their points carry no
+  start time, as a gauge's do not: their values go up and down, so a reset
+  cannot be told from them.
 - Every series of a metric is a data point of one OTLP metric.
 - A `NaN` or infinite value is sent as `"NaN"`, `"Infinity"` or
   `"-Infinity"`, as the OTLP JSON encoding writes them, instead of failing

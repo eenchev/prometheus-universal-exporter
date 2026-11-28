@@ -985,7 +985,8 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 
 // otlpMetrics converts a metric set to OTLP metrics. Series of one family
 // become the data points of one metric, in the order the family first
-// appears: a gauge, a monotonic cumulative sum for a counter, a cumulative
+// appears: a gauge, a monotonic cumulative sum for a counter, a
+// non-monotonic one for an OpenMetrics info or stateset, a cumulative
 // histogram, or a summary. start gives a cumulative point its start time;
 // nil omits it.
 //
@@ -1116,7 +1117,7 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 		}
 		startAt := ""
 		switch {
-		case kind == otlpKindGauge:
+		case !otlpStarts(kind):
 		case m.Created != 0:
 			// One of the exporter's own series, which says when it began to
 			// count (selfcreated.go).
@@ -1148,6 +1149,10 @@ func otlpPoints(set model.MetricSet, own int, otel bool, now string, start func(
 				point.Exemplars = []otlpExemplar{otlpExemplarOf(m.Exemplar, at)}
 			}
 			s.DataPoints = append(s.DataPoints, point)
+		case otlpKindUpDownSum:
+			v := otlpDouble(m.Value)
+			s := metric(name, m.Help, shape).Sum
+			s.DataPoints = append(s.DataPoints, otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v})
 		default:
 			gaugeOf(m.Name, name, unit, attributes, m.Value)
 		}
@@ -1528,15 +1533,32 @@ const (
 	otlpKindHistogram
 	otlpKindSummary
 	otlpKindExponentialHistogram
+	// otlpKindUpDownSum is a non-monotonic sum: a gauge an OpenMetrics
+	// target wrote as an info or a stateset, as OpenTelemetry's Prometheus
+	// compatibility exports them.
+	otlpKindUpDownSum
 )
 
 // otlpKindNames are the kinds as a log line names them.
-var otlpKindNames = [...]string{otlpKindGauge: "gauge", otlpKindSum: "sum", otlpKindHistogram: "histogram", otlpKindSummary: "summary", otlpKindExponentialHistogram: "exponential histogram"}
+var otlpKindNames = [...]string{otlpKindGauge: "gauge", otlpKindSum: "sum", otlpKindHistogram: "histogram", otlpKindSummary: "summary", otlpKindExponentialHistogram: "exponential histogram", otlpKindUpDownSum: "non-monotonic sum"}
+
+// otlpStarts reports whether a point of kind carries a start time: a
+// counter's sum, a histogram and a summary, which count up from it. A gauge
+// and a non-monotonic sum go up and down, so a reset cannot be told from
+// their values, and they have none.
+func otlpStarts(kind int) bool {
+	return kind != otlpKindGauge && kind != otlpKindUpDownSum
+}
 
 // otlpKindOf is the OTLP kind a metric is exported as. A histogram or summary
-// type without its data is exported as a gauge of its value.
+// type without its data is exported as a gauge of its value. A gauge read
+// from an OpenMetrics info or stateset family (model.GaugeKind) is a
+// non-monotonic sum, whatever its values, as OpenTelemetry's Prometheus
+// compatibility has it, so that a family's series are of one kind.
 func otlpKindOf(m model.Metric) int {
 	switch {
+	case m.Type == model.GaugeMetricType && m.Kind() != "":
+		return otlpKindUpDownSum
 	case m.Type == model.HistogramMetricType && m.Histogram != nil && m.Histogram.Exponential != nil:
 		return otlpKindExponentialHistogram
 	case m.Type == model.HistogramMetricType && m.Histogram != nil:
@@ -1557,6 +1579,8 @@ func otlpKind(m otlpMetric) int {
 		return otlpKindHistogram
 	case m.Summary != nil:
 		return otlpKindSummary
+	case m.Sum != nil && !m.Sum.IsMonotonic:
+		return otlpKindUpDownSum
 	case m.Sum != nil:
 		return otlpKindSum
 	}
@@ -1574,6 +1598,8 @@ func newOTLPMetric(name, help string, shape otlpShape) otlpMetric {
 		out.Summary = &otlpSummary{}
 	case otlpKindSum:
 		out.Sum = &otlpSum{AggregationTemporality: otlpCumulative, IsMonotonic: true}
+	case otlpKindUpDownSum:
+		out.Sum = &otlpSum{AggregationTemporality: otlpCumulative}
 	default:
 		out.Gauge = &otlpGauge{}
 	}

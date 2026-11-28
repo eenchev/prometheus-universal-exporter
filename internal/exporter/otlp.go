@@ -985,7 +985,8 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 
 // otlpMetrics converts a metric set to OTLP metrics. Series of one family
 // become the data points of one metric, in the order the family first
-// appears: a gauge, a monotonic cumulative sum for a counter, a cumulative
+// appears: a gauge, a monotonic cumulative sum for a counter, a
+// non-monotonic one for an OpenMetrics info or stateset, a cumulative
 // histogram, or a summary. start gives a cumulative point its start time;
 // nil omits it.
 //

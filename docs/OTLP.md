@@ -139,7 +139,8 @@ next export, or through an outage, is therefore not taken for a newer one.
   again after a reset, when its count went down, as the OpenTelemetry
   Collector's Prometheus receiver does. The exporter cannot know when a
   target began counting, so this is the earliest time that it can vouch for.
-  A series not exported for an hour starts again.
+  A series not exported for an hour starts again. An `info`'s and a
+  `stateset`'s non-monotonic sum has none, as a gauge has none.
 - The exporter's own counters, histograms and summaries are the exception:
   it knows when each began to count, and their points start at that time
   (see [Created timestamps](SELF-METRICS.md#created-timestamps)).

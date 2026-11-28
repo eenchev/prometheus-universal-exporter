@@ -7808,7 +7808,8 @@ it, so it shows what the export does and is not a description of it:
     array of 200000 points, fills in a couple of thousand items per frame
     while the page stays responsive. A node that cannot be shown says so.
   - *Copy* copies the body as indented JSON, which the tree is built from.
-  - A cumulative point starts at its own time, as at a series' first export.
+  - A cumulative point (a counter's sum, a histogram, a summary) starts at
+    its own time, as at a series' first export.
     The export remembers when each series started, and a run neither reads
     nor changes that.
 - **Log records**, with [`otlp.logs`](OTLP.md#the-exporters-own-log) on.

@@ -478,7 +478,7 @@ func debugOTLPNotes(cfg model.OTLPConfig, payload otlpPayload, p debugProbe, cum
 		}
 	}
 	if cumulative {
-		notes = append(notes, "Start times: each cumulative point starts at its own time, as at a series' first export. The export remembers when each series started, which a run neither reads nor changes, so a later export of a series it has seen starts it where it was first seen.")
+		notes = append(notes, "Start times: each cumulative point, a counter's sum, a histogram or a summary, starts at its own time, as at a series' first export. The export remembers when each series started, which a run neither reads nor changes, so a later export of a series it has seen starts it where it was first seen.")
 	}
 	if points := otlpPayloadPoints(payload); points > 0 {
 		notes = append(notes, "Points are as of the run, but for a series with a timestamp of its own; a probe's are as of its fetch.")

@@ -10316,7 +10316,7 @@ resource attributes MUST be preserved:
   name, type and labels: a series that takes more MUST be remembered by a
   digest of them, SHA-256 or one as hard to make two series share, and a
   series MUST NOT have the start time of another. A gauge MUST NOT carry
-  one. A cumulative point of one of the exporter's own series MUST instead
+  one, nor a non-monotonic sum. A cumulative point of one of the exporter's own series MUST instead
   start at the series' creation time (§ 22.1b), which the exporter knows, and
   need not be remembered.
 - A resource MUST be told from every other by its service name and the name
@@ -15346,8 +15346,9 @@ each series once and in the order a drained queue has them, the later of
 two alike kept; named under `otlp.metric_names`; and checked against one
 another as an export checks a resource's points, and against no other
 point: not the other probes' or static targets', and not the exporter's
-own series. A cumulative point's start time MUST be its own time, as at a
-series' first export, which the tab MUST say. Making it MUST NOT queue
+own series. A cumulative point's start time (a counter's sum's, a
+histogram's, a summary's) MUST be its own time, as at a series' first
+export, which the tab MUST say. Making it MUST NOT queue
 anything, ask for or remember a series' start time, count in the
 export's self-metrics or status, or send anything. `otlp` MUST be an object
 of `metric_names`; `resource`, the resource's attributes, each a `key` and
